@@ -27,9 +27,6 @@ CreateData/data/
 **/log/
 *.log
 
-# Local secrets (use config.ini.example as template)
-**/config.ini
-
 # IDE / editor
 .cursor/
 .vscode/*

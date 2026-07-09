@@ -11,6 +11,7 @@
 CBinaryMaker::CBinaryMaker() : 
 	m_pcShapeLoader(nullptr), 
 	m_pcTurnInfoLoader(nullptr),
+	m_dwTurnRestrictedSkipCount(0),
 	m_mapShapeLinkInfoList(nullptr), 
 	m_mapShapeNodeInfoList(nullptr), 
 	m_mapGridSgmtInfoList(nullptr), 
@@ -22,8 +23,7 @@ CBinaryMaker::CBinaryMaker() :
 	m_dwTurnOffset(0), 
 	m_dwLinkSgmtOffset(0), 
 	m_dwGridSgmtOffset(0), 
-	m_dwGridOffset(0),
-	m_dwTurnRestrictedSkipCount(0)
+	m_dwGridOffset(0)
 {
 }
 

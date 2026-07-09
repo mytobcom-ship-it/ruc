@@ -1,0 +1,38 @@
+A. 데이터/좌표계
+원본 표준노드링크 = EPSG:5186(Central Belt 2010) → WGS84 변환 (CreateData 적용 완료).
+지도 형상은 2D(Z 없음) → 정밀 3D 매칭 불가, ROAD_TYPE(일반/고가/지하/터널/교량) 이 수직 힌트.
+B. sRawLog / 구조체
+string szDeviceKey[], string szTripID[] (std::string 배열) + memset = 버그 → char 배열 POD로 복구(packed 영역이라 std::string 금지).
+추가 필드: fAccuracy(결측 −1 센티넬), 고도(altitude), szSessionID(또는 uint64 세션 해시키).
+C. SessionID / 운행순번
+SessionID = {DEVICE_KEY}{YYYYMMDD}{운행4} (trip_id에서 항목3 제외), 파싱은 오른쪽부터, 레코드당 1회 파생 후 보관.
+trip_id는 서버가 채번(intake엔 없음). trip_event=START/END/NONE, 증가=START / 마감=END, 일자 기준 리셋.
+운행순번 채번은 TTL과 분리·영속((device,date) 카운터 + DB max 기반). TTL은 "마감"만, 번호 취소 아님.
+D. 스트리밍 파이프라인
+DB 배치 → (device_key, gps_dt, gps_seq) 정렬 → device별 worker_id 라우팅 → Enqueue.
+배치 경계 연속성 = 영속 세션 맵. 지각/역전 = 워터마크 유예 + 역전/갭 시 초기(Begin) 폴백. 연속성은 best-effort.
+E. ThreadPool (적용 완료분 포함)
+쓰레드 번호 인덱스 고정 큐(CQueue<sRawLog>), 라우팅 hash(device_key)%N.
+lost-wakeup 수정(predicate+wait+signal 동일 m_paMutex), CQueue 내부 락 제거 → 단일 외부 락.
+F. TTL / 연속 맵매칭 상태
+위치 = 쓰레드별 CProcessManager[nThreadId] (thread-local, lock-free).
+CONTINUE_STATE = 직전 원본(sRawLog) + 직전 매칭결과(qwLinkID/매칭좌표/offset) + dtLastSeen(서버 처리시각) + 고도상태(dfPrevAlt, nPrevRoadType, altEma).
+TTL 구동 = CCondition timed wait 추가로 idle에도 self-sweep. TTL 기준시각 = 서버 now.
+G. 적응형 검색 반경
+radius = clamp(k*accuracy_m, R_min, R_max) (k≈2.5, R_min≈20, R_max≈50).
+accuracy 결측 → config 기본 radius 폴백, 매우 나쁨 → R_max 또는 SKIP. 기본값 50→30 하향 검토.
+H. 수직(고도) 보완
+절대 고도 아닌 "직전 매칭 도로 대비 Δ고도" 를 연속매칭 소프트 신호로 사용.
+후보 점수에 (Δalt·ROAD_TYPE 부합) 가중, 비현실 경사 무시, 결측 폴백, 기압고도 우선.
+I. heading 보완
+45° 하드컷 → 속도/accuracy 적응형 임계 + 소프트 스코어링.
+경도 cos(위도) 보정(방위/투영 왜곡).
+단일점/희소 → 디바이스 heading(nAngle) 폴백. 평행 동일방향은 연속성+수직으로 보완.
+J. Oracle 제거 / PostgreSQL (진행)
+SQLManager 삭제 완료. DataManager/OraclePool 잔재 제거 예정.
+PostgrePool(libpq) 도입, Makefile(-I/usr/pgsql-18/include, -L.../lib -lpq -rpath, PostgrePool.cpp) 적용.
+config [sql] 세션명 = query.sql 세션명 일치 필요. CServer의 m_pcQueue/Queue.h/Mutex.h 제거.
+config의 geodetic/radius/distance + rawlog SQL을 ProcessManager에 실제 연결(현재 #if0/미초기화).
+K. 성능/정확도 추정 (참고)
+100대/6쓰레드/1초수집·10초배치: 성능 병목 없음(수천 대 여유).
+도심 정확도: 연속+능동반경+수평+수직 적용 시 약 93 ~ 95%.

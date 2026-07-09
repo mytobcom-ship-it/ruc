@@ -1,0 +1,44 @@
+﻿# Python virtualenv
+.venv-*/
+.vscode/
+
+# Build artifacts
+*.o
+*.lis
+MapMatchSvr/src/MapMatchSvr
+MapMatchSvr/bin/MapMatchSvr
+CreateData/src/MakeBinary
+CreateData/bin/MakeBinary
+Simulator/bin/RawGpsSimSvr
+
+# Large road network data (별도 복사 또는 CreateData로 재생성, GitHub 100MB 제한)
+*.psf
+*.tar.gz
+*.zip
+*.bak
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+CreateData/data/
+
+# Logs
+**/log/
+*.log
+
+# Local secrets (use config.ini.example as template)
+**/config.ini
+
+# IDE / editor
+.cursor/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.swp
+*~
+ruc.code-*
+
+# OS
+.DS_Store
+Thumbs.db

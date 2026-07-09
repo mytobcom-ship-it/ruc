@@ -1,0 +1,60 @@
+﻿#======================================================================
+# RUC 맵매칭 시뮬레이터 (RawGpsSimSvr) 환경설정
+#======================================================================
+
+#path  - 로그 경로
+#level - 로그 레벨 (0:TRACE 1:DEBUG 2:INFO 3:WARN 4:ERROR)
+[log]
+path=./log
+level=2
+
+#host/port/name - DB 접속 정보 (도로망과 동일 DB)
+#userid/password - 시뮬레이터 접속 계정
+[database]
+host=localhost
+port=5432
+name=roadnet
+userid=mytobcom
+password=CHANGE_ME
+
+#file - 쿼리 파일 경로
+[query]
+file=./query.sql
+
+#vehicles   - 동시 운행 차량 수
+#flush_sec  - DB INSERT 주기 (초). 1초 tick 으로 모았다가 N초마다 일괄 적재
+#report_sec - 통계 로그 출력 주기 (초)
+#idle_prob  - 매 tick 정차(IDLE) 확률 (0~1)
+[sim]
+vehicles=10
+flush_sec=3
+report_sec=30
+idle_prob=0.05
+
+#주행 영역 (WGS-84 경위도 bounding box). 기본: 서울 일부
+[area]
+min_lon=126.90
+min_lat=37.48
+max_lon=127.10
+max_lat=37.62
+
+#min_m           - 1회 운행 최소 경로 길이 (m)
+#max_links       - 연결 링크 최대 개수
+#seed_candidates - 시작 링크 후보 수
+[route]
+min_m=2000
+max_links=20
+seed_candidates=20
+
+#sigma_m - 도로 이탈 GPS 오차 표준편차 (m)
+#max_m   - 도로 이탈 GPS 오차 최대값 (m)
+[noise]
+sigma_m=10.0
+max_m=30.0
+
+#factor_min/max  - 제한속도 대비 주행속도 비율 범위
+#default_max_kmh - 제한속도 미지정 링크 기본 속도 (km/h)
+[speed]
+factor_min=0.5
+factor_max=1.0
+default_max_kmh=50.0

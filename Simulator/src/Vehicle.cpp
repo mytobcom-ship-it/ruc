@@ -17,7 +17,7 @@ static const double DECEL_MPS = 3.5;	// 감속 한계 (m/s per tick)
 CVehicle::CVehicle()
 	: m_pcRoute(nullptr), m_dfPos(0.0), m_dfSpeedMps(0.0),
 	m_dfLastHeading(0.0), m_dfAltitude(40.0), m_dfBattery(100.0),
-	m_bTripActive(false), m_bStartPending(false)
+	m_bTripActive(false), m_bStartPending(false), m_qwGpsSeq(0)
 {
 }
 
@@ -226,23 +226,35 @@ void CVehicle::Tick(const char *pszGpsDt, vector<GPS_SAMPLE>& vtOut)
 	if (m_bStartPending) { nEvent = SIM_TRIP_EVENT_START; m_bStartPending = false; }
 	else if (bEnd) nEvent = SIM_TRIP_EVENT_END;
 
+	// 운행 시작 시 trip_id 발급: {DEVICE_KEY}_{YYYYMMDDHH24MISS(운행시작)} — END 까지 동일 유지 (2026-07-10 최정우 추가)
+	if (nEvent == SIM_TRIP_EVENT_START)
+		m_strTripId = m_strDeviceKey + "_" + string(pszGpsDt);
+
+	// GPS_SEQ: 운행마다 초기화, START(첫 표본)=1, 이후 표본마다 +1 (2026-07-10 최정우 추가)
+	if (nEvent == SIM_TRIP_EVENT_START)
+		m_qwGpsSeq = 1;
+	else
+		++m_qwGpsSeq;
+
 	// 현재 위치 재계산 (진행 반영)
 	// 진행 반영 후 위치·방위 재보간 (2026-07-08 최정우 주석 추가)
 	Interpolate(m_dfPos, stTrue, dfBearing, nSegSpd);
 	if (m_dfSpeedMps >= 0.5) m_dfLastHeading = dfBearing;
 
 	// 도로 이탈 노이즈 (정규분포 거리 + 임의 방향)
+	// 도로 이탈 오프셋: 표준노드링크 좌표 기준 1~60m 랜덤 (2026-07-10 최정우 수정)
 	normal_distribution<double> distNoise(0.0, m_stConfig.dfNoiseSigmaM);
 	double dfOffset = fabs(distNoise(m_rng));
 	if (dfOffset > m_stConfig.dfNoiseMaxM) dfOffset = m_stConfig.dfNoiseMaxM;
+	if (dfOffset < 1.0) dfOffset = 1.0;
 	uniform_real_distribution<double> distDir(0.0, 360.0);
 	// 도로 이탈 노이즈 좌표 오프셋 적용 (2026-07-08 최정우 주석 추가)
 	GEO_POINT stNoisy = CGeoUtil::OffsetMeters(stTrue, dfOffset, distDir(m_rng));
 
-	// 정확도 (오프셋과 상관)
+	// 수평오차(ACCURACY_M): 실제 오프셋과 상관, 1~60m (정수 적재) (2026-07-10 최정우 수정)
 	normal_distribution<double> distAcc(0.0, 3.0);
 	double dfAcc = dfOffset + fabs(distAcc(m_rng));
-	if (dfAcc < 3.0) dfAcc = 3.0;
+	if (dfAcc < 1.0) dfAcc = 1.0;
 	if (dfAcc > 60.0) dfAcc = 60.0;
 
 	// 배터리 완만한 감소
@@ -254,6 +266,8 @@ void CVehicle::Tick(const char *pszGpsDt, vector<GPS_SAMPLE>& vtOut)
 
 	GPS_SAMPLE stSample;
 	stSample.strDeviceKey = m_strDeviceKey;
+	stSample.strTripId = m_strTripId;				// (2026-07-10 최정우 추가) 운행 trip_id 부여
+	stSample.uqGpsSeq = m_qwGpsSeq;					// (2026-07-10 최정우 추가) 운행 내 GPS 순번
 	stSample.nTripEvent = nEvent;
 	stSample.nDriveStatus = (m_dfSpeedMps < 0.5) ? SIM_DRIVE_STATUS_IDLE : SIM_DRIVE_STATUS_ON_ROAD;
 	stSample.dfLat = stNoisy.lat;
@@ -263,6 +277,8 @@ void CVehicle::Tick(const char *pszGpsDt, vector<GPS_SAMPLE>& vtOut)
 	stSample.dfAltitude = m_dfAltitude + distAlt(m_rng);
 	stSample.dfAccuracy = dfAcc;
 	stSample.nBattery = (int)(m_dfBattery + 0.5);
+	// 시뮬은 도로 기준 유효 좌표를 생성 → RAW_VLD=TRUE(유효). 무효 케이스는 미생성 (2026-07-10 최정우 추가)
+	stSample.bRawValid = true;
 	memset(stSample.szGpsDt, 0, sizeof(stSample.szGpsDt));
 	snprintf(stSample.szGpsDt, sizeof(stSample.szGpsDt), "%s", pszGpsDt);
 

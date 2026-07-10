@@ -1,5 +1,5 @@
 ﻿-- RawGpsSimSvr query.sql (PostgreSQL / libpq: $1, $2, ...)
--- 도로망(network.moct_link)에서 경로 링크를 조회하고, matching.raw_gps_log 에 원시 GPS 를 적재한다.
+-- 도로망(network.moct_link)에서 경로 링크를 조회하고, roadnet.prim_rawgps 에 원시 GPS 를 적재한다.
 --
 -- 좌표계 주의:
 --   network.moct_link.geom 은 적재 방식에 따라 EPSG:4326 또는 5179 일 수 있어
@@ -46,18 +46,20 @@ LIMIT 1;
 -- ── 원시 GPS 적재 ─────────────────────────────────────────────────────────
 -- $1=device_key $2=gps_dt $3=trip_event $4=drive_status $5=gps_lat $6=gps_lon
 -- $7=speed_kmh $8=heading $9=altitude_m $10=accuracy_m $11=battery
--- $12=trip_id (없으면 '') — v1.3 §2.1 INSERT 컬럼 순서
+-- $12=trip_id (없으면 '') $13=gps_seq (운행마다 1~N) $14=raw_vld (좌표 유효='t'/'f')
+-- — v1.3 §2.1 INSERT 컬럼 순서
 [raw_gps_insert]
-INSERT INTO matching.raw_gps_log (
-	device_key, gps_dt, trip_id, trip_event, drive_status,
+INSERT INTO roadnet.prim_rawgps (
+	device_key, gps_dt, gps_seq, trip_id, trip_event, drive_status,
 	gps_lat, gps_lon, raw_vld, speed_kmh, heading, altitude_m, accuracy_m, battery,
 	recv_dt, match_status
 ) VALUES (
 	$1,
-	TO_TIMESTAMP($2, 'YYYYMMDDHH24MISS'),
+	$2::char(14),
+	$13::bigint,
 	NULLIF($12, ''),
 	$3::smallint, $4::smallint,
-	$5::numeric, $6::numeric, true,
+	$5::numeric, $6::numeric, $14::boolean,
 	$7::numeric, $8::numeric, $9::numeric, $10::numeric, $11::smallint,
-	NOW(), 0
+	$2::char(14), 0
 );

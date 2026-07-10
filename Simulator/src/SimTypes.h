@@ -50,11 +50,13 @@ typedef struct sLinkGeom
 #define SIM_MATCH_STATUS_PENDING		0
 
 /**
- * @brief RAW_GPS_LOG 에 INSERT 할 GPS 표본 1건
+ * @brief PRIM_RAWGPS 에 INSERT 할 GPS 표본 1건
 */
 typedef struct sGpsSample
 {
 	string		strDeviceKey;		// 차량 인증키
+	string		strTripId;			// 운행 ID {DEVICE_KEY}_{YYYYMMDDHH24MISS(운행시작)} (2026-07-10 최정우 추가)
+	uint64		uqGpsSeq;			// 운행 내 GPS 순번 (운행마다 1~N 초기화) (2026-07-10 최정우 추가)
 	sint16		nTripEvent;			// 0:START, 1:NONE, 2:END
 	sint16		nDriveStatus;		// 0:ON_ROAD, 1:IDLE, 2:PARKED, 3:TUNNELING
 	double		dfLat;				// 위도 (노이즈 포함)
@@ -64,13 +66,16 @@ typedef struct sGpsSample
 	double		dfAltitude;			// 고도
 	double		dfAccuracy;			// 수평 오차
 	int			nBattery;			// 배터리
+	bool		bRawValid;			// 원시 GPS 좌표 유효 여부 → RAW_VLD (2026-07-10 최정우 추가)
 	char		szGpsDt[14 + 1];	// GPS 측정 시각 (YYYYMMDDHH24MISS)
 
 	sGpsSample() :
+		uqGpsSeq(0),
 		nTripEvent(SIM_TRIP_EVENT_NONE),
 		nDriveStatus(SIM_DRIVE_STATUS_ON_ROAD),
 		dfLat(0.0), dfLon(0.0), dfSpeedKmh(0.0), dfHeading(0.0),
-		dfAltitude(0.0), dfAccuracy(0.0), nBattery(0)
+		dfAltitude(0.0), dfAccuracy(0.0), nBattery(0),
+		bRawValid(true)
 	{
 		szGpsDt[0] = 0x00;
 	}

@@ -54,6 +54,8 @@ private:
 	double					m_dfBattery;	// 배터리 (%, 실수 누적)
 	bool					m_bTripActive;	// 운행 중 여부
 	bool					m_bStartPending;// START 이벤트 대기
+	string					m_strTripId;	// 현재 운행 trip_id (START 시 발급) (2026-07-10 최정우 추가)
+	uint64					m_qwGpsSeq;		// 운행 내 GPS 순번 (START 시 1, 이후 +1) (2026-07-10 최정우 추가)
 };
 
 #endif // __VEHICLE_H__

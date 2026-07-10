@@ -77,6 +77,7 @@ private:
 
 private:
 	bool							m_bRun;								// 서버 실행 여부
+	bool							m_bUninitialized;					// Uninitialize 중복 실행 가드 (2026-07-10 최정우 추가)
 	string							m_strLogPath;						// 로그 경로
 	int								m_nLogLevel;						// 로그 레벨
 	int								m_nLogKeepRunTime;					// 로그 삭제 시간 설정

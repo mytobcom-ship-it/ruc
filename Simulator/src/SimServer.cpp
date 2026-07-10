@@ -194,28 +194,39 @@ void CSimServer::Flush()
 		const GPS_SAMPLE& s = m_vtBuffer[i];
 
 		char szLat[32], szLon[32], szSpd[16], szHead[16], szAlt[16], szAcc[16], szBat[8];
-		char szTripEvent[8], szDriveStatus[8];
+		char szTripEvent[8], szDriveStatus[8], szGpsSeq[24];
 		snprintf(szLat, sizeof(szLat), "%.6f", s.dfLat);
 		snprintf(szLon, sizeof(szLon), "%.6f", s.dfLon);
-		snprintf(szSpd, sizeof(szSpd), "%.1f", s.dfSpeedKmh);
-		snprintf(szHead, sizeof(szHead), "%.1f", s.dfHeading);
-		snprintf(szAlt, sizeof(szAlt), "%.1f", s.dfAltitude);
-		snprintf(szAcc, sizeof(szAcc), "%.1f", s.dfAccuracy);
+		// 순간속도/방위각/고도/수평오차: SMALLINT 컬럼 → 정수형 적재 (2026-07-10 최정우 수정)
+		int nSpd = (s.dfSpeedKmh > 0.0) ? (int)(s.dfSpeedKmh + 0.5) : 0;
+		int nHead = ((int)(s.dfHeading + 0.5)) % 360; if (nHead < 0) nHead += 360;	// 방위각 0~359
+		int nAlt = (int)(s.dfAltitude + (s.dfAltitude >= 0.0 ? 0.5 : -0.5));
+		int nAcc = (s.dfAccuracy > 0.0) ? (int)(s.dfAccuracy + 0.5) : 1;
+		snprintf(szSpd, sizeof(szSpd), "%d", nSpd);
+		snprintf(szHead, sizeof(szHead), "%d", nHead);
+		snprintf(szAlt, sizeof(szAlt), "%d", nAlt);
+		snprintf(szAcc, sizeof(szAcc), "%d", nAcc);
 		snprintf(szBat, sizeof(szBat), "%d", s.nBattery);
 		snprintf(szTripEvent, sizeof(szTripEvent), "%d", static_cast<int>(s.nTripEvent));
 		snprintf(szDriveStatus, sizeof(szDriveStatus), "%d", static_cast<int>(s.nDriveStatus));
+		// GPS_SEQ: 운행마다 1~N (BIGINT) (2026-07-10 최정우 추가)
+		snprintf(szGpsSeq, sizeof(szGpsSeq), "%llu", (unsigned long long)s.uqGpsSeq);
+		// RAW_VLD: 좌표 유효 여부 → boolean 't'/'f' (2026-07-10 최정우 추가)
+		const char *pszRawVld = s.bRawValid ? "t" : "f";
 
-		const char *aszParams[12] = {
+		const char *aszParams[14] = {
 			s.strDeviceKey.c_str(),
 			s.szGpsDt,
 			szTripEvent,
 			szDriveStatus,
 			szLat, szLon, szSpd, szHead, szAlt, szAcc, szBat,
-			""
+			s.strTripId.c_str(),		// $12 trip_id (2026-07-10 최정우 수정)
+			szGpsSeq,					// $13 gps_seq (2026-07-10 최정우 추가)
+			pszRawVld					// $14 raw_vld (2026-07-10 최정우 추가)
 		};
 
 		// GPS 샘플 1건 INSERT SQL 실행 (2026-07-08 최정우 주석 추가)
-		PGresult *r = PQexecParams(pcConn, m_strInsertSQL.c_str(), 12, nullptr,
+		PGresult *r = PQexecParams(pcConn, m_strInsertSQL.c_str(), 14, nullptr,
 			aszParams, nullptr, nullptr, 0);
 		ExecStatusType st = r ? PQresultStatus(r) : PGRES_FATAL_ERROR;
 		if (st != PGRES_COMMAND_OK && st != PGRES_TUPLES_OK)

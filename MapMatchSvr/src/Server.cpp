@@ -7,6 +7,8 @@
 #include <signal.h>
 
 static CServer *g_pcServerInstance = nullptr;
+// SIGINT/SIGTERM 수신 플래그 — 핸들러는 이 값만 세팅(async-signal-safe) (2026-07-10 최정우 추가)
+static volatile sig_atomic_t g_nShutdownRequested = 0;
 
 /**
  * @brief SIGINT/SIGTERM 수신 시 서버 run 루프 종료
@@ -17,13 +19,17 @@ static void ServerSignalHandler(int nSignal)
 {
 	(void)nSignal;
 
-	if (g_pcServerInstance != nullptr)
-	{
-		// 서버 run 루프 종료 요청 (2026-07-08 최정우 주석 추가)
-		g_pcServerInstance->RequestShutdown();
-		// Thread interrupt 로 대기 중 run 루프 깨우기 (2026-07-08 최정우 주석 추가)
-		g_pcServerInstance->interrupt();
-	}
+	// 2026-07-10 최정우 주석 처리: 시그널 컨텍스트에서 뮤텍스/조건변수/pthread_kill 호출은
+	//   async-signal-safe 위반. 특히 interrupt()가 run 스레드에 SIGUSR1→예외를 던져
+	//   pthread_cond_timedwait(m_cRunCondition) 를 강제 언와인드 → 조건변수 내부 ref 오염 →
+	//   종료 시 pthread_cond_destroy 무한 대기(hang) 유발.
+	//if (g_pcServerInstance != nullptr)
+	//{
+	//	g_pcServerInstance->RequestShutdown();
+	//	g_pcServerInstance->interrupt();
+	//}
+	// 플래그만 세팅. run 루프가 이를 관찰하여 정상 경로로 종료 (2026-07-10 최정우 수정)
+	g_nShutdownRequested = 1;
 }
 
 /**
@@ -97,6 +103,7 @@ CServer::CServer() :
 	m_pcRawLogFetcher(nullptr),
 	m_pcRawLogWorker(nullptr),
 	m_bRun(false), 
+	m_bUninitialized(false),
 	m_nWorkerThread(0), 
 	m_hTimerThread(0),
 	m_nDBMinConnect(3),
@@ -424,7 +431,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	signal(SIGINT, ServerSignalHandler);
 	signal(SIGTERM, ServerSignalHandler);
 
-	// #15: 좀비 PROCESSING 복구는 기동 필수 안전망.
+	// 좀비 PROCESSING 복구는 기동 필수 안전망.
 	// 실패 시 재시도 후에도 실패면 기동 중단(fail-fast)
 	bool bRecovered = false;
 	for (int nAttempt=1; nAttempt<=RECOVER_RETRY_MAX; ++nAttempt)
@@ -438,8 +445,10 @@ bool CServer::Initialize(const CONFIG& stConfig)
 
 		LOGFMTW("raw log recover failed! attempt=[%d/%d]", nAttempt, RECOVER_RETRY_MAX);
 		if (nAttempt < RECOVER_RETRY_MAX)
+		{
 			// recover 재시도 전 대기 (2026-07-08 최정우 주석 추가)
 			usleep(RECOVER_RETRY_INTERVAL_MS * 1000);
+		}
 	}
 
 	if (!bRecovered)
@@ -468,6 +477,11 @@ bool CServer::Initialize(const CONFIG& stConfig)
 */
 void CServer::Uninitialize()
 {
+	// 중복 호출 가드: main 명시 호출(AppMain) + 소멸자 호출 이중 실행 방지 (2026-07-10 최정우 추가)
+	if (m_bUninitialized)
+		return;
+	m_bUninitialized = true;
+
 	// run 루프·Fetcher·Worker 종료 플래그 설정 (2026-07-08 최정우 주석 추가)
 	RequestShutdown();
 
@@ -704,6 +718,15 @@ void CServer::run()
 {
 	while (m_bRun && !IsInterrupted())
 	{
+		// SIGINT/SIGTERM 플래그 관찰 시 정상 스레드 컨텍스트에서 종료 요청 후 루프 탈출 (2026-07-10 최정우 추가)
+		//   → run() 정상 return → threadHandler 가 m_cond broadcast → main join() 정상 복귀
+		//   → pthread_cond_timedwait 강제 언와인드 없음 → 조건변수 오염/destroy hang 방지
+		if (g_nShutdownRequested)
+		{
+			RequestShutdown();
+			break;
+		}
+
 		time_t dtNow = time(nullptr);
 		if ((dtNow - m_dtLastMonitorLog) >= SERVER_MONITOR_INTERVAL_SEC)
 		{

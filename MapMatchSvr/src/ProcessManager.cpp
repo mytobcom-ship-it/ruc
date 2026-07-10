@@ -218,12 +218,55 @@ bool CProcessManager::ProcessRawLog(const sRawLogInfo& stRawLogInfo, uint64& qwI
 	memset(reinterpret_cast<void *>(pstMatchLinkInfo), 0, MATCH_LINK_INFO_SIZE);
 	pstMatchLinkInfo->dfIntersectLenSgmt = -1.0;
 
+	const uint64 qwPrevLinkId = qwInOutLinkID;
+
 	MAP_MATCH_INPUT stMapMatchInput;
-	// RAW GPS → MAP_MATCH_INPUT 변환 (2026-07-08 최정우 주석 추가)
+	// RAW GPS → MAP_MATCH_INPUT 변환 (적응형 검색 반경 포함) (2026-07-08 최정우 주석 추가)
 	BuildMapMatchInput(stRawLogInfo, &stMapMatchInput, qwInOutLinkID, pstAltCtx);
 
+	// 1차: 적응형 반경으로 Continue→Begin 시도 (2026-07-10 최정우 수정)
+	if (AttemptMatch(stRawLogInfo, stMapMatchInput, qwInOutLinkID, qwPrevLinkId, pstMatchLinkInfo, pstAltCtx))
+		return true;
+
+	// widen-on-miss: 적응형 반경이 상한보다 작으면 넓은 반경으로 1회 확장 재시도 (2026-07-10 최정우 추가)
+	//   경계 밖(예: 반경 1m 초과)에 링크가 있어 놓친 경우 구제. 정밀(좁은 반경) 우선 + 실패 시에만 확장.
+	const sint16 nWideRadius = std::max(m_nRadius, m_nRadiusMax);
+	if (stMapMatchInput.nRadius < nWideRadius)
+	{
+		qwInOutLinkID = qwPrevLinkId;					// 연속 재시도 위해 직전 링크 복원
+		// 입력 재구성(반경 외 nAngle/고도 컨텍스트 원복) 후 검색 반경만 확장 (2026-07-10 최정우 추가)
+		BuildMapMatchInput(stRawLogInfo, &stMapMatchInput, qwInOutLinkID, pstAltCtx);
+		stMapMatchInput.nRadius = nWideRadius;
+		LOGFMTD("[#%02d] widen-on-miss retry!device=[%s] seq=[%u] radius=[%d]",
+			m_nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.dwSeqNo,
+			static_cast<int>(nWideRadius));
+		if (AttemptMatch(stRawLogInfo, stMapMatchInput, qwInOutLinkID, qwPrevLinkId, pstMatchLinkInfo, pstAltCtx))
+			return true;
+	}
+
+	qwInOutLinkID = 0;
+	LOGFMTW("[#%02d] map match failed!device=[%s] seq=[%u] err=[%u]",
+		m_nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.dwSeqNo,
+		pstMatchLinkInfo->wErrorCode);
+	return false;
+}
+
+/**
+ * @brief 지정 반경(stMapMatchInput.nRadius)으로 연속(Continue)→초기(Begin) 1회 시도 (2026-07-10 최정우 추가)
+ * @param[in] stRawLogInfo 원시 GPS
+ * @param[in,out] stMapMatchInput 맵매칭 입력 (nRadius 등 호출측에서 세팅). 내부에서 qwLinkID/nAngle 갱신
+ * @param[in,out] qwInOutLinkID 직전 링크 ID. 연속 실패 시 0, 성공 시 매칭 링크로 갱신
+ * @param[in] qwPrevLinkId 트레이스용 직전 링크 ID
+ * @param[out] pstMatchLinkInfo 맵매칭 결과
+ * @param[in] pstAltCtx 고도 컨텍스트 (nullable)
+ * @return true(매칭 성공), false
+ * @remark widen-on-miss 재시도에서 동일 로직을 반경만 바꿔 재사용하기 위한 분리
+*/
+bool CProcessManager::AttemptMatch(const sRawLogInfo& stRawLogInfo, MAP_MATCH_INPUT& stMapMatchInput,
+		uint64& qwInOutLinkID, uint64 qwPrevLinkId, MATCH_LINK_INFO *pstMatchLinkInfo,
+		const ALT_MATCH_CTX *pstAltCtx)
+{
 	MATCH_TRACE_CTX stTraceCtx;
-	const uint64 qwPrevLinkId = qwInOutLinkID;
 
 	if (qwInOutLinkID != 0)
 	{
@@ -255,10 +298,6 @@ bool CProcessManager::ProcessRawLog(const sRawLogInfo& stRawLogInfo, uint64& qwI
 		return true;
 	}
 
-	qwInOutLinkID = 0;
-	LOGFMTW("[#%02d] map match failed!device=[%s] seq=[%u] err=[%u]",
-		m_nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.dwSeqNo,
-		pstMatchLinkInfo->wErrorCode);
 	return false;
 }
 

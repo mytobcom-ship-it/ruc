@@ -1071,7 +1071,7 @@ bool CRawLogWorker::CheckPgUpdateAffected(PGresult *pcResult, int nExpected,
 }
 
 /**
- * @brief raw_gps_log 처리 결과 일괄 갱신 [rawgps_update]
+ * @brief prim_rawgps 처리 결과 일괄 갱신 [rawgps_update]
  * @param[in] pcConn DB connection
  * @param[in] vtUpdates bulk UPDATE 대상 행 목록
  * @return true(전건 갱신), false(실행 오류·부분 갱신·인자 무효)

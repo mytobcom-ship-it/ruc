@@ -2,7 +2,7 @@
 """
 RUC 맵매칭 시뮬레이터 - DB 환경 구축 스크립트
 
-  - matching 스키마 + matching.raw_gps_log 테이블 생성 (create_sim.sql 실행)
+  - roadnet 스키마 + roadnet.prim_rawgps 테이블 생성 (create_sim.sql 실행)
   - 도로망(network.moct_link) 존재 여부 및 좌표계(SRID) 확인
   - mytobcom 계정 접속 점검
 
@@ -69,8 +69,8 @@ def check_as_mytobcom(args: argparse.Namespace) -> int:
         "UNION ALL "
         "SELECT 'moct_link_srid', COALESCE(MIN(ST_SRID(geom))::text,'(none)') FROM network.moct_link "
         "UNION ALL "
-        "SELECT 'raw_gps_log_exists', "
-        "(to_regclass('matching.raw_gps_log') IS NOT NULL)::text;"
+        "SELECT 'prim_rawgps_exists', "
+        "(to_regclass('roadnet.prim_rawgps') IS NOT NULL)::text;"
     )
     cmd = [psql, "-d", args.dbname, "-U", args.app_user,
            "-h", args.host or "localhost", "-p", str(args.port), "-c", sql]

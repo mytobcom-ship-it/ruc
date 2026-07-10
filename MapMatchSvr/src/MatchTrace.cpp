@@ -114,8 +114,9 @@ void CMatchTrace::LogResult(const MATCH_TRACE_CTX *pstCtx, const SGMT_MATCH_INPU
 			szFormula);
 	}
 
-	const double dfMatchLat = stWinner.dfMatchX / 360000.0;
-	const double dfMatchLon = stWinner.dfMatchY / 360000.0;
+	// dfMatchX=경도(X), dfMatchY=위도(Y) — lat/lon 표기 정정 (2026-07-10 최정우 수정)
+	const double dfMatchLat = stWinner.dfMatchY / 360000.0;
+	const double dfMatchLon = stWinner.dfMatchX / 360000.0;
 	const int nIntersectM = (stWinner.dfIntersectLenSgmt >= 0.0)
 		? static_cast<int>(stWinner.dfIntersectLenSgmt + 0.5) : -1;
 

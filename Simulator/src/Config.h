@@ -61,7 +61,7 @@ typedef struct sConfig
 		nReportSec(30), dfIdleProb(0.05),
 		dfMinLon(126.90), dfMinLat(37.48), dfMaxLon(127.10), dfMaxLat(37.62),
 		nRouteMinM(2000), nRouteMaxLinks(20), nSeedCandidates(20),
-		dfNoiseSigmaM(10.0), dfNoiseMaxM(30.0),
+		dfNoiseSigmaM(15.0), dfNoiseMaxM(60.0),
 		dfSpeedFactorMin(0.5), dfSpeedFactorMax(1.0), dfDefaultMaxSpd(50.0)
 	{}
 } SIM_CONFIG, *PSIM_CONFIG;

@@ -130,6 +130,10 @@ private:
 	void BuildMapMatchInput(const sRawLogInfo& stRawLogInfo, MAP_MATCH_INPUT *pstMapMatchInput,
 		uint64 qwLinkID, const ALT_MATCH_CTX *pstAltCtx) const;
 	sint16 CalcAdaptiveRadius(sint16 nAccuracyM) const;
+	// 지정 반경(stMapMatchInput.nRadius)으로 Continue→Begin 1회 시도 (widen-on-miss 재시도용) (2026-07-10 최정우 추가)
+	bool AttemptMatch(const sRawLogInfo& stRawLogInfo, MAP_MATCH_INPUT& stMapMatchInput,
+		uint64& qwInOutLinkID, uint64 qwPrevLinkId, MATCH_LINK_INFO *pstMatchLinkInfo,
+		const ALT_MATCH_CTX *pstAltCtx);
 	time_t GetConvertTime(char *pszDate);
 	const double GetDistance(POINT stPrePoint, 
 		MATCH_LINK_INFO stMatchLinkInfo);

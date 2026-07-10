@@ -245,10 +245,49 @@ bool CProcessManager::ProcessRawLog(const sRawLogInfo& stRawLogInfo, uint64& qwI
 	}
 
 	qwInOutLinkID = 0;
+
+	// 정식 매칭 실패(반경 내 후보 없음) — 반경 밖이라도 최근접 세그먼트 좌표·교차거리를 기록(진단).
+	//   성패는 상위(worker)가 MATCH_STATUS(SKIP)로 구분. 세션 링크는 전진시키지 않음(불량 매칭) (2026-07-10 최정우 추가)
+	if (FindNearestSegment(stRawLogInfo, pstMatchLinkInfo))
+	{
+		pstMatchLinkInfo->bOutOfRadius = true;
+		LOGFMTD("[#%02d] out-of-radius nearest captured!device=[%s] seq=[%u] intersect=[%.1fm]",
+			m_nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.dwSeqNo,
+			pstMatchLinkInfo->dfIntersectLenSgmt);
+		return false;						// 정식 매칭 실패(=반경 밖). 좌표/교차거리는 pstMatchLinkInfo 에 채워짐
+	}
+
 	LOGFMTW("[#%02d] map match failed!device=[%s] seq=[%u] err=[%u]",
 		m_nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.dwSeqNo,
 		pstMatchLinkInfo->wErrorCode);
 	return false;
+}
+
+/**
+ * @brief 반경 밖이라도 최근접 세그먼트 좌표·교차거리 탐색(진단용) (2026-07-10 최정우 추가)
+ * @param[in] stRawLogInfo 원시 GPS
+ * @param[out] pstMatchLinkInfo 최근접 세그먼트 결과(좌표·교차거리·링크정보)
+ * @return true(최근접 후보 발견), false(진단 반경 내 후보 없음)
+ * @remark 방위각 무시(순수 기하 최근접), Begin(연속 아님), 최대 반경(MM_DIAG_RADIUS_M).
+ *         정식 매칭이 아니므로 세션 링크/앵커는 갱신하지 않는다(호출측 책임).
+*/
+bool CProcessManager::FindNearestSegment(const sRawLogInfo& stRawLogInfo,
+		MATCH_LINK_INFO *pstMatchLinkInfo)
+{
+	if (m_pcMapMatch == nullptr || pstMatchLinkInfo == nullptr)
+		return false;
+
+	MAP_MATCH_INPUT stDiagInput;
+	// 입력 재구성(고도 컨텍스트 없음, Begin) 후 방위각 무시·최대 반경으로 최근접 탐색 (2026-07-10 최정우 추가)
+	BuildMapMatchInput(stRawLogInfo, &stDiagInput, 0, nullptr);
+	stDiagInput.qwLinkID = 0;
+	stDiagInput.nAngle = NO_ANGLE;					// 순수 기하 최근접(방위각 필터 미적용)
+	stDiagInput.nRadius = MM_DIAG_RADIUS_M;			// 반경 밖 후보까지 포함하도록 최대 반경
+
+	MATCH_TRACE_CTX stTraceCtx;
+	FillMatchTraceCtx(stTraceCtx, m_nThreadId, stRawLogInfo, stDiagInput, 0, false, nullptr);
+	// GRID 기반 Begin 으로 최근접 세그먼트 1개 획득 (좌표는 /360000 역스케일되어 채워짐)
+	return m_pcMapMatch->BeginMapMatch(stDiagInput, pstMatchLinkInfo, &stTraceCtx);
 }
 
 /**

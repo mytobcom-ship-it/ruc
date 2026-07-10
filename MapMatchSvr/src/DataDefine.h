@@ -146,6 +146,10 @@ typedef struct sAltitudeScoreConfig
 #define MM_CALC_MAX_GAP_SEC			10									// 직전 매칭점과의 시간간격(초) 초과 시 계산 불신 → 미적용
 #define MM_CALC_MIN_DIST_M			2.0									// 이동거리(m) 미만이면 방위각 노이즈 → 방위각 계산 미적용
 
+// 정식 매칭 실패(반경 밖)·정확도 SKIP 시 최근접 세그먼트 진단 탐색 반경(m) (2026-07-10 최정우 추가)
+//   좌표·교차거리를 참고용으로 남기기 위한 최대 탐색 반경. IsValidSearchRadius 상한(250) 이내.
+#define MM_DIAG_RADIUS_M			250									// 반경 밖 최근접 후보 탐색 반경(진단용, 방위각 무시)
+
 /**
  * @enum eCoordinateType
  * @brief 측지계 코드

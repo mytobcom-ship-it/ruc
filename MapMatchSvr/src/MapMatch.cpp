@@ -256,15 +256,40 @@ bool CMapMatch::SetResponseValue(uint16 wErrorCode, MATCH_ENTRY stMatchEntry,
 		// 에러 코드에 대응하는 메시지 문자열 조회 (2026-07-08 최정우 주석 추가)
 		strcpy(pstMatchLinkInfo->szErrorMsg, m_cCodeMap.GetValue(ErrorCodeTable, NOE(ErrorCodeTable), pstMatchLinkInfo->wErrorCode));
 
-		memcpy(&pstMatchLinkInfo->dfMatchX, &stMatchEntry, MATCH_ENTRY_SIZE);
+		// 2026-07-10 최정우 주석 처리: MATCH_ENTRY 에만 존재하는 dfCost/dfAngleCost/dfAltAdj(24B) 때문에
+		//   두 구조체 레이아웃이 어긋나, 통복사 시 qwLinkID 이후 필드(링크ID·도로유형·노드 등)가 전부 밀려
+		//   쓰레기값이 됨 → 연속(Continue) 맵매칭이 항상 GetLinkInfo 실패로 무력화. 명시적 필드 복사로 교체.
+		//memcpy(&pstMatchLinkInfo->dfMatchX, &stMatchEntry, MATCH_ENTRY_SIZE);
+		//pstMatchLinkInfo->dfMatchX /= 360000.0;
+		//pstMatchLinkInfo->dfMatchY /= 360000.0;
+		//pstMatchLinkInfo->dfStNodeX /= 360000.0;
+		//pstMatchLinkInfo->dfStNodeY /= 360000.0;
+		//pstMatchLinkInfo->dfEdNodeX /= 360000.0;
+		//pstMatchLinkInfo->dfEdNodeY /= 360000.0;
 
-		pstMatchLinkInfo->dfMatchX /= 360000.0;
-		pstMatchLinkInfo->dfMatchY /= 360000.0;
-
-		pstMatchLinkInfo->dfStNodeX /= 360000.0;
-		pstMatchLinkInfo->dfStNodeY /= 360000.0;
-		pstMatchLinkInfo->dfEdNodeX /= 360000.0;
-		pstMatchLinkInfo->dfEdNodeY /= 360000.0;
+		// MATCH_ENTRY → MATCH_LINK_INFO 필드별 복사 (좌표·노드좌표는 /360000 역스케일) (2026-07-10 최정우 수정)
+		pstMatchLinkInfo->dfMatchX			= stMatchEntry.dfMatchX / 360000.0;
+		pstMatchLinkInfo->dfMatchY			= stMatchEntry.dfMatchY / 360000.0;
+		pstMatchLinkInfo->dfSgmtMatchLen	= stMatchEntry.dfSgmtMatchLen;
+		pstMatchLinkInfo->dfIntersectLenSgmt = stMatchEntry.dfIntersectLenSgmt;
+		pstMatchLinkInfo->nDirAngleDiff		= stMatchEntry.nDirAngleDiff;
+		pstMatchLinkInfo->qwLinkID			= stMatchEntry.qwLinkID;
+		pstMatchLinkInfo->wLenFromLink		= stMatchEntry.wLenFromLink;
+		pstMatchLinkInfo->nMaxSpeed			= stMatchEntry.nMaxSpeed;
+		pstMatchLinkInfo->dfLen				= stMatchEntry.dfLen;
+		pstMatchLinkInfo->nRoadRank			= stMatchEntry.nRoadRank;
+		pstMatchLinkInfo->nConnect			= stMatchEntry.nConnect;
+		pstMatchLinkInfo->nRoadType			= stMatchEntry.nRoadType;
+		pstMatchLinkInfo->nLanes			= stMatchEntry.nLanes;
+		memcpy(pstMatchLinkInfo->szRoadName, stMatchEntry.szRoadName, sizeof(pstMatchLinkInfo->szRoadName));
+		pstMatchLinkInfo->qwStNodeID		= stMatchEntry.qwStNodeID;
+		pstMatchLinkInfo->dfStNodeX			= stMatchEntry.dfStNodeX / 360000.0;
+		pstMatchLinkInfo->dfStNodeY			= stMatchEntry.dfStNodeY / 360000.0;
+		pstMatchLinkInfo->nStNodeType		= stMatchEntry.nStNodeType;
+		pstMatchLinkInfo->qwEdNodeID		= stMatchEntry.qwEdNodeID;
+		pstMatchLinkInfo->dfEdNodeX			= stMatchEntry.dfEdNodeX / 360000.0;
+		pstMatchLinkInfo->dfEdNodeY			= stMatchEntry.dfEdNodeY / 360000.0;
+		pstMatchLinkInfo->nEdNodeType		= stMatchEntry.nEdNodeType;
 	}
 
 	return (wErrorCode == NO_ERROR) ? true : false;

@@ -125,6 +125,8 @@ public:
 	bool StartProcess(const char *pszStartDate, const char *pszDriveID, const char *pszOperID);
 	bool ProcessRawLog(const sRawLogInfo& stRawLogInfo, uint64& qwInOutLinkID,
 		MATCH_LINK_INFO *pstMatchLinkInfo, const ALT_MATCH_CTX *pstAltCtx = nullptr);
+	// 반경 밖이라도 최근접 세그먼트 좌표·교차거리 탐색(진단용, 방위각 무시, Begin) (2026-07-10 최정우 추가)
+	bool FindNearestSegment(const sRawLogInfo& stRawLogInfo, MATCH_LINK_INFO *pstMatchLinkInfo);
 
 private:
 	void BuildMapMatchInput(const sRawLogInfo& stRawLogInfo, MAP_MATCH_INPUT *pstMapMatchInput,

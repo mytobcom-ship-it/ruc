@@ -671,6 +671,19 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		stSession.dwLastGpsSeq = stRawLogInfo.dwSeqNo;
 		if (stRawLogInfo.nTripEvent == TRIP_EVENT_END)
 			*pbTripEnded = true;
+
+		// 정확도 SKIP 이어도 최근접 세그먼트 좌표·교차거리는 참고용으로 기록. 세션 앵커 미갱신 (2026-07-10 최정우 추가)
+		MATCH_LINK_INFO stNear;
+		memset(reinterpret_cast<void *>(&stNear), 0, MATCH_LINK_INFO_SIZE);
+		stNear.dfIntersectLenSgmt = -1.0;
+		CProcessManager& cPM = m_stConfig.pcProcessManager[nThreadId];
+		if (cPM.FindNearestSegment(stRawLogInfo, &stNear))
+		{
+			int nNearLenM = (stNear.dfIntersectLenSgmt >= 0.0)
+				? static_cast<int>(stNear.dfIntersectLenSgmt + 0.5) : -1;
+			return AppendUpdateRow(pvtUpdates, stRawLogInfo, MATCH_STATUS_SKIP, nNearLenM,
+				&stNear.dfMatchY, &stNear.dfMatchX);
+		}
 		return AppendUpdateRow(pvtUpdates, stRawLogInfo, MATCH_STATUS_SKIP);
 	}
 
@@ -688,7 +701,19 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 	// 맵매칭 처리 시간 측정 종료 (2026-07-08 최정우 주석 추가)
 	cMatchClock.Stop();
 
-	if (!bMatched)
+	// 반경 밖 최근접(진단) 여부 — 정식 매칭 실패지만 최근접 좌표·교차거리는 확보됨 (2026-07-10 최정우 추가)
+	const bool bOut = (!bMatched) && stMatchLinkInfo.bOutOfRadius;
+
+	if (!bMatched && bOut)
+	{
+		// 반경 밖 최근접 — SKIP 로 기록하되 좌표·교차거리는 저장(성패는 MATCH_STATUS 로 구분). 세션 앵커 미갱신
+		LOGFMTW("[#%02d] out-of-radius skip! device=[%s] trip_id=[%s] seq=[%u] "
+			"intersect=[%.1fm] match_lat=[%.06lf] match_lon=[%.06lf]",
+			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRawLogInfo.dwSeqNo,
+			stMatchLinkInfo.dfIntersectLenSgmt, stMatchLinkInfo.dfMatchY, stMatchLinkInfo.dfMatchX);
+		nFinalStatus = MATCH_STATUS_SKIP;
+	}
+	else if (!bMatched)
 	{
 		// 실패: DEVICE_KEY·좌표(위경도)·에러코드·에러메시지(CodeMap 변환값) 로그
 		const char *pszErrMsg = (stMatchLinkInfo.szErrorMsg[0] != '\0')
@@ -739,9 +764,11 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 	if (stMatchLinkInfo.dfIntersectLenSgmt >= 0.0)
 		nIntersectLenM = static_cast<int>(stMatchLinkInfo.dfIntersectLenSgmt + 0.5);
 
+	// 좌표 저장 대상: 정식 매칭(MATCHED) + 반경 밖 최근접(SKIP). 타임아웃/후보없음(ERROR)은 미저장 (2026-07-10 최정우 수정)
+	const bool bHasCoords = (bMatched || bOut);
 	if (!AppendUpdateRow(pvtUpdates, stRawLogInfo, nFinalStatus, nIntersectLenM,
-		bMatched ? &stMatchLinkInfo.dfMatchY : nullptr,
-		bMatched ? &stMatchLinkInfo.dfMatchX : nullptr))
+		bHasCoords ? &stMatchLinkInfo.dfMatchY : nullptr,
+		bHasCoords ? &stMatchLinkInfo.dfMatchX : nullptr))
 		return false;
 
 	// END 이벤트면 MATCHED/ERROR/SKIP 무관 세션 종료 (bulk 성공 후 mapSessions.erase)
@@ -871,8 +898,16 @@ bool CRawLogWorker::RunMapMatch(int nThreadId, const sRawLogInfo& stRawLogInfo,
 		stAltCtx.bHasPrevAlt = true;
 	}
 
-	return cProcessManager.ProcessRawLog(stAdjusted, pstSession->qwLinkID, pstMatchLinkInfo,
+	// 연속 맵매칭 링크는 "맵매칭 성공(반경 내 MATCHED)" 시에만 세션에 반영한다.
+	//   SKIP(정확도/반경 밖)·ERROR 시 직전 성공 링크를 그대로 유지 → 다음 GPS 는 마지막 성공 링크
+	//   기준으로 연속 맵매칭을 이어간다. (ProcessRawLog 는 실패 시 로컬 링크를 0으로 리셋하므로
+	//   세션 링크에 반영되지 않도록 로컬 복사본으로 호출) (2026-07-10 최정우 수정)
+	uint64 qwLinkID = pstSession->qwLinkID;
+	bool bMatched = cProcessManager.ProcessRawLog(stAdjusted, qwLinkID, pstMatchLinkInfo,
 		stAltCtx.bHasPrevAlt ? &stAltCtx : nullptr);
+	if (bMatched)
+		pstSession->qwLinkID = qwLinkID;		// 성공 시에만 링크 전진(다음 점 연속 매칭 기준)
+	return bMatched;
 }
 
 /**
@@ -1008,7 +1043,8 @@ bool CRawLogWorker::AppendUpdateRow(vector<RAW_LOG_UPDATE_ROW> *pvtUpdates,
 	else
 		szIntersectLen[0] = '\0';
 
-	if ((nStatus == MATCH_STATUS_MATCHED) && (pdfMatchLat != nullptr) && (pdfMatchLon != nullptr))
+	// 좌표가 제공되면 상태(MATCHED/SKIP) 무관 저장. 반경 밖 SKIP 도 최근접 좌표 기록 (2026-07-10 최정우 수정)
+	if ((pdfMatchLat != nullptr) && (pdfMatchLon != nullptr))
 	{
 		snprintf(szMatchLat, sizeof(szMatchLat), "%.06lf", *pdfMatchLat);
 		snprintf(szMatchLon, sizeof(szMatchLon), "%.06lf", *pdfMatchLon);

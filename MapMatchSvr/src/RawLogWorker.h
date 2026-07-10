@@ -56,14 +56,13 @@ typedef struct sVehicleTripSession
 /**
  * @struct sRawLogUpdateRow
  * @brief rawgps_update 1행 파라미터 (배치 종료 시 일괄 UPDATE)
- * @remark [rawgps_update] $4=match_status:
+ * @remark [rawgps_update] $3=match_status:
  *   - 1(MATCHED) / 3(SKIP) / 4(ERROR) : 맵매칭 정상 완료
- *   - 0(PENDING) : bulk 실패 시 예약 해제(release). $5~$7 은 '' 로 MATCH_* 미갱신
+ *   - 0(PENDING) : bulk 실패 시 예약 해제(release). $4~$6 은 '' 로 MATCH_* 미갱신
 */
 typedef struct sRawLogUpdateRow
 {
-	string							strDeviceKey;
-	string							strGpsDt;
+	string							strTripId;
 	string							strGpsSeq;
 	string							strMatchStatus;
 	string							strIntersectLen;
@@ -85,6 +84,8 @@ typedef struct sRawLogWorkerConfig
 	int								nTtlSec;							// trip_id 세션 유지 시간 (초, 0=비활성)
 	int								nMatchTimeoutMs;					// 1 GPS 맵매칭 처리 임계 (ms, 초과 시 ERROR 격리, 0=비활성)
 	int								nRetryMax;							// release→PENDING 재시도 상한. 초과 시 ERROR(4) 고정. 0=무제한
+	int								nConnRetryMax;						// [database] conn_retry_max — 풀 연결 핸들 확보 재시도 최대 횟수 (회, 2026-07-10 최정우 추가)
+	int								nConnRetryWait;						// [database] conn_retry_wait — 재시도 사이 대기 (ms, 2026-07-10 최정우 추가)
 	int								nRadiusSkip;						// config radius_skip — ACCURACY_M 초과 시 SKIP (m). 0=비활성 (2026-07-08 최정우)
 	// int								nRadiusSkipM;						// (구) config radius_skip_m (2026-07-08 최정우)
 	// int								nAccuracySkip;						// (구) config accuracy_skip (2026-07-08 최정우)
@@ -127,7 +128,7 @@ private:
 	static bool AppendReleaseRowFromRawLog(vector<RAW_LOG_UPDATE_ROW> *pvtRelease,
 		const sRawLogInfo& stRawLogInfo);
 	static bool IsRowInUpdates(const vector<RAW_LOG_UPDATE_ROW>& vtUpdates,
-		const string& strDeviceKey, const string& strGpsDt, const string& strGpsSeq);
+		const string& strTripId, const string& strGpsSeq);
 	static int GetPgCmdTuples(PGresult *pcResult);
 	static bool CheckPgUpdateAffected(PGresult *pcResult, int nExpected, const char *pszLogTag);
 	static string BuildPgTextArray(const vector<string>& vtValues);

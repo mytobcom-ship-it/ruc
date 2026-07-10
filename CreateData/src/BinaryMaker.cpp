@@ -895,7 +895,7 @@ bool CBinaryMaker::GetGridSgmtInfo(const uint64& qwLinkID, const vector<POINT>& 
 
 		if (!bRun) break;
 
-		// GRID 교차 여부 확인
+		// 버텍스 쌍 바운딩 GRID 범위
 		if (stGridNoInfo1.nColNo <= stGridNoInfo2.nColNo)
 		{
 			stGridNoMinMaxInfo.dwColNoMin = static_cast<uint32>(stGridNoInfo1.nColNo);
@@ -918,66 +918,57 @@ bool CBinaryMaker::GetGridSgmtInfo(const uint64& qwLinkID, const vector<POINT>& 
 			stGridNoMinMaxInfo.dwRowNoMax = static_cast<uint32>(stGridNoInfo1.nRowNo);
 		}
 
-		if ((stGridNoMinMaxInfo.dwColNoMin == stGridNoMinMaxInfo.dwColNoMax) && 
-			(stGridNoMinMaxInfo.dwRowNoMin == stGridNoMinMaxInfo.dwRowNoMax))
+		// 링크 시작점부터 버텍스 쌍 시작점까지 거리 (m)
+		if ((stStPoint == stPoint1) && (i == 0))
 		{
-			// 동일 GRID 내 세그먼트 — GRID ID 계산 (2026-07-08 최정우 주석 추가)
-			uint32 dwGridID = m_cGISUtil.GetGridID(stGridNoMinMaxInfo.dwColNoMin, stGridNoMinMaxInfo.dwRowNoMin);
-		// 링크의 시작점부터 세그먼트 시작점까지의 거리 (m)
-			if ((stStPoint == stPoint1) && (i == 0))
-			{
-				wLenFromLink = 0;
-				memcpy(&stPrePoint, &stPoint1, POINT_SIZE);
-			}
-			else if ((i > 0) && (stPrePoint != stPoint1))
-			{
-				wSgmtLen = static_cast<uint16>(round(m_cGISUtil.GetDistanceGEO2(stPrePoint, stPoint1)));
-				if (wSgmtLen <= 0) wSgmtLen = 1;
-				wLenFromLink += wSgmtLen;
-				memcpy(&stPrePoint, &stPoint1, POINT_SIZE);
-			}
-
-			// GRID 별 세그먼트 정보 임시 저장
-			// 단일 GRID 세그먼트 정보 등록 (2026-07-08 최정우 주석 추가)
-			SetGridSgmtInfo(dwGridID, qwLinkID, wLenFromLink, stPoint1, stPoint2);
+			wLenFromLink = 0;
+			memcpy(&stPrePoint, &stPoint1, POINT_SIZE);
 		}
-		else
+		else if ((i > 0) && (stPrePoint != stPoint1))
 		{
-			// 세그먼트의 시작점과 종료점이 동일한 GRID 에 있지 않으면 GRID 교차 확인
-			uint32 dwColNo = stGridNoMinMaxInfo.dwColNoMin;
-			while (dwColNo <= stGridNoMinMaxInfo.dwColNoMax)
+			wSgmtLen = static_cast<uint16>(round(m_cGISUtil.GetDistanceGEO2(stPrePoint, stPoint1)));
+			if (wSgmtLen <= 0) wSgmtLen = 1;
+			wLenFromLink += wSgmtLen;
+			memcpy(&stPrePoint, &stPoint1, POINT_SIZE);
+		}
+
+		// GRID 경계 기준 클리핑 — 셀별 조각만 GRID_SGMT_INFO 등록 (2026-07-10 최정우)
+		uint32 dwColNo = stGridNoMinMaxInfo.dwColNoMin;
+		while (dwColNo <= stGridNoMinMaxInfo.dwColNoMax)
+		{
+			uint32 dwRowNo = stGridNoMinMaxInfo.dwRowNoMin;
+			while (dwRowNo <= stGridNoMinMaxInfo.dwRowNoMax)
 			{
-				uint32 dwRowNo = stGridNoMinMaxInfo.dwRowNoMin;
-				while (dwRowNo <= stGridNoMinMaxInfo.dwRowNoMax)
+				const double dfXMin = WGS84GEO_LON_MIN + dwColNo * GRID_CELL_SIZE;
+				const double dfXMax = WGS84GEO_LON_MIN + (dwColNo + 1) * GRID_CELL_SIZE;
+				const double dfYMin = WGS84GEO_LAT_MIN + dwRowNo * GRID_CELL_SIZE;
+				const double dfYMax = WGS84GEO_LAT_MIN + (dwRowNo + 1) * GRID_CELL_SIZE;
+
+				POINT stClip1;
+				POINT stClip2;
+				if (m_cGISUtil.ClipSgmtToGridRect(stPoint1, stPoint2,
+						dfXMin, dfYMin, dfXMax, dfYMax, stClip1, stClip2))
 				{
-					// 세그먼트와 GRID 셀 교차 여부 확인 (2026-07-08 최정우 주석 추가)
-					if (m_cGISUtil.IsCrossSgmt2Grid(stPoint1, stPoint2, dwColNo, dwRowNo))
+					if (m_cGISUtil.GetSgmtLength(stClip1, stClip2) <= 0)
 					{
-						// 교차 GRID ID 계산 (2026-07-08 최정우 주석 추가)
-						uint32 dwGridID = m_cGISUtil.GetGridID(dwColNo, dwRowNo);
-
-		// 링크의 시작점부터 세그먼트 시작점까지의 거리 (m)
-						if ((stStPoint == stPoint1) && (i == 0))
-						{
-							wLenFromLink = 0;
-							memcpy(&stPrePoint, &stPoint1, POINT_SIZE);
-						}
-						else if ((i > 0) && (stPrePoint != stPoint1))
-						{
-							wSgmtLen = static_cast<uint16>(round(m_cGISUtil.GetDistanceGEO2(stPrePoint, stPoint1)));
-							if (wSgmtLen <= 0) wSgmtLen = 1;
-							wLenFromLink += wSgmtLen;
-							memcpy(&stPrePoint, &stPoint1, POINT_SIZE);
-						}
-
-			// GRID 별 세그먼트 정보 임시 저장
-						// 교차 GRID 세그먼트 정보 등록 (2026-07-08 최정우 주석 추가)
-						SetGridSgmtInfo(dwGridID, qwLinkID, wLenFromLink, stPoint1, stPoint2);
+						++dwRowNo;
+						continue;
 					}
-					++dwRowNo;
+
+					uint32 dwGridID = m_cGISUtil.GetGridID(dwColNo, dwRowNo);
+					uint16 wClipLenFromLink = wLenFromLink;
+					if ((stClip1.dfX != stPoint1.dfX) || (stClip1.dfY != stPoint1.dfY))
+					{
+						wSgmtLen = static_cast<uint16>(round(m_cGISUtil.GetDistanceGEO2(stPoint1, stClip1)));
+						if (wSgmtLen > 0)
+							wClipLenFromLink = static_cast<uint16>(wLenFromLink + wSgmtLen);
+					}
+
+					SetGridSgmtInfo(dwGridID, qwLinkID, wClipLenFromLink, stClip1, stClip2);
 				}
-				++dwColNo;
+				++dwRowNo;
 			}
+			++dwColNo;
 		}
 	}
 

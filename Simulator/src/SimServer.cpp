@@ -195,18 +195,43 @@ void CSimServer::Flush()
 
 		char szLat[32], szLon[32], szSpd[16], szHead[16], szAlt[16], szAcc[16], szBat[8];
 		char szTripEvent[8], szDriveStatus[8], szGpsSeq[24];
+		const char *pszSpd = nullptr;
+		const char *pszHead = nullptr;
+		const char *pszAlt = nullptr;
+		const char *pszAcc = nullptr;
+		const char *pszBat = nullptr;
 		snprintf(szLat, sizeof(szLat), "%.6f", s.dfLat);
 		snprintf(szLon, sizeof(szLon), "%.6f", s.dfLon);
-		// 순간속도/방위각/고도/수평오차: SMALLINT 컬럼 → 정수형 적재 (2026-07-10 최정우 수정)
-		int nSpd = (s.dfSpeedKmh > 0.0) ? (int)(s.dfSpeedKmh + 0.5) : 0;
-		int nHead = ((int)(s.dfHeading + 0.5)) % 360; if (nHead < 0) nHead += 360;	// 방위각 0~359
-		int nAlt = (int)(s.dfAltitude + (s.dfAltitude >= 0.0 ? 0.5 : -0.5));
-		int nAcc = (s.dfAccuracy > 0.0) ? (int)(s.dfAccuracy + 0.5) : 1;
-		snprintf(szSpd, sizeof(szSpd), "%d", nSpd);
-		snprintf(szHead, sizeof(szHead), "%d", nHead);
-		snprintf(szAlt, sizeof(szAlt), "%d", nAlt);
-		snprintf(szAcc, sizeof(szAcc), "%d", nAcc);
-		snprintf(szBat, sizeof(szBat), "%d", s.nBattery);
+		// 순간속도/방위각/고도/수평오차: 누락 시 libpq NULL → DB NULL (2026-07-10 최정우 추가)
+		if (s.bHasSpeed)
+		{
+			int nSpd = (s.dfSpeedKmh > 0.0) ? (int)(s.dfSpeedKmh + 0.5) : 0;
+			snprintf(szSpd, sizeof(szSpd), "%d", nSpd);
+			pszSpd = szSpd;
+		}
+		if (s.bHasHeading)
+		{
+			int nHead = ((int)(s.dfHeading + 0.5)) % 360; if (nHead < 0) nHead += 360;
+			snprintf(szHead, sizeof(szHead), "%d", nHead);
+			pszHead = szHead;
+		}
+		if (s.bHasAltitude)
+		{
+			int nAlt = (int)(s.dfAltitude + (s.dfAltitude >= 0.0 ? 0.5 : -0.5));
+			snprintf(szAlt, sizeof(szAlt), "%d", nAlt);
+			pszAlt = szAlt;
+		}
+		if (s.bHasAccuracy)
+		{
+			int nAcc = (s.dfAccuracy > 0.0) ? (int)(s.dfAccuracy + 0.5) : 1;
+			snprintf(szAcc, sizeof(szAcc), "%d", nAcc);
+			pszAcc = szAcc;
+		}
+		if (s.bHasBattery)
+		{
+			snprintf(szBat, sizeof(szBat), "%d", s.nBattery);
+			pszBat = szBat;
+		}
 		snprintf(szTripEvent, sizeof(szTripEvent), "%d", static_cast<int>(s.nTripEvent));
 		snprintf(szDriveStatus, sizeof(szDriveStatus), "%d", static_cast<int>(s.nDriveStatus));
 		// GPS_SEQ: 운행마다 1~N (BIGINT) (2026-07-10 최정우 추가)
@@ -219,7 +244,7 @@ void CSimServer::Flush()
 			s.szGpsDt,
 			szTripEvent,
 			szDriveStatus,
-			szLat, szLon, szSpd, szHead, szAlt, szAcc, szBat,
+			szLat, szLon, pszSpd, pszHead, pszAlt, pszAcc, pszBat,
 			s.strTripId.c_str(),		// $12 trip_id (2026-07-10 최정우 수정)
 			szGpsSeq,					// $13 gps_seq (2026-07-10 최정우 추가)
 			pszRawVld					// $14 raw_vld (2026-07-10 최정우 추가)

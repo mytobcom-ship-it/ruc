@@ -127,6 +127,8 @@ public:
 		MATCH_LINK_INFO *pstMatchLinkInfo, const ALT_MATCH_CTX *pstAltCtx = nullptr);
 	// 반경 밖이라도 최근접 세그먼트 좌표·교차거리 탐색(진단용, 방위각 무시, Begin) (2026-07-10 최정우 추가)
 	bool FindNearestSegment(const sRawLogInfo& stRawLogInfo, MATCH_LINK_INFO *pstMatchLinkInfo);
+	// 진단반경(MM_DIAG_RADIUS_M) 초과여도 기하 최근접 1건 (SKIP 참고용, 세션 미갱신) (2026-07-10 최정우 수정)
+	bool FindGeomNearestSegment(const sRawLogInfo& stRawLogInfo, MATCH_LINK_INFO *pstMatchLinkInfo);
 
 private:
 	void BuildMapMatchInput(const sRawLogInfo& stRawLogInfo, MAP_MATCH_INPUT *pstMapMatchInput,

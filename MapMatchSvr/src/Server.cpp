@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file Server.cpp
  * @brief 서버 클래스 소스 파일
 */
@@ -379,8 +379,10 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	stWorkerConfig.nTtlSec = m_nTtlSec;
 	stWorkerConfig.nMatchTimeoutMs = m_nMatchTimeout;
 	stWorkerConfig.nRetryMax = m_nRetryMax;
+	stWorkerConfig.nConnRetryMax = stConfig.nConnRetryMax;
+	stWorkerConfig.nConnRetryWait = stConfig.nConnRetryWait;
 	stWorkerConfig.nRadiusSkip = m_nRadiusSkip;
-	// 워커에 DB pool·ProcessManager·SQL·TTL 등 공유 설정 전달 (2026-07-08 최정우 주석 추가)
+	// 워커에 DB pool·ProcessManager·SQL·TTL·conn_retry 등 공유 설정 전달 (2026-07-10 최정우 추가)
 	m_pcRawLogWorker->SetConfig(stWorkerConfig);
 
 	CWorkerManager *pcWorkerManager = new (std::nothrow)CWorkerManager;

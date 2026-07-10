@@ -7,8 +7,10 @@
 /**
  * @brief 생성자
 */
-CIniReader::CIniReader()
-	: m_strPath(""), m_strFile(""), m_fp(nullptr)
+CIniReader::CIniReader() : 
+	m_strPath(""), 
+	m_strFile(""), 
+	m_fp(nullptr)
 {
 	m_mapSection.clear();
 }
@@ -18,8 +20,10 @@ CIniReader::CIniReader()
  * @param[in] strPath 경로
  * @param[in] strFile 파일명
 */
-CIniReader::CIniReader(const string strPath, const string strFile)
-	: m_strPath(strPath), m_strFile(strFile), m_fp(nullptr)
+CIniReader::CIniReader(const string strPath, const string strFile) : 
+	m_strPath(strPath), 
+	m_strFile(strFile), 
+	m_fp(nullptr)
 {
 	m_strFullName = m_strPath + DIR_DELIMITER + m_strFile;
 	m_mapSection.clear();
@@ -29,8 +33,9 @@ CIniReader::CIniReader(const string strPath, const string strFile)
  * @brief 생성자
  * @param[in] strFile 경로 포함 파일명
 */
-CIniReader::CIniReader(const string strFile)
-	: m_strFullName(strFile), m_fp(nullptr)
+CIniReader::CIniReader(const string strFile) : 
+	m_strFullName(strFile), 
+	m_fp(nullptr)
 {
 	string::size_type nIndex = strFile.rfind(DIR_DELIMITER);
 
@@ -104,13 +109,21 @@ bool CIniReader::ReadIniFile()
 	char szValue[MAX_LINE_BUFF];
 	char *pPos, *pToken;
 
+	// 초기화 (2025-12-04 최정우 추가)
+	memset(szLine, 0, static_cast<size_t>(MAX_LINE_BUFF));
+	memset(szToken, 0, static_cast<size_t>(MAX_LINE_BUFF));
+	memset(szValue, 0, static_cast<size_t>(MAX_LINE_BUFF));
+
 	multimap<string, string> *pCurrentSection = nullptr;
 
 	while (fgets(szLine, MAX_LINE_BUFF, m_fp))
 	{
 		// ignore whitespace
 		pPos = szLine;
-		while (isspace(*pPos)) pPos++;
+
+		// 문자열 종료가 아닌지 확인 코드 추가 (2026-07-10 최정우 보완)
+		while ((*pPos != '\0') && isspace(static_cast<unsigned char>(*pPos)))
+			pPos++;
 
 		// Check Comment/Section/Key
 		if ((*pPos == '\0') || (*pPos == '\r') || (*pPos == '\n') || (*pPos == '#') || (*pPos == ';'))
@@ -169,7 +182,7 @@ bool CIniReader::ReadKeyValue(char *pBuf, char *pKey, char *pVal)
 	*pPos = '\0';
 	pPos--;
 	while ((pPos >= pKey) && 
-		(*pPos == ' ' || *pPos == '\t' || *pPos == '\r' || *pPos == '\n'))
+		((*pPos == ' ') || (*pPos == '\t') || (*pPos == '\r') || (*pPos == '\n')))
 	{
 		*pPos = '\0';
 		pPos--;
@@ -188,7 +201,7 @@ bool CIniReader::ReadKeyValue(char *pBuf, char *pKey, char *pVal)
 	*pPos = '\0';
 	pPos--;
 	while ((pPos >= pVal) && 
-		(*pPos == ' ' || *pPos == '\t' || *pPos == '\r' || *pPos == '\n'))
+		((*pPos == ' ') || (*pPos == '\t') || (*pPos == '\r') || (*pPos == '\n')))
 	{
 		*pPos = '\0';
 		pPos--;

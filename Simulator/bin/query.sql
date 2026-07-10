@@ -2,7 +2,7 @@
 -- 도로망(network.moct_link)에서 경로 링크를 조회하고, roadnet.prim_rawgps 에 원시 GPS 를 적재한다.
 --
 -- 좌표계 주의:
---   network.moct_link.geom 은 적재 방식에 따라 EPSG:4326 또는 5179 일 수 있어
+--   network.moct_link.geom 은 EPSG:5186 (신규 표준노드링크). 런타임 SRID 감지 후 4326 출력.
 --   런타임에 SRID 를 감지($5)하고, 출력은 항상 ST_Transform(geom,4326) 로 WGS-84 변환한다.
 
 -- ── 도로망 SRID 감지 ───────────────────────────────────────────────────────
@@ -45,19 +45,21 @@ LIMIT 1;
 
 -- ── 원시 GPS 적재 ─────────────────────────────────────────────────────────
 -- $1=device_key $2=gps_dt $3=trip_event $4=drive_status $5=gps_lat $6=gps_lon
--- $7=speed_kmh $8=heading $9=altitude_m $10=accuracy_m $11=battery
+-- $7=speed_kmh $8=heading $9=altitude_m $10=accuracy_m $11=battery (NULL=미수집)
 -- $12=trip_id (없으면 '') $13=gps_seq (운행마다 1~N) $14=raw_vld (좌표 유효='t'/'f')
--- — v1.3 §2.1 INSERT 컬럼 순서
+-- — PRIM_RAWGPS 컬럼 순서 (PK→INDEX→속성, 2026-07-10)
 [raw_gps_insert]
 INSERT INTO roadnet.prim_rawgps (
-	device_key, gps_dt, gps_seq, trip_id, trip_event, drive_status,
-	gps_lat, gps_lon, raw_vld, speed_kmh, heading, altitude_m, accuracy_m, battery,
+	trip_id, gps_seq, device_key, gps_dt,
+	trip_event, drive_status,
+	gps_lat, gps_lon, raw_vld,
+	speed_kmh, heading, altitude_m, accuracy_m, battery,
 	recv_dt, match_status
 ) VALUES (
+	NULLIF($12, ''),
+	$13::bigint,
 	$1,
 	$2::char(14),
-	$13::bigint,
-	NULLIF($12, ''),
 	$3::smallint, $4::smallint,
 	$5::numeric, $6::numeric, $14::boolean,
 	$7::numeric, $8::numeric, $9::numeric, $10::numeric, $11::smallint,

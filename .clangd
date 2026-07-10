@@ -1,0 +1,7 @@
+﻿CompileFlags:
+  Add:
+    - -std=c++11
+    - -I/home/mytobcom/ruc/CreateData/src
+    - -I/home/mytobcom/ruc/MapMatchSvr/src
+    - -I/home/mytobcom/ruc/Simulator/src
+    - -I/usr/pgsql-18/include

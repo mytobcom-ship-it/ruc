@@ -10,7 +10,7 @@
 |------|-----|
 | **DB명** | `roadnet` |
 | **스키마** | `network` |
-| **좌표계** | EPSG:5179 (GRS80 UTM-K) |
+| **좌표계** | EPSG:5186 (GRS80 TM Central Belt 2010) |
 | **원본 데이터** | `/data/MOCT_LINK.*`, `/data/MOCT_NODE.*`, `/data/MULTILINK.dbf`, `/TURNINFO.dbf` |
 | **PostGIS** | 필수 (`CREATE EXTENSION postgis`) |
 
@@ -44,7 +44,7 @@ network.multilink          network.turn_info (node_id, turn_id)
 | `remark` | `varchar(30)` | YES | | `REMARK` | 비고 |
 | `hist_type` | `varchar(8)` | YES | | `HIST_TYPE` | 이력 유형 코드 (신규/변경/유지 등) |
 | `histremark` | `varchar(30)` | YES | | `HISTREMARK` | 이력 관련 비고 |
-| `geom` | `geometry(Point, 5179)` | YES | GIST | `.shp` | 노드 좌표 (EPSG:5179) |
+| `geom` | `geometry(Point, 5186)` | YES | GIST | `.shp` | 노드 좌표 (EPSG:5186) |
 
 ### `node_type` 코드 (실제 데이터 기준)
 
@@ -89,7 +89,7 @@ network.multilink          network.turn_info (node_id, turn_id)
 | `remark` | `varchar(30)` | YES | | `REMARK` | 비고 |
 | `hist_type` | `varchar(8)` | YES | | `HIST_TYPE` | 이력 유형 코드 |
 | `histremark` | `varchar(30)` | YES | | `HISTREMARK` | 이력 관련 비고 |
-| `geom` | `geometry(LineString, 5179)` | YES | GIST | `.shp` | 링크 형상 (EPSG:5179) |
+| `geom` | `geometry(LineString, 5186)` | YES | GIST | `.shp` | 링크 형상 (EPSG:5186) |
 
 ### `road_rank` 코드 (RUCSvr DataFormat.h / 실제 데이터)
 

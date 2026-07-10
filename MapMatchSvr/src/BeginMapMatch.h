@@ -32,10 +32,15 @@ public:
 
 	bool StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& stSgmtMatchInput, 
 		uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry, PMATCH_TRACE_CTX pstTraceCtx = nullptr);
+	// 반경 무시 기하 최근접 1건 (진단반경 초과·그리드 후보 있음 → SKIP 참고용) (2026-07-10 최정우 수정)
+	bool FindGeomNearest(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& stSgmtMatchInput,
+		uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry);
 
 private:
 	bool GridSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, uint32 dwStartSgmtOffset, 
 		uint32 dwEndSgmtOffset, uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry);
+	bool GridSgmtGeomNearest(SGMT_MATCH_INPUT& stSgmtMatchInput, uint32 dwStartSgmtOffset,
+		uint32 dwEndSgmtOffset, MATCH_ENTRY& stBest, double& dfBestDist, bool& bFound);
 
 private:
 	CGISUtil						m_cGISUtil;

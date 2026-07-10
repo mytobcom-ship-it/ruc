@@ -110,6 +110,45 @@ bool CMapMatch::BeginMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 }
 
 /**
+ * @brief 반경 무시 기하 최근접 Begin — 진단반경 초과 SKIP 참고용 (2026-07-10 최정우 수정)
+ * @remark MATCHED 아님. 좌표·교차거리만 확보, 세션 링크·앵커 갱신은 호출측에서 하지 않음.
+*/
+bool CMapMatch::BeginGeomNearest(MAP_MATCH_INPUT stMapMatchInput, PMATCH_LINK_INFO pstMatchLinkInfo)
+{
+	uint16 wErrorCode = NO_ERROR;
+	enum eCoordinateType eCoordType = static_cast<enum eCoordinateType>(stMapMatchInput.nCoordinateType);
+	sint16 nRadius = static_cast<sint16>(MM_DIAG_RADIUS_M);
+	double dfX = stMapMatchInput.dfX;
+	double dfY = stMapMatchInput.dfY;
+	const sint16 nAngle = NO_ANGLE;
+
+	pstMatchLinkInfo->wErrorCode = wErrorCode;
+	if (!IsValidCommonRequestValue(eCoordType, nRadius, dfX, dfY, nAngle, pstMatchLinkInfo))
+		return false;
+
+	SGMT_MATCH_INPUT stSgmtMatchInput;
+	MATCH_ENTRY stMatchEntry;
+
+	stSgmtMatchInput.stPoint.dfX = dfX;
+	stSgmtMatchInput.stPoint.dfY = dfY;
+	stSgmtMatchInput.nRadius = nRadius;
+	stSgmtMatchInput.nDirAng = NO_ANGLE;
+	stSgmtMatchInput.nSpeed = stMapMatchInput.nSpeed;
+
+	if (!m_cBeginMapMatch.FindGeomNearest(m_pcDataLoader, stSgmtMatchInput, &wErrorCode, &stMatchEntry))
+	{
+		pstMatchLinkInfo->wErrorCode = wErrorCode;
+		strcpy(pstMatchLinkInfo->szErrorMsg,
+			m_cCodeMap.GetValue(ErrorCodeTable, NOE(ErrorCodeTable), pstMatchLinkInfo->wErrorCode));
+		if (stMatchEntry.dfIntersectLenSgmt >= 0.0)
+			pstMatchLinkInfo->dfIntersectLenSgmt = stMatchEntry.dfIntersectLenSgmt;
+		return false;
+	}
+
+	return SetResponseValue(wErrorCode, stMatchEntry, pstMatchLinkInfo);
+}
+
+/**
  * @brief 연속 맵매칭
  * @param[in] stMapMatchInput 연속 맵매칭 입력 정보
  * @param[out] pstMatchLinkInfo 연속 맵매칭 응답 정보

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file Config.h
  * @brief 시뮬레이터 환경설정 구조체
 */
@@ -35,6 +35,8 @@ typedef struct sConfig
 	int			nFlushSec;			// DB INSERT 주기 (초)
 	int			nReportSec;			// 통계 로그 출력 주기 (초)
 	double		dfIdleProb;			// 매 tick 정차(IDLE) 확률 (0~1)
+	double		dfOmitAllProb;		// 보조 GPS 필드 전부 누락 확률 (0~1, 드물게)
+	double		dfOmitPartialProb;	// 보조 GPS 필드 1~2개 누락 확률 (0~1, 가끔)
 
 	// [area] 주행 영역 (WGS-84 경위도 bounding box)
 	double		dfMinLon;
@@ -59,6 +61,7 @@ typedef struct sConfig
 	sConfig() :
 		nLogLevel(2), nDBPort(5432), nVehicles(10), nFlushSec(3),
 		nReportSec(30), dfIdleProb(0.05),
+		dfOmitAllProb(0.005), dfOmitPartialProb(0.08),
 		dfMinLon(126.90), dfMinLat(37.48), dfMaxLon(127.10), dfMaxLat(37.62),
 		nRouteMinM(2000), nRouteMaxLinks(20), nSeedCandidates(20),
 		dfNoiseSigmaM(15.0), dfNoiseMaxM(60.0),

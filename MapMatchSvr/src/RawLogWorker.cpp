@@ -19,18 +19,28 @@ using namespace zsummer::log4z;
 
 namespace {
 
-#define WORKER_CONN_RETRY_MAX			3
-#define WORKER_CONN_RETRY_INTERVAL_US	100000
-
+// bulk release 재시도 횟수 (PK: TRIP_ID|GPS_SEQ). 워커 스레드 간 공유 (2026-07-10 최정우 주석 추가)
 pthread_mutex_t g_retryCountMutex = PTHREAD_MUTEX_INITIALIZER;
 unordered_map<string, int> g_mapReleaseRetryCount;
 
-static string MakeReleaseRetryKey(const string& strDeviceKey,
-		const string& strGpsDt, const string& strGpsSeq)
+/**
+ * @brief release 재시도 카운트 맵 키 생성
+ * @param[in] strTripId 운행 ID (PK-1)
+ * @param[in] strGpsSeq GPS 순번 (PK-2, 문자열)
+ * @return TRIP_ID|GPS_SEQ 형식 키
+ * @remark BulkReleaseRawLogs() 재시도 상한(nRetryMax) 판별용
+ */
+static string MakeReleaseRetryKey(const string& strTripId, const string& strGpsSeq)
 {
-	return strDeviceKey + "|" + strGpsDt + "|" + strGpsSeq;
+	return strTripId + "|" + strGpsSeq;
 }
 
+/**
+ * @brief release 재시도 횟수 1 증가 (스레드 안전)
+ * @param[in] strKey MakeReleaseRetryKey() 로 생성한 키
+ * @return 증가 후 재시도 횟수
+ * @remark BulkReleaseRawLogs() 에서 PROCESSING→PENDING 해제 실패 시 누적
+ */
 static int BumpReleaseRetryCount(const string& strKey)
 {
 	pthread_mutex_lock(&g_retryCountMutex);
@@ -39,6 +49,12 @@ static int BumpReleaseRetryCount(const string& strKey)
 	return nCount;
 }
 
+/**
+ * @brief release 재시도 카운트 제거 (스레드 안전)
+ * @param[in] strKey MakeReleaseRetryKey() 로 생성한 키
+ * @return void
+ * @remark BulkUpdateRawLogs() 정상 완료(MATCHED/SKIP/ERROR) 시 호출
+ */
 static void ClearReleaseRetryCount(const string& strKey)
 {
 	pthread_mutex_lock(&g_retryCountMutex);
@@ -46,10 +62,23 @@ static void ClearReleaseRetryCount(const string& strKey)
 	pthread_mutex_unlock(&g_retryCountMutex);
 }
 
-static PGconn* AcquirePoolConnection(CPostgrePool *pcPool, int nMaxAttempt = WORKER_CONN_RETRY_MAX)
+/**
+ * @brief 커넥션 풀에서 DB 연결 핸들 확보 (일시 고갈 시 재시도)
+ * @param[in] pcPool PostgreSQL 커넥션 풀
+ * @param[in] nMaxAttempt 재시도 최대 횟수 ([database] conn_retry_max, 회)
+ * @param[in] nWaitMs 재시도 사이 대기 ([database] conn_retry_wait, ms)
+ * @return PGconn*(성공), nullptr(실패)
+ * @remark getConnection() 실패 시 nWaitMs 간격으로 최대 nMaxAttempt 회 시도 (2026-07-10 최정우 주석 추가)
+ */
+static PGconn* AcquirePoolConnection(CPostgrePool *pcPool, int nMaxAttempt, int nWaitMs)
 {
 	if (pcPool == nullptr)
 		return nullptr;
+
+	if (nMaxAttempt < 1)
+		nMaxAttempt = 1;
+	if (nWaitMs < 0)
+		nWaitMs = 0;
 
 	for (int nAttempt=1; nAttempt<=nMaxAttempt; ++nAttempt)
 	{
@@ -57,16 +86,14 @@ static PGconn* AcquirePoolConnection(CPostgrePool *pcPool, int nMaxAttempt = WOR
 		if (pcConn != nullptr)
 			return pcConn;
 
-		if (nAttempt < nMaxAttempt)
-			usleep(WORKER_CONN_RETRY_INTERVAL_US);
+		if ((nAttempt < nMaxAttempt) && (nWaitMs > 0))
+			usleep(static_cast<useconds_t>(nWaitMs) * 1000);
 	}
 
 	return nullptr;
 }
 
 } // namespace
-
-static void FormatGpsDateTime(time_t dtGps, char *pszBuf, size_t nBufSize);
 
 /**
  * @brief 생성자
@@ -94,6 +121,12 @@ void CRawLogWorker::SetConfig(const RAWLOG_WORKER_CONFIG& stConfig)
 
 	if (m_stConfig.nWorkerThreads <= 0)
 		m_stConfig.nWorkerThreads = 1;
+
+	// [database] conn_retry — 기동 시 LoadConfig 값 보정 (2026-07-10 최정우 추가)
+	if (m_stConfig.nConnRetryMax < 1)
+		m_stConfig.nConnRetryMax = 1;
+	if (m_stConfig.nConnRetryWait < 0)
+		m_stConfig.nConnRetryWait = 0;
 
 	m_vtTripSessions.clear();
 	m_vtTripSessions.resize(static_cast<size_t>(m_stConfig.nWorkerThreads));
@@ -162,8 +195,10 @@ bool CRawLogWorker::ReleaseReservedBatch(PGconn *pcConn, const RAW_LOG_BATCH& vt
 	vtRelease.reserve(vtBatch.size());
 
 	for (size_t i=0; i<vtBatch.size(); ++i)
+	{
 		// batch 1건씩 release 행 목록 적재 (2026-07-08 최정우 주석 추가)
 		AppendReleaseRowFromRawLog(&vtRelease, vtBatch[i]);
+	}
 
 	if (vtRelease.empty())
 		return false;
@@ -292,7 +327,7 @@ bool CRawLogWorker::ValidateRawLog(int nThreadId, const sRawLogInfo& stRawLogInf
 */
 bool CRawLogWorker::ShouldSkipGpsInput(int nThreadId, const sRawLogInfo& stRawLogInfo)
 {
-	if (stRawLogInfo.bGpsLatNull || stRawLogInfo.bGpsLonNull)
+	if ((stRawLogInfo.bGpsLatNull) || (stRawLogInfo.bGpsLonNull))
 	{
 		LOGFMTW("[#%02d] reject null gps coord!device=[%s] trip_id=[%s] seq=[%u] lat_null=[%d] lon_null=[%d]",
 			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRawLogInfo.dwSeqNo,
@@ -301,7 +336,7 @@ bool CRawLogWorker::ShouldSkipGpsInput(int nThreadId, const sRawLogInfo& stRawLo
 		return true;
 	}
 
-	if (!stRawLogInfo.bRawVldKnown || !stRawLogInfo.bRawVld)
+	if ((!stRawLogInfo.bRawVldKnown) || (!stRawLogInfo.bRawVld))
 	{
 		LOGFMTW("[#%02d] reject invalid raw_vld!device=[%s] trip_id=[%s] seq=[%u] known=[%d] raw_vld=[%d]",
 			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRawLogInfo.dwSeqNo,
@@ -337,8 +372,9 @@ bool CRawLogWorker::NeedsBeginReset(int nThreadId, const sRawLogInfo& stRawLogIn
 	}
 
 	// TRIP_ID 변경 = 새 주행 (이전 trip END 누락으로 세션 잔류 또는 START 누락) → 전체 리셋(갱신) (2026-07-08 최정우 추가)
-	if (stSession.szTripId[0] != '\0'
-		&& strcmp(stSession.szTripId, stRawLogInfo.szTripID) != 0)
+	if ((stSession.szTripId[0] != '\0') && 
+		(strcmp(stSession.szTripId, stRawLogInfo.szTripID) != 0) && 
+		(stRawLogInfo.szTripID[0] != '\0'))
 	{
 		LOGFMTW("[#%02d] trip_id changed (missing END/START)!device=[%s] old=[%s] new=[%s] seq=[%u]",
 			nThreadId, stRawLogInfo.szDeviceKey, stSession.szTripId,
@@ -347,7 +383,8 @@ bool CRawLogWorker::NeedsBeginReset(int nThreadId, const sRawLogInfo& stRawLogIn
 		return true;
 	}
 
-	if (stSession.dwLastGpsSeq > 0 && stRawLogInfo.dwSeqNo <= stSession.dwLastGpsSeq)
+	if ((stSession.dwLastGpsSeq > 0) && 
+		(stRawLogInfo.dwSeqNo <= stSession.dwLastGpsSeq))
 	{
 		LOGFMTW("[#%02d] gps_seq rollback!device=[%s] trip_id=[%s] seq=[%u] last_seq=[%u]",
 			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID,
@@ -413,8 +450,9 @@ void CRawLogWorker::run(int nThreadId, void *context)
 		return;
 	}
 
-	// batch 처리용 DB 커넥션 획득 (#E-1: 일시 고갈 시 재시도)
-	pcConn = AcquirePoolConnection(m_stConfig.pcPostgrePool);
+	// batch 처리용 DB 커넥션 획득 (#E-1: [database] conn_retry_max/wait 재시도) (2026-07-10 최정우 추가)
+	pcConn = AcquirePoolConnection(m_stConfig.pcPostgrePool,
+		m_stConfig.nConnRetryMax, m_stConfig.nConnRetryWait);
 	if (pcConn == nullptr)
 	{
 		LOGFMTE("[#%02d] db connection is null after retry!batch orphan until recover!device=[%s] count=[%d]",
@@ -464,23 +502,22 @@ void CRawLogWorker::run(int nThreadId, void *context)
 	vector<RAW_LOG_UPDATE_ROW> vtOrphanRelease;
 	for (size_t i=0; i<pvtBatch->size(); ++i)
 	{
-		char szGpsDt[16];
-		// time_t GPS 시각 → YYYYMMDDHH24MISS (2026-07-08 최정우 주석 추가)
-		FormatGpsDateTime((*pvtBatch)[i].dtGPS, szGpsDt, sizeof(szGpsDt));
 		char szGpsSeq[16];
 		snprintf(szGpsSeq, sizeof(szGpsSeq), "%u", (*pvtBatch)[i].dwSeqNo);
 
-		if (szGpsDt[0] == '\0')
+		if ((*pvtBatch)[i].szTripID[0] == '\0')
 		{
-			LOGFMTE("[#%02d] orphan release skipped!invalid gps_dt device=[%s] seq=[%u]",
+			LOGFMTE("[#%02d] orphan release skipped!invalid trip_id device=[%s] seq=[%u]",
 				nThreadId, (*pvtBatch)[i].szDeviceKey, (*pvtBatch)[i].dwSeqNo);
 			bProcessOk = false;
 			continue;
 		}
 
-		if (!IsRowInUpdates(vtUpdates, (*pvtBatch)[i].szDeviceKey, szGpsDt, szGpsSeq))
+		if (!IsRowInUpdates(vtUpdates, (*pvtBatch)[i].szTripID, szGpsSeq))
+		{
 			// vtUpdates 미포함 orphan 행 release 목록 적재 (2026-07-08 최정우 주석 추가)
 			AppendReleaseRowFromRawLog(&vtOrphanRelease, (*pvtBatch)[i]);
+		}
 	}
 
 	if (!vtOrphanRelease.empty())
@@ -545,7 +582,7 @@ void CRawLogWorker::run(int nThreadId, void *context)
 			nThreadId, (*pvtBatch)[0].szDeviceKey, (*pvtBatch)[0].szTripID);
 	}
 
-	// #6/#8: 자기 스레드 세션만 TTL 만료 정리 (락 불필요, 모니터 스레드 레이스 제거)
+	// 자기 스레드 세션만 TTL 만료 정리 (락 불필요, 모니터 스레드 레이스 제거)
 	// trip_id 세션 TTL 만료 제거 (2026-07-08 최정우 주석 추가)
 	ExpireTtlSessions(nThreadId, m_stConfig.nTtlSec);
 
@@ -645,7 +682,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 	strncpy(stSession.szTripId, stRawLogInfo.szTripID, sizeof(stSession.szTripId) - 1);
 	stSession.szTripId[sizeof(stSession.szTripId) - 1] = '\0';
 
-	// GPS 좌표·RAW_VLD 유효성 검사 (SKIP 대상) (2026-07-08 최정우 주석 추가)
+	// GPS 좌표·RAW_VLD 유효성 검사 — SKIP(3). 세션·DB 좌표 미저장 (2026-07-10 최정우 수정)
 	if (ShouldSkipGpsInput(nThreadId, stRawLogInfo))
 	{
 		stSession.dwLastGpsSeq = stRawLogInfo.dwSeqNo;
@@ -654,7 +691,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		return AppendUpdateRow(pvtUpdates, stRawLogInfo, MATCH_STATUS_SKIP);
 	}
 
-	// config radius_skip — ACCURACY_M(수평오차,m) 초과 시 맵매칭 SKIP.
+	// config radius_skip — ACCURACY_M 초과 시 SKIP. 세션 앵커 미갱신 (2026-07-10 최정우 수정)
 	// 검색반경 아님. 0=비활성 (2026-07-08 최정우)
 #if 0
 	 if (m_stConfig.nRadiusSkipM > 0
@@ -672,7 +709,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		if (stRawLogInfo.nTripEvent == TRIP_EVENT_END)
 			*pbTripEnded = true;
 
-		// 정확도 SKIP 이어도 최근접 세그먼트 좌표·교차거리는 참고용으로 기록. 세션 앵커 미갱신 (2026-07-10 최정우 추가)
+		// 정확도 SKIP — 최근접 있으면 DB 참고용 MATCH_LAT/LON·INTERSECT_LEN 만 저장 (2026-07-10 최정우 수정)
 		MATCH_LINK_INFO stNear;
 		memset(reinterpret_cast<void *>(&stNear), 0, MATCH_LINK_INFO_SIZE);
 		stNear.dfIntersectLenSgmt = -1.0;
@@ -701,12 +738,12 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 	// 맵매칭 처리 시간 측정 종료 (2026-07-08 최정우 주석 추가)
 	cMatchClock.Stop();
 
-	// 반경 밖 최근접(진단) 여부 — 정식 매칭 실패지만 최근접 좌표·교차거리는 확보됨 (2026-07-10 최정우 추가)
+	// 반경 밖·진단반경 초과 최근접 — MATCHED 아님, SKIP(3)·세션 미갱신·DB 참고용 좌표·거리 저장 (2026-07-10 최정우 수정)
 	const bool bOut = (!bMatched) && stMatchLinkInfo.bOutOfRadius;
 
 	if (!bMatched && bOut)
 	{
-		// 반경 밖 최근접 — SKIP 로 기록하되 좌표·교차거리는 저장(성패는 MATCH_STATUS 로 구분). 세션 앵커 미갱신
+		// SKIP: 성공 아님. qwLinkID·bHasLastMatch 등 세션 앵커 미갱신, MATCH_LAT/LON·INTERSECT_LEN 만 DB 저장 (2026-07-10 최정우 수정)
 		LOGFMTW("[#%02d] out-of-radius skip! device=[%s] trip_id=[%s] seq=[%u] "
 			"intersect=[%.1fm] match_lat=[%.06lf] match_lon=[%.06lf]",
 			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRawLogInfo.dwSeqNo,
@@ -740,8 +777,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 
 	stSession.dwLastGpsSeq = stRawLogInfo.dwSeqNo;
 
-	// ── 매칭 성공 시 세션 앵커 갱신 (다음 점 HEADING/SPEED·고도 점수 기준) ──
-	//   · SKIP/ERROR/타임아웃 시 미갱신 → 직전 성공 앵커 유지
+	// ── 매칭 성공(MATCHED) 시에만 세션 앵커 갱신 — SKIP/ERROR 는 직전 성공 앵커 유지 (2026-07-10 최정우 수정) ──
 	//   · XY·시각: HEADING/SPEED 보정용 (ALTITUDE_M NULL이어도 갱신)
 	//   · 고도: ALTITUDE_M 유효 시에만 nPrevAltitudeM·nPrevRoadType 저장
 	//     (직전 매칭 좌표에 Z 없음 — GPS 고도를 앵커로 기억)
@@ -764,7 +800,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 	if (stMatchLinkInfo.dfIntersectLenSgmt >= 0.0)
 		nIntersectLenM = static_cast<int>(stMatchLinkInfo.dfIntersectLenSgmt + 0.5);
 
-	// 좌표 저장 대상: 정식 매칭(MATCHED) + 반경 밖 최근접(SKIP). 타임아웃/후보없음(ERROR)은 미저장 (2026-07-10 최정우 수정)
+	// DB 저장: MATCHED 또는 SKIP(반경밖·진단반경초과) 시 참고용 좌표·교차거리. ERROR 는 미저장 (2026-07-10 최정우 수정)
 	const bool bHasCoords = (bMatched || bOut);
 	if (!AppendUpdateRow(pvtUpdates, stRawLogInfo, nFinalStatus, nIntersectLenM,
 		bHasCoords ? &stMatchLinkInfo.dfMatchY : nullptr,
@@ -781,18 +817,16 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 /**
  * @brief vtUpdates 에 PK 행 존재 여부 (배치 orphan 판별)
  * @param[in] vtUpdates bulk UPDATE 대상 목록
- * @param[in] strDeviceKey 디바이스 키
- * @param[in] strGpsDt GPS 일시 (YYYYMMDDHH24MISS)
- * @param[in] strGpsSeq GPS 순번 (문자열)
+ * @param[in] strTripId 운행 ID (PK-1)
+ * @param[in] strGpsSeq GPS 순번 (PK-2, 문자열)
  * @return true(포함), false(미포함)
 */
 bool CRawLogWorker::IsRowInUpdates(const vector<RAW_LOG_UPDATE_ROW>& vtUpdates,
-		const string& strDeviceKey, const string& strGpsDt, const string& strGpsSeq)
+		const string& strTripId, const string& strGpsSeq)
 {
 	for (size_t i=0; i<vtUpdates.size(); ++i)
 	{
-		if (vtUpdates[i].strDeviceKey == strDeviceKey
-			&& vtUpdates[i].strGpsDt == strGpsDt
+		if (vtUpdates[i].strTripId == strTripId
 			&& vtUpdates[i].strGpsSeq == strGpsSeq)
 			return true;
 	}
@@ -800,10 +834,10 @@ bool CRawLogWorker::IsRowInUpdates(const vector<RAW_LOG_UPDATE_ROW>& vtUpdates,
 }
 
 /**
- * @brief 미처리 예약 행 release 1건 적재 [rawgps_update] $4=0
+ * @brief 미처리 예약 행 release 1건 적재 [rawgps_update] $3=0
  * @param[out] pvtRelease release 대상 행 목록
  * @param[in] stRawLogInfo 원시 GPS (PK 추출용)
- * @return true(적재 성공), false(pvtRelease null·gps_dt 무효)
+ * @return true(적재 성공), false(pvtRelease null·trip_id 무효)
  * @remark AppendUpdateRow 실패 등 vtUpdates 미포함 행의 PROCESSING 해제용 (#4)
 */
 bool CRawLogWorker::AppendReleaseRowFromRawLog(vector<RAW_LOG_UPDATE_ROW> *pvtRelease,
@@ -812,18 +846,14 @@ bool CRawLogWorker::AppendReleaseRowFromRawLog(vector<RAW_LOG_UPDATE_ROW> *pvtRe
 	if (pvtRelease == nullptr)
 		return false;
 
-	char szGpsDt[16];
-	// release PK용 GPS 시각 포맷 (2026-07-08 최정우 주석 추가)
-	FormatGpsDateTime(stRawLogInfo.dtGPS, szGpsDt, sizeof(szGpsDt));
-	if (szGpsDt[0] == '\0')
+	if (stRawLogInfo.szTripID[0] == '\0')
 		return false;
 
 	char szSeqNo[16];
 	snprintf(szSeqNo, sizeof(szSeqNo), "%u", stRawLogInfo.dwSeqNo);
 
 	RAW_LOG_UPDATE_ROW stRow;
-	stRow.strDeviceKey = stRawLogInfo.szDeviceKey;
-	stRow.strGpsDt = szGpsDt;
+	stRow.strTripId = stRawLogInfo.szTripID;
 	stRow.strGpsSeq = szSeqNo;
 	stRow.strMatchStatus = "0";
 	pvtRelease->push_back(stRow);
@@ -932,35 +962,6 @@ double CRawLogWorker::HaversineMeters(const POINT& stA, const POINT& stB)
 }
 
 /**
- * @brief time_t → YYYYMMDDHH24MISS (로컬 시각, rawgps_update 배열용)
- * @param[in] dtGps GPS 시각 (time_t)
- * @param[out] pszBuf 출력 버퍼 (최소 15바이트)
- * @param[in] nBufSize 버퍼 크기
- * @return void (실패 시 pszBuf[0]='\0')
-*/
-static void FormatGpsDateTime(time_t dtGps, char *pszBuf, size_t nBufSize)
-{
-	if ((pszBuf == nullptr) || (nBufSize < 15))
-	{
-		pszBuf[0] = '\0';
-		return;
-	}
-
-	struct tm stTm;
-	memset(reinterpret_cast<void *>(&stTm), 0, sizeof(stTm));
-
-	// time_t → struct tm (로컬 시각, thread-safe) (2026-07-08 최정우 주석 추가)
-	if ((dtGps > 0) && (localtime_r(&dtGps, &stTm) != nullptr))
-	{
-		snprintf(pszBuf, nBufSize, "%04d%02d%02d%02d%02d%02d",
-			stTm.tm_year + 1900, stTm.tm_mon + 1, stTm.tm_mday,
-			stTm.tm_hour, stTm.tm_min, stTm.tm_sec);
-	}
-	else
-		pszBuf[0] = '\0';
-}
-
-/**
  * @brief PostgreSQL text[] 리터럴용 문자열 이스케이프
  * @param[in] strValue 원본 문자열
  * @return 이스케이프된 문자열
@@ -1010,8 +1011,8 @@ string CRawLogWorker::BuildPgTextArray(const vector<string>& vtValues)
  * @param[in] nIntersectLenM 교차 길이(m), -1 이면 미갱신
  * @param[in] pdfMatchLat 매칭 위도 (MATCHED 시), nullptr 이면 미갱신
  * @param[in] pdfMatchLon 매칭 경도 (MATCHED 시), nullptr 이면 미갱신
- * @return true(적재 성공), false(pvtUpdates null·gps_dt 무효)
- * @remark invalid gps_dt 시 false — run() orphan release 가 PK 없으면 recover 대기
+ * @return true(적재 성공), false(pvtUpdates null·trip_id 무효)
+ * @remark invalid trip_id 시 false — run() orphan release 가 PK 없으면 recover 대기
 */
 bool CRawLogWorker::AppendUpdateRow(vector<RAW_LOG_UPDATE_ROW> *pvtUpdates,
 		const sRawLogInfo& stRawLogInfo, sint16 nStatus, int nIntersectLenM,
@@ -1020,12 +1021,9 @@ bool CRawLogWorker::AppendUpdateRow(vector<RAW_LOG_UPDATE_ROW> *pvtUpdates,
 	if (pvtUpdates == nullptr)
 		return false;
 
-	char szGpsDt[16];
-	// bulk UPDATE PK용 GPS 시각 포맷 (2026-07-08 최정우 주석 추가)
-	FormatGpsDateTime(stRawLogInfo.dtGPS, szGpsDt, sizeof(szGpsDt));
-	if (szGpsDt[0] == '\0')
+	if (stRawLogInfo.szTripID[0] == '\0')
 	{
-		LOGFMTE("worker update error! invalid gps_dt! seq=[%u] device=[%s]",
+		LOGFMTE("worker update error! invalid trip_id! seq=[%u] device=[%s]",
 			stRawLogInfo.dwSeqNo, stRawLogInfo.szDeviceKey);
 		return false;
 	}
@@ -1056,8 +1054,7 @@ bool CRawLogWorker::AppendUpdateRow(vector<RAW_LOG_UPDATE_ROW> *pvtUpdates,
 	}
 
 	RAW_LOG_UPDATE_ROW stRow;
-	stRow.strDeviceKey = stRawLogInfo.szDeviceKey;
-	stRow.strGpsDt = szGpsDt;
+	stRow.strTripId = stRawLogInfo.szTripID;
 	stRow.strGpsSeq = szSeqNo;
 	stRow.strMatchStatus = szStatus;
 	stRow.strIntersectLen = szIntersectLen;
@@ -1122,16 +1119,14 @@ bool CRawLogWorker::BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDAT
 	if (pcConn == nullptr || vtUpdates.empty())
 		return false;
 
-	vector<string> vtDeviceKey;
-	vector<string> vtGpsDt;
+	vector<string> vtTripId;
 	vector<string> vtGpsSeq;
 	vector<string> vtMatchStatus;
 	vector<string> vtIntersectLen;
 	vector<string> vtMatchLat;
 	vector<string> vtMatchLon;
 
-	vtDeviceKey.reserve(vtUpdates.size());
-	vtGpsDt.reserve(vtUpdates.size());
+	vtTripId.reserve(vtUpdates.size());
 	vtGpsSeq.reserve(vtUpdates.size());
 	vtMatchStatus.reserve(vtUpdates.size());
 	vtIntersectLen.reserve(vtUpdates.size());
@@ -1141,8 +1136,7 @@ bool CRawLogWorker::BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDAT
 	for (size_t i=0; i<vtUpdates.size(); ++i)
 	{
 		const RAW_LOG_UPDATE_ROW& stRow = vtUpdates[i];
-		vtDeviceKey.push_back(stRow.strDeviceKey);
-		vtGpsDt.push_back(stRow.strGpsDt);
+		vtTripId.push_back(stRow.strTripId);
 		vtGpsSeq.push_back(stRow.strGpsSeq);
 		vtMatchStatus.push_back(stRow.strMatchStatus);
 		vtIntersectLen.push_back(stRow.strIntersectLen);
@@ -1151,18 +1145,16 @@ bool CRawLogWorker::BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDAT
 	}
 
 	// rawgps_update text[] 파라미터 리터럴 생성 (2026-07-08 최정우 주석 추가)
-	string strDeviceKeyArray = BuildPgTextArray(vtDeviceKey);
-	string strGpsDtArray = BuildPgTextArray(vtGpsDt);
+	string strTripIdArray = BuildPgTextArray(vtTripId);
 	string strGpsSeqArray = BuildPgTextArray(vtGpsSeq);
 	string strMatchStatusArray = BuildPgTextArray(vtMatchStatus);
 	string strIntersectLenArray = BuildPgTextArray(vtIntersectLen);
 	string strMatchLatArray = BuildPgTextArray(vtMatchLat);
 	string strMatchLonArray = BuildPgTextArray(vtMatchLon);
 
-	const char *pszParams[7] =
+	const char *pszParams[6] =
 	{
-		strDeviceKeyArray.c_str(),
-		strGpsDtArray.c_str(),
+		strTripIdArray.c_str(),
 		strGpsSeqArray.c_str(),
 		strMatchStatusArray.c_str(),
 		strIntersectLenArray.c_str(),
@@ -1170,21 +1162,20 @@ bool CRawLogWorker::BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDAT
 		strMatchLonArray.c_str()
 	};
 
-	const int nParamLengths[7] =
+	const int nParamLengths[6] =
 	{
-		static_cast<int>(strDeviceKeyArray.size()),
-		static_cast<int>(strGpsDtArray.size()),
+		static_cast<int>(strTripIdArray.size()),
 		static_cast<int>(strGpsSeqArray.size()),
 		static_cast<int>(strMatchStatusArray.size()),
 		static_cast<int>(strIntersectLenArray.size()),
 		static_cast<int>(strMatchLatArray.size()),
 		static_cast<int>(strMatchLonArray.size())
 	};
-	const int nParamFormats[7] = { 0, 0, 0, 0, 0, 0, 0 };
+	const int nParamFormats[6] = { 0, 0, 0, 0, 0, 0 };
 
 	// rawgps_update bulk UPDATE 실행 (2026-07-08 최정우 주석 추가)
 	PGresult *pcResult = PQexecParams(pcConn, m_stConfig.strUpdateSQL.c_str(),
-		7, nullptr, pszParams, nParamLengths, nParamFormats, 0);
+		6, nullptr, pszParams, nParamLengths, nParamFormats, 0);
 
 	if (pcResult == nullptr)
 		return false;
@@ -1208,8 +1199,8 @@ bool CRawLogWorker::BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDAT
 			const string& strStatus = vtUpdates[i].strMatchStatus;
 			if ((strStatus == "1") || (strStatus == "3") || (strStatus == "4"))
 			{
-				ClearReleaseRetryCount(MakeReleaseRetryKey(vtUpdates[i].strDeviceKey,
-					vtUpdates[i].strGpsDt, vtUpdates[i].strGpsSeq));
+				ClearReleaseRetryCount(MakeReleaseRetryKey(vtUpdates[i].strTripId,
+					vtUpdates[i].strGpsSeq));
 			}
 		}
 	}
@@ -1247,8 +1238,7 @@ bool CRawLogWorker::BulkReleaseRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDA
 		stRow.strMatchLat.clear();
 		stRow.strMatchLon.clear();
 
-		const string strRetryKey = MakeReleaseRetryKey(stRow.strDeviceKey,
-			stRow.strGpsDt, stRow.strGpsSeq);
+		const string strRetryKey = MakeReleaseRetryKey(stRow.strTripId, stRow.strGpsSeq);
 		const int nRetryMax = m_stConfig.nRetryMax;
 		const int nRetryCount = (nRetryMax > 0)
 			? BumpReleaseRetryCount(strRetryKey) : 0;
@@ -1257,8 +1247,8 @@ bool CRawLogWorker::BulkReleaseRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDA
 		{
 			stRow.strMatchStatus = "4";
 			vtError.push_back(stRow);
-			LOGFMTW("release retry exhausted!→ERROR device=[%s] gps_dt=[%s] seq=[%s] count=[%d/%d]",
-				stRow.strDeviceKey.c_str(), stRow.strGpsDt.c_str(), stRow.strGpsSeq.c_str(),
+			LOGFMTW("release retry exhausted!→ERROR trip_id=[%s] seq=[%s] count=[%d/%d]",
+				stRow.strTripId.c_str(), stRow.strGpsSeq.c_str(),
 				nRetryCount, nRetryMax);
 		}
 		else

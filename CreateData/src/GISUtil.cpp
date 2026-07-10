@@ -119,6 +119,59 @@ bool CGISUtil::IsCrossSgmt2Sgmt(POINT& stPoint1, POINT& stPoint2,
 }
 
 /**
+ * @brief 세그먼트를 GRID 사각형 경계로 클리핑 (Liang-Barsky)
+ * @param[in] stPoint1 세그먼트 시작 좌표
+ * @param[in] stPoint2 세그먼트 종료 좌표
+ * @param[in] dfXMin GRID X 최소 (도)
+ * @param[in] dfYMin GRID Y 최소 (도)
+ * @param[in] dfXMax GRID X 최대 (도)
+ * @param[in] dfYMax GRID Y 최대 (도)
+ * @param[out] stClip1 클리핑된 시작점
+ * @param[out] stClip2 클리핑된 종료점
+ * @return 셀 내부 구간이 있으면 true
+*/
+bool CGISUtil::ClipSgmtToGridRect(const POINT& stPoint1, const POINT& stPoint2,
+		const double dfXMin, const double dfYMin, const double dfXMax, const double dfYMax,
+		POINT& stClip1, POINT& stClip2)
+{
+	double dfT0 = 0.0;
+	double dfT1 = 1.0;
+	const double dfDX = stPoint2.dfX - stPoint1.dfX;
+	const double dfDY = stPoint2.dfY - stPoint1.dfY;
+
+	auto clipEdge = [&](const double dfP, const double dfQ) -> bool
+	{
+		if (dfP == 0.0)
+			return dfQ >= 0.0;
+
+		const double dfR = dfQ / dfP;
+		if (dfP < 0.0)
+		{
+			if (dfR > dfT1) return false;
+			if (dfR > dfT0) dfT0 = dfR;
+		}
+		else
+		{
+			if (dfR < dfT0) return false;
+			if (dfR < dfT1) dfT1 = dfR;
+		}
+		return true;
+	};
+
+	if (!clipEdge(-dfDX, stPoint1.dfX - dfXMin)) return false;
+	if (!clipEdge( dfDX, dfXMax - stPoint1.dfX)) return false;
+	if (!clipEdge(-dfDY, stPoint1.dfY - dfYMin)) return false;
+	if (!clipEdge( dfDY, dfYMax - stPoint1.dfY)) return false;
+	if (dfT0 > dfT1) return false;
+
+	stClip1.dfX = stPoint1.dfX + dfT0 * dfDX;
+	stClip1.dfY = stPoint1.dfY + dfT0 * dfDY;
+	stClip2.dfX = stPoint1.dfX + dfT1 * dfDX;
+	stClip2.dfY = stPoint1.dfY + dfT1 * dfDY;
+	return true;
+}
+
+/**
  * @brief 세그먼트 거리 (0.01 sec)
  * @param[in] stPoint1 세그먼트 시작 좌표
  * @param[in] stPoint2 세그먼트 종료 좌표
@@ -242,25 +295,25 @@ void CGISUtil::GetNearGridID(const uint32& dwGridID, const SGMT_MATCH_INPUT& stS
 	if (dwColNo > 0)
 		nGridLeftID = static_cast<sint32>(dwRowNo * X_GRID_COUNT + dwColNo - 1);
 
-	if (dwColNo + 1 < X_GRID_COUNT)
+	if ((dwColNo + 1) < X_GRID_COUNT)
 		nGridRightID = static_cast<sint32>(dwRowNo * X_GRID_COUNT + dwColNo + 1);
 
 	if (dwRowNo > 0)
 		nGridBottomID = static_cast<sint32>((dwRowNo - 1) * X_GRID_COUNT + dwColNo);
 
-	if (dwRowNo + 1 < Y_GRID_COUNT)
+	if ((dwRowNo + 1) < Y_GRID_COUNT)
 		nGridTopID = static_cast<sint32>((dwRowNo + 1) * X_GRID_COUNT + dwColNo);
 
-	if (dwColNo > 0 && dwRowNo + 1 < Y_GRID_COUNT)
+	if ((dwColNo > 0) && ((dwRowNo + 1) < Y_GRID_COUNT))
 		nGridLeftTopID = static_cast<sint32>((dwRowNo + 1) * X_GRID_COUNT + dwColNo - 1);
 
-	if (dwColNo > 0 && dwRowNo > 0)
+	if ((dwColNo > 0) && (dwRowNo > 0))
 		nGridLeftBottomID = static_cast<sint32>((dwRowNo - 1) * X_GRID_COUNT + dwColNo - 1);
 
-	if (dwColNo + 1 < X_GRID_COUNT && dwRowNo + 1 < Y_GRID_COUNT)
+	if (((dwColNo + 1) < X_GRID_COUNT) && ((dwRowNo + 1) < Y_GRID_COUNT))
 		nGridRightTopID = static_cast<sint32>((dwRowNo + 1) * X_GRID_COUNT + dwColNo + 1);
 
-	if (dwColNo + 1 < X_GRID_COUNT && dwRowNo > 0)
+	if ((dwColNo + 1 < X_GRID_COUNT) && (dwRowNo > 0))
 		nGridRightBottomID = static_cast<sint32>((dwRowNo - 1) * X_GRID_COUNT + dwColNo + 1);
 
 	// 조건에 맞는 인접 GRID ID 구하기

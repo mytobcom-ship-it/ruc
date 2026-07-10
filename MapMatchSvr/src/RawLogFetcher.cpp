@@ -306,11 +306,9 @@ bool CRawLogFetcher::ReserveFetchBatch(PGconn *pcConn, vector<sRawLogInfo> *pvtR
 	}
 
 	int nRows = PQntuples(pcResult);
-	vector<string> vtFailDeviceKey;
-	vector<string> vtFailGpsDt;
+	vector<string> vtFailTripId;
 	vector<string> vtFailGpsSeq;
-	vtFailDeviceKey.reserve(static_cast<size_t>(nRows));
-	vtFailGpsDt.reserve(static_cast<size_t>(nRows));
+	vtFailTripId.reserve(static_cast<size_t>(nRows));
 	vtFailGpsSeq.reserve(static_cast<size_t>(nRows));
 
 	for (int i=0; i<nRows; ++i)
@@ -319,16 +317,14 @@ bool CRawLogFetcher::ReserveFetchBatch(PGconn *pcConn, vector<sRawLogInfo> *pvtR
 		// RETURNING 1행 → sRawLogInfo 변환 (2026-07-08 최정우 주석 추가)
 		if (!ParseRow(pcResult, i, &stRawLogInfo))
 		{
-			string strDeviceKey;
-			string strGpsDt;
+			string strTripId;
 			string strGpsSeq;
 			// parse 실패 행 PK 추출 (release 용) (2026-07-08 최정우 주석 추가)
-			if (ExtractRowPk(pcResult, i, &strDeviceKey, &strGpsDt, &strGpsSeq))
+			if (ExtractRowPk(pcResult, i, &strTripId, &strGpsSeq))
 			{
-				LOGFMTW("raw log fetcher: parse fail!device=[%s] gps_dt=[%s] gps_seq=[%s]",
-					strDeviceKey.c_str(), strGpsDt.c_str(), strGpsSeq.c_str());
-				vtFailDeviceKey.push_back(strDeviceKey);
-				vtFailGpsDt.push_back(strGpsDt);
+				LOGFMTW("raw log fetcher: parse fail!trip_id=[%s] gps_seq=[%s]",
+					strTripId.c_str(), strGpsSeq.c_str());
+				vtFailTripId.push_back(strTripId);
 				vtFailGpsSeq.push_back(strGpsSeq);
 			}
 			else
@@ -344,20 +340,20 @@ bool CRawLogFetcher::ReserveFetchBatch(PGconn *pcConn, vector<sRawLogInfo> *pvtR
 
 	PQclear(pcResult);
 
-	if (!vtFailDeviceKey.empty())
+	if (!vtFailTripId.empty())
 	{
 		// parse 실패 행 PROCESSING→PENDING 즉시 release (2026-07-08 최정우 주석 추가)
 		if (!ReleaseReservedRows(pcConn,
-				vtFailDeviceKey.data(), vtFailGpsDt.data(), vtFailGpsSeq.data(),
-				vtFailDeviceKey.size()))
+				vtFailTripId.data(), vtFailGpsSeq.data(),
+				vtFailTripId.size()))
 		{
 			LOGFMTE("raw log fetcher: parse-fail release failed!count=[%d]",
-				static_cast<int>(vtFailDeviceKey.size()));
+				static_cast<int>(vtFailTripId.size()));
 			return false;
 		}
 
 		LOGFMTW("raw log fetcher: parse-fail released!PROCESSING→PENDING count=[%d]",
-			static_cast<int>(vtFailDeviceKey.size()));
+			static_cast<int>(vtFailTripId.size()));
 	}
 
 	return true;
@@ -458,15 +454,15 @@ void CRawLogFetcher::ReleaseConnection(PGconn *pcConn)
 }
 
 /**
- * @brief rawgps_select RETURNING 컬럼 인덱스 (설계서 v1.3 §2.1 순서)
+ * @brief rawgps_select RETURNING 컬럼 인덱스 (= PRIM_RAWGPS 컬럼 순서, 2026-07-10)
 */
 namespace {
 enum RawGpsReturningCol
 {
-	RGC_DEVICE_KEY					= 0,
-	RGC_GPS_DT,
+	RGC_TRIP_ID						= 0,
 	RGC_GPS_SEQ,
-	RGC_TRIP_ID,
+	RGC_DEVICE_KEY,
+	RGC_GPS_DT,
 	RGC_TRIP_EVENT,
 	RGC_DRIVE_STATUS,
 	RGC_GPS_LAT,
@@ -531,26 +527,23 @@ string CRawLogFetcher::BuildPgTextArray(const vector<string>& vtValues)
  * @brief RETURNING 행에서 PK 추출 (ParseRow 실패 시 release 용)
  * @param[in] pcResult PQ 결과
  * @param[in] nRow 행 인덱스
- * @param[out] pstrDeviceKey DEVICE_KEY
- * @param[out] pstrGpsDt GPS_DT (YYYYMMDDHH24MISS)
+ * @param[out] pstrTripId TRIP_ID
  * @param[out] pstrGpsSeq GPS_SEQ
  * @return true(추출 성공), false(null·PK NULL)
- * @remark DEVICE_KEY·GPS_DT·GPS_SEQ 가 NULL 이면 false — recover 만 가능
+ * @remark TRIP_ID·GPS_SEQ 가 NULL 이면 false — recover 만 가능
 */
 bool CRawLogFetcher::ExtractRowPk(PGresult *pcResult, int nRow,
-		string *pstrDeviceKey, string *pstrGpsDt, string *pstrGpsSeq)
+		string *pstrTripId, string *pstrGpsSeq)
 {
-	if (pcResult == nullptr || pstrDeviceKey == nullptr
-		|| pstrGpsDt == nullptr || pstrGpsSeq == nullptr || nRow < 0)
+	if (pcResult == nullptr || pstrTripId == nullptr
+		|| pstrGpsSeq == nullptr || nRow < 0)
 		return false;
 
-	if (PQgetisnull(pcResult, nRow, RGC_DEVICE_KEY)
-		|| PQgetisnull(pcResult, nRow, RGC_GPS_DT)
+	if (PQgetisnull(pcResult, nRow, RGC_TRIP_ID)
 		|| PQgetisnull(pcResult, nRow, RGC_GPS_SEQ))
 		return false;
 
-	*pstrDeviceKey = PQgetvalue(pcResult, nRow, RGC_DEVICE_KEY);
-	*pstrGpsDt = PQgetvalue(pcResult, nRow, RGC_GPS_DT);
+	*pstrTripId = PQgetvalue(pcResult, nRow, RGC_TRIP_ID);
 	*pstrGpsSeq = PQgetvalue(pcResult, nRow, RGC_GPS_SEQ);
 	return true;
 }
@@ -597,42 +590,38 @@ bool CRawLogFetcher::CheckPgUpdateAffected(PGresult *pcResult, int nExpected,
 /**
  * @brief parse 실패·미처리 예약 행 PROCESSING 해제 [rawgps_update]
  * @param[in] pcConn DB connection
- * @param[in] pstrDeviceKeys DEVICE_KEY 배열 (길이 nCount)
- * @param[in] pstrGpsDts GPS_DT 배열 (YYYYMMDDHH24MISS)
+ * @param[in] pstrTripIds TRIP_ID 배열 (길이 nCount)
  * @param[in] pstrGpsSeqs GPS_SEQ 배열
  * @param[in] nCount release 대상 행 수
  * @return true(전건 release), false(실행 오류·부분 release·인자 무효)
- * @remark Worker BulkReleaseRawLogs 와 동일: $4="0", $5~$7='', WHERE MATCH_STATUS=2
+ * @remark Worker BulkReleaseRawLogs 와 동일: $3="0", $4~$6='', WHERE MATCH_STATUS=2
  *   - PQcmdTuples == nCount 검증 (#5)
 */
 bool CRawLogFetcher::ReleaseReservedRows(PGconn *pcConn,
-		const string *pstrDeviceKeys, const string *pstrGpsDts, const string *pstrGpsSeqs,
+		const string *pstrTripIds, const string *pstrGpsSeqs,
 		size_t nCount)
 {
 	if (pcConn == nullptr || m_strUpdateSQL.empty()
-		|| pstrDeviceKeys == nullptr || pstrGpsDts == nullptr || pstrGpsSeqs == nullptr
+		|| pstrTripIds == nullptr || pstrGpsSeqs == nullptr
 		|| nCount == 0)
 		return false;
 
-	vector<string> vtDeviceKey(pstrDeviceKeys, pstrDeviceKeys + nCount);
-	vector<string> vtGpsDt(pstrGpsDts, pstrGpsDts + nCount);
+	vector<string> vtTripId(pstrTripIds, pstrTripIds + nCount);
 	vector<string> vtGpsSeq(pstrGpsSeqs, pstrGpsSeqs + nCount);
 	vector<string> vtMatchStatus(nCount, "0");
 	vector<string> vtEmpty(nCount, string());
 
 	// rawgps_update text[] 파라미터 리터럴 생성 (2026-07-08 최정우 주석 추가)
-	string strDeviceKeyArray = BuildPgTextArray(vtDeviceKey);
-	string strGpsDtArray = BuildPgTextArray(vtGpsDt);
+	string strTripIdArray = BuildPgTextArray(vtTripId);
 	string strGpsSeqArray = BuildPgTextArray(vtGpsSeq);
 	string strMatchStatusArray = BuildPgTextArray(vtMatchStatus);
 	string strIntersectLenArray = BuildPgTextArray(vtEmpty);
 	string strMatchLatArray = BuildPgTextArray(vtEmpty);
 	string strMatchLonArray = BuildPgTextArray(vtEmpty);
 
-	const char *pszParams[7] =
+	const char *pszParams[6] =
 	{
-		strDeviceKeyArray.c_str(),
-		strGpsDtArray.c_str(),
+		strTripIdArray.c_str(),
 		strGpsSeqArray.c_str(),
 		strMatchStatusArray.c_str(),
 		strIntersectLenArray.c_str(),
@@ -640,21 +629,20 @@ bool CRawLogFetcher::ReleaseReservedRows(PGconn *pcConn,
 		strMatchLonArray.c_str()
 	};
 
-	const int nParamLengths[7] =
+	const int nParamLengths[6] =
 	{
-		static_cast<int>(strDeviceKeyArray.size()),
-		static_cast<int>(strGpsDtArray.size()),
+		static_cast<int>(strTripIdArray.size()),
 		static_cast<int>(strGpsSeqArray.size()),
 		static_cast<int>(strMatchStatusArray.size()),
 		static_cast<int>(strIntersectLenArray.size()),
 		static_cast<int>(strMatchLatArray.size()),
 		static_cast<int>(strMatchLonArray.size())
 	};
-	const int nParamFormats[7] = { 0, 0, 0, 0, 0, 0, 0 };
+	const int nParamFormats[6] = { 0, 0, 0, 0, 0, 0 };
 
-	// rawgps_update bulk release ($4=0) 실행 (2026-07-08 최정우 주석 추가)
+	// rawgps_update bulk release ($3=0) 실행 (2026-07-08 최정우 주석 추가)
 	PGresult *pcResult = PQexecParams(pcConn, m_strUpdateSQL.c_str(),
-		7, nullptr, pszParams, nParamLengths, nParamFormats, 0);
+		6, nullptr, pszParams, nParamLengths, nParamFormats, 0);
 
 	if (pcResult == nullptr)
 		return false;
@@ -691,14 +679,16 @@ bool CRawLogFetcher::ParseRow(PGresult *pcResult, int nRow, sRawLogInfo *pstRawL
 	if (pcResult == nullptr || pstRawLogInfo == nullptr || nRow < 0)
 		return false;
 
-	if (PQgetisnull(pcResult, nRow, RGC_DEVICE_KEY)
-		|| PQgetisnull(pcResult, nRow, RGC_GPS_DT)
-		|| PQgetisnull(pcResult, nRow, RGC_GPS_SEQ))
+	if (PQgetisnull(pcResult, nRow, RGC_TRIP_ID)
+		|| PQgetisnull(pcResult, nRow, RGC_GPS_SEQ)
+		|| PQgetisnull(pcResult, nRow, RGC_DEVICE_KEY)
+		|| PQgetisnull(pcResult, nRow, RGC_GPS_DT))
 		return false;
 
+	const char *pszTripId = PQgetvalue(pcResult, nRow, RGC_TRIP_ID);
+	const char *pszSeq = PQgetvalue(pcResult, nRow, RGC_GPS_SEQ);
 	const char *pszDeviceKey = PQgetvalue(pcResult, nRow, RGC_DEVICE_KEY);
 	const char *pszGpsDt = PQgetvalue(pcResult, nRow, RGC_GPS_DT);
-	const char *pszSeq = PQgetvalue(pcResult, nRow, RGC_GPS_SEQ);
 	const char *pszTripEvent = PQgetisnull(pcResult, nRow, RGC_TRIP_EVENT)
 		? "1" : PQgetvalue(pcResult, nRow, RGC_TRIP_EVENT);
 	const char *pszDriveStatus = PQgetisnull(pcResult, nRow, RGC_DRIVE_STATUS)
@@ -715,8 +705,6 @@ bool CRawLogFetcher::ParseRow(PGresult *pcResult, int nRow, sRawLogInfo *pstRawL
 	const char *pszSpeed = bSpeedNull ? nullptr : PQgetvalue(pcResult, nRow, RGC_SPEED_KMH);
 	const char *pszRecvDt = PQgetisnull(pcResult, nRow, RGC_RECV_DT)
 		? "" : PQgetvalue(pcResult, nRow, RGC_RECV_DT);
-	const char *pszTripId = PQgetisnull(pcResult, nRow, RGC_TRIP_ID)
-		? "" : PQgetvalue(pcResult, nRow, RGC_TRIP_ID);
 
 	*pstRawLogInfo = sRawLogInfo();
 	pstRawLogInfo->dwSeqNo = static_cast<uint32>(strtoul(pszSeq, nullptr, 10));

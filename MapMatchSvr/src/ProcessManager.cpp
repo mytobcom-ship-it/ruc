@@ -246,15 +246,26 @@ bool CProcessManager::ProcessRawLog(const sRawLogInfo& stRawLogInfo, uint64& qwI
 
 	qwInOutLinkID = 0;
 
-	// 정식 매칭 실패(반경 내 후보 없음) — 반경 밖이라도 최근접 세그먼트 좌표·교차거리를 기록(진단).
-	//   성패는 상위(worker)가 MATCH_STATUS(SKIP)로 구분. 세션 링크는 전진시키지 않음(불량 매칭) (2026-07-10 최정우 추가)
+	// 정식 매칭 실패 — ① 진단반경(MM_DIAG_RADIUS_M) 이내 최근접 (2026-07-10 최정우 수정)
+	//   MATCHED 아님 → SKIP·세션(qwLinkID/앵커) 미갱신, DB 에 참고용 MATCH_LAT/LON·INTERSECT_LEN 만 저장
 	if (FindNearestSegment(stRawLogInfo, pstMatchLinkInfo))
 	{
 		pstMatchLinkInfo->bOutOfRadius = true;
 		LOGFMTD("[#%02d] out-of-radius nearest captured!device=[%s] seq=[%u] intersect=[%.1fm]",
 			m_nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.dwSeqNo,
 			pstMatchLinkInfo->dfIntersectLenSgmt);
-		return false;						// 정식 매칭 실패(=반경 밖). 좌표/교차거리는 pstMatchLinkInfo 에 채워짐
+		return false;
+	}
+
+	// ② 그리드에 후보 있으나 진단반경 초과 — 반경 무시 기하 최근접 (2026-07-10 최정우 수정)
+	//   동일하게 SKIP·세션 미갱신·DB 참고용 좌표·교차거리만 저장
+	if (FindGeomNearestSegment(stRawLogInfo, pstMatchLinkInfo))
+	{
+		pstMatchLinkInfo->bOutOfRadius = true;
+		LOGFMTW("[#%02d] beyond-diag nearest captured!device=[%s] seq=[%u] intersect=[%.1fm] diag_max=[%dm]",
+			m_nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.dwSeqNo,
+			pstMatchLinkInfo->dfIntersectLenSgmt, MM_DIAG_RADIUS_M);
+		return false;
 	}
 
 	LOGFMTW("[#%02d] map match failed!device=[%s] seq=[%u] err=[%u]",
@@ -268,13 +279,13 @@ bool CProcessManager::ProcessRawLog(const sRawLogInfo& stRawLogInfo, uint64& qwI
  * @param[in] stRawLogInfo 원시 GPS
  * @param[out] pstMatchLinkInfo 최근접 세그먼트 결과(좌표·교차거리·링크정보)
  * @return true(최근접 후보 발견), false(진단 반경 내 후보 없음)
- * @remark 방위각 무시(순수 기하 최근접), Begin(연속 아님), 최대 반경(MM_DIAG_RADIUS_M).
- *         정식 매칭이 아니므로 세션 링크/앵커는 갱신하지 않는다(호출측 책임).
+ * @remark 방위각 무시, Begin(연속 아님), 진단반경 MM_DIAG_RADIUS_M 이내.
+ *         MATCHED 아님 — SKIP·세션 미갱신·DB 참고용만 (2026-07-10 최정우 수정)
 */
 bool CProcessManager::FindNearestSegment(const sRawLogInfo& stRawLogInfo,
 		MATCH_LINK_INFO *pstMatchLinkInfo)
 {
-	if (m_pcMapMatch == nullptr || pstMatchLinkInfo == nullptr)
+	if ((m_pcMapMatch == nullptr) || (pstMatchLinkInfo == nullptr))
 		return false;
 
 	MAP_MATCH_INPUT stDiagInput;
@@ -286,8 +297,27 @@ bool CProcessManager::FindNearestSegment(const sRawLogInfo& stRawLogInfo,
 
 	MATCH_TRACE_CTX stTraceCtx;
 	FillMatchTraceCtx(stTraceCtx, m_nThreadId, stRawLogInfo, stDiagInput, 0, false, nullptr);
-	// GRID 기반 Begin 으로 최근접 세그먼트 1개 획득 (좌표는 /360000 역스케일되어 채워짐)
+	// GRID 기반 Begin 으로 최근접 세그먼트 1개 획득 (좌표는 /360000 역스케일되어 채워짐) (2026-07-10 최정우 수정)
 	return m_pcMapMatch->BeginMapMatch(stDiagInput, pstMatchLinkInfo, &stTraceCtx);
+}
+
+/**
+ * @brief 진단반경 초과여도 기하 최근접 세그먼트 1건 (SKIP 참고용) (2026-07-10 최정우 수정)
+ * @remark 정식·진단반경 매칭 실패 후 호출. MATCHED 아님, 세션 링크·앵커 미갱신.
+*/
+bool CProcessManager::FindGeomNearestSegment(const sRawLogInfo& stRawLogInfo,
+		MATCH_LINK_INFO *pstMatchLinkInfo)
+{
+	if ((m_pcMapMatch == nullptr) || (pstMatchLinkInfo == nullptr))
+		return false;
+
+	MAP_MATCH_INPUT stDiagInput;
+	BuildMapMatchInput(stRawLogInfo, &stDiagInput, 0, nullptr);
+	stDiagInput.qwLinkID = 0;
+	stDiagInput.nAngle = NO_ANGLE;
+	stDiagInput.nRadius = MM_DIAG_RADIUS_M;
+
+	return m_pcMapMatch->BeginGeomNearest(stDiagInput, pstMatchLinkInfo);
 }
 
 /**

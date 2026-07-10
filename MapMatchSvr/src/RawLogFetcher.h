@@ -63,10 +63,10 @@ private:
 	void ReleaseConnection(PGconn *pcConn);
 	bool ParseRow(PGresult *pcResult, int nRow, sRawLogInfo *pstRawLogInfo);
 	static bool ExtractRowPk(PGresult *pcResult, int nRow,
-		string *pstrDeviceKey, string *pstrGpsDt, string *pstrGpsSeq);
-	// parse 실패 행 PROCESSING 해제 — Worker BulkRelease 와 동일 [rawgps_update] $4=0
+		string *pstrTripId, string *pstrGpsSeq);
+	// parse 실패 행 PROCESSING 해제 — Worker BulkRelease 와 동일 [rawgps_update] $3=0
 	bool ReleaseReservedRows(PGconn *pcConn,
-		const string *pstrDeviceKeys, const string *pstrGpsDts, const string *pstrGpsSeqs,
+		const string *pstrTripIds, const string *pstrGpsSeqs,
 		size_t nCount);
 	static int GetPgCmdTuples(PGresult *pcResult);
 	static bool CheckPgUpdateAffected(PGresult *pcResult, int nExpected, const char *pszLogTag);

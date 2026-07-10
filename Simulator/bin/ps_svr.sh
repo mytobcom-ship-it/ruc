@@ -1,3 +1,5 @@
-#!/usr/bin/env bash
-# RawGpsSimSvr 데몬 상태 확인
-ps -ef | grep RawGpsSimSvr | grep -v grep
+﻿#!/bin/bash
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# shellcheck source=../../test_lib.sh
+source "$ROOT/test_lib.sh"
+engine_ps_line "$SIM_BIN"

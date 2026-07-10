@@ -67,6 +67,11 @@ typedef struct sGpsSample
 	double		dfAccuracy;			// 수평 오차
 	int			nBattery;			// 배터리
 	bool		bRawValid;			// 원시 GPS 좌표 유효 여부 → RAW_VLD (2026-07-10 최정우 추가)
+	bool		bHasSpeed;			// 순간속도(SPEED_KMH) 적재 여부. false → DB NULL (2026-07-10 최정우 추가)
+	bool		bHasHeading;		// 방위각(HEADING) 적재 여부. false → DB NULL (2026-07-10 최정우 추가)
+	bool		bHasAltitude;		// 고도(ALTITUDE_M) 적재 여부. false → DB NULL (2026-07-10 최정우 추가)
+	bool		bHasAccuracy;		// 수평오차(ACCURACY_M) 적재 여부. false → DB NULL (2026-07-10 최정우 추가)
+	bool		bHasBattery;		// 배터리(BATTERY) 적재 여부. false → DB NULL (2026-07-10 최정우 추가)
 	char		szGpsDt[14 + 1];	// GPS 측정 시각 (YYYYMMDDHH24MISS)
 
 	sGpsSample() :
@@ -75,7 +80,9 @@ typedef struct sGpsSample
 		nDriveStatus(SIM_DRIVE_STATUS_ON_ROAD),
 		dfLat(0.0), dfLon(0.0), dfSpeedKmh(0.0), dfHeading(0.0),
 		dfAltitude(0.0), dfAccuracy(0.0), nBattery(0),
-		bRawValid(true)
+		bRawValid(true),
+		bHasSpeed(true), bHasHeading(true), bHasAltitude(true),
+		bHasAccuracy(true), bHasBattery(true)
 	{
 		szGpsDt[0] = 0x00;
 	}

@@ -6,9 +6,12 @@
 #define __INIREADER_H__
 
 #include <stdio.h>
+#include <string.h>
 #include <string>
 #include <map>
 #include <algorithm>
+#include <algorithm>
+#include <stdexcept>													// 2025-12-04 최정우 헤더 추가
 #include "TypeDefine.h"
 
 #define DIR_DELIMITER			'/'										// 디렉토리 및 파일 경로 구분자

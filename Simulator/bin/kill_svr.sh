@@ -1,7 +1,5 @@
-#!/usr/bin/env bash
-# RawGpsSimSvr 데몬 종료 (SIGTERM → 잔여 버퍼 flush 후 정상 종료)
-pkill -TERM -f RawGpsSimSvr
-
-sleep 2
-
-ps -ef | grep RawGpsSimSvr | grep -v grep
+﻿#!/bin/bash
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# shellcheck source=../../test_lib.sh
+source "$ROOT/test_lib.sh"
+engine_stop "$SIM_BIN" "$SIM_STOP_WAIT"

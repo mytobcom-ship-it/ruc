@@ -146,6 +146,9 @@ public:
 		uint32& dwGridColNo, uint32& dwGridRowNo);
 	bool IsCrossSgmt2Sgmt(POINT& stPoint1, POINT& stPoint2, 
 		double& dfXMin, double& dfYMin, double& dfXMax, double& dfYMax);
+	bool ClipSgmtToGridRect(const POINT& stPoint1, const POINT& stPoint2,
+		const double dfXMin, const double dfYMin, const double dfXMax, const double dfYMax,
+		POINT& stClip1, POINT& stClip2);
 	const uint16 GetSgmtLength(const POINT& stPoint1, const POINT& stPoint2);
 	const double GridBorderDistance(const uint32& dwGridID, const double& dfX, 
 		const double& dfY, GRID_BORDER_DIST& stGridBorderDist);

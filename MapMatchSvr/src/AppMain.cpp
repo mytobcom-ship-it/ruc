@@ -251,6 +251,15 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	if (pstConfig->nDBMinConnect > pstConfig->nDBMaxConnect)
 		pstConfig->nDBMinConnect = pstConfig->nDBMaxConnect;
 
+	// [database] conn_retry_max — 풀 연결 핸들 확보 재시도 최대 횟수 (회, 2026-07-10 최정우 추가)
+	cIniReader.GetProfileInt("database", "conn_retry_max", 3, pstConfig->nConnRetryMax);
+	// [database] conn_retry_wait — 재시도 사이 대기 (ms, 2026-07-10 최정우 추가)
+	cIniReader.GetProfileInt("database", "conn_retry_wait", 100, pstConfig->nConnRetryWait);
+	if (pstConfig->nConnRetryMax < 1)
+		pstConfig->nConnRetryMax = 1;
+	if (pstConfig->nConnRetryWait < 0)
+		pstConfig->nConnRetryWait = 0;
+
 	// 데이터 바이너리 파일명 및 경로
 	// [data] file(link.psf 등) 경로 조회 (2026-07-08 최정우 주석 추가)
 	cIniReader.GetProfileStr("data", "file", "", pstConfig->strDataFile);

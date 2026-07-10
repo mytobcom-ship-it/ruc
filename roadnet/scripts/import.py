@@ -16,11 +16,23 @@ import struct
 import sys
 from pathlib import Path
 
-# 원본 Shapefile 좌표계: EPSG:5186 (Korea 2000 / Central Belt 2010, FE 200000 / FN 600000)
-# 저장 좌표계: EPSG:4326 (WGS84 경위도), 소수점 6자리로 정밀도 축소
+# 원본 Shapefile 좌표계: EPSG:5186 (신규 표준노드링크)
+# DB 저장: EPSG:5186 (link.psf·맵매칭과 동일)
 SRID_SRC = 5186
-SRID_DST = 4326
-COORD_GRID = 0.000001  # 소수점 6자리
+SRID_DST = 5186
+COORD_GRID = 0.000001  # WGS84 변환 시 소수 6자리
+
+
+def geom_expr() -> str:
+    if SRID_SRC == SRID_DST:
+        return "ST_SetSRID(ST_GeomFromText(geom_wkt), %s)"
+    return "ST_ReducePrecision(ST_Transform(ST_SetSRID(ST_GeomFromText(geom_wkt), %s), %s), %s)"
+
+
+def geom_params() -> tuple:
+    if SRID_SRC == SRID_DST:
+        return (SRID_SRC,)
+    return (SRID_SRC, SRID_DST, COORD_GRID)
 
 
 def read_dbf(path: Path) -> list[dict[str, str]]:
@@ -174,13 +186,13 @@ def import_node(conn, shp: Path) -> int:
         ["node_id", "node_type", "node_name", "turn_p", "updatedate", "remark", "hist_type", "histremark", "geom_wkt"],
         stage_rows,
     )
-    cur.execute("""
+    cur.execute(f"""
         INSERT INTO network.moct_node
             (node_id, node_type, node_name, turn_p, updatedate, remark, hist_type, histremark, geom)
         SELECT node_id, node_type, node_name, turn_p, updatedate, remark, hist_type, histremark,
-               ST_ReducePrecision(ST_Transform(ST_SetSRID(ST_GeomFromText(geom_wkt), %s), %s), %s)
+               {geom_expr()}
         FROM stg_moct_node WHERE geom_wkt IS NOT NULL
-    """, (SRID_SRC, SRID_DST, COORD_GRID))
+    """, geom_params())
     conn.commit()
     cur.close()
     return len(stage_rows)
@@ -228,7 +240,7 @@ def import_link(conn, shp: Path) -> int:
         ],
         stage_rows,
     )
-    cur.execute("""
+    cur.execute(f"""
         INSERT INTO network.moct_link
             (link_id, f_node, t_node, lanes, road_rank, road_type, road_no, road_name,
              road_use, multi_link, connect, max_spd, rest_veh, rest_w, rest_h, c_its,
@@ -236,9 +248,9 @@ def import_link(conn, shp: Path) -> int:
         SELECT link_id, f_node, t_node, lanes, road_rank, road_type, road_no, road_name,
                road_use, multi_link, connect, max_spd, rest_veh, rest_w, rest_h, c_its,
                length, updatedate, remark, hist_type, histremark,
-               ST_ReducePrecision(ST_Transform(ST_SetSRID(ST_GeomFromText(geom_wkt), %s), %s), %s)
+               {geom_expr()}
         FROM stg_moct_link WHERE geom_wkt IS NOT NULL
-    """, (SRID_SRC, SRID_DST, COORD_GRID))
+    """, geom_params())
     conn.commit()
     cur.close()
     return len(stage_rows)
@@ -314,8 +326,8 @@ def main() -> int:
     parser.add_argument("--dbname", default="roadnet")
     parser.add_argument("--user", default="postgres")
     parser.add_argument("--password", default="")
-    parser.add_argument("--data-dir", default=str(root / "data"))
-    parser.add_argument("--turninfo", default=str(root / "TURNINFO.dbf"))
+    parser.add_argument("--data-dir", default=str(root / "CreateData" / "data"))
+    parser.add_argument("--turninfo", default=str(root / "CreateData" / "data" / "TURNINFO.dbf"))
     parser.add_argument("--dbf-only", action="store_true", help="multilink/turn_info 만 import (ogr2ogr 후)")
     args = parser.parse_args()
 

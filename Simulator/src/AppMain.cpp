@@ -92,6 +92,12 @@ static bool LoadConfig(const string& strFile, SIM_CONFIG& stConfig, int& nLogLev
 	cIni.GetProfileInt("sim", "flush_sec", 3, stConfig.nFlushSec);
 	cIni.GetProfileInt("sim", "report_sec", 30, stConfig.nReportSec);
 	stConfig.dfIdleProb = GetProfileDouble(cIni, "sim", "idle_prob", 0.05);
+	stConfig.dfOmitAllProb = GetProfileDouble(cIni, "sim", "omit_all_prob", 0.005);
+	stConfig.dfOmitPartialProb = GetProfileDouble(cIni, "sim", "omit_partial_prob", 0.08);
+	if (stConfig.dfOmitAllProb < 0.0) stConfig.dfOmitAllProb = 0.0;
+	if (stConfig.dfOmitAllProb > 1.0) stConfig.dfOmitAllProb = 1.0;
+	if (stConfig.dfOmitPartialProb < 0.0) stConfig.dfOmitPartialProb = 0.0;
+	if (stConfig.dfOmitPartialProb > 1.0) stConfig.dfOmitPartialProb = 1.0;
 	if (stConfig.nVehicles <= 0) stConfig.nVehicles = 1;
 	if (stConfig.nFlushSec <= 0) stConfig.nFlushSec = 3;
 

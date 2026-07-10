@@ -38,6 +38,8 @@ public:
 	void SetAltitudeConfig(const ALTITUDE_SCORE_CONFIG& stAltConfig);
 	bool BeginMapMatch(MAP_MATCH_INPUT stMapMatchInput, 
 		PMATCH_LINK_INFO pstMatchLinkInfo, PMATCH_TRACE_CTX pstTraceCtx = nullptr);
+	// 반경 무시 기하 최근접 Begin (진단반경 초과 SKIP 참고용) (2026-07-10 최정우 수정)
+	bool BeginGeomNearest(MAP_MATCH_INPUT stMapMatchInput, PMATCH_LINK_INFO pstMatchLinkInfo);
 	bool ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput, 
 		PMATCH_LINK_INFO pstMatchLinkInfo, PMATCH_TRACE_CTX pstTraceCtx = nullptr);
 

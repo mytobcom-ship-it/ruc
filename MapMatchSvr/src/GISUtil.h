@@ -152,7 +152,8 @@ public:
 	const uint8 GridSplitIndex(const uint32& dwGridID, const double& dfX, const double& dfY);
 	void GetNearGridID(const uint32& dwGridID, const SGMT_MATCH_INPUT& stSgmtMatchInput, 
 		vector<uint32>& vtNearGridIDList);
-	bool SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtInfo, SGMT_MATCH_RES *pstSgmtMatchRes);
+	bool SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtInfo, SGMT_MATCH_RES *pstSgmtMatchRes,
+		bool bIgnoreRadiusCheck = false);
 	double CalcAltRoadPenalty(const SGMT_MATCH_INPUT& stSgmtMatchInput, uint8 nCandRoadType,
 		const ALTITUDE_SCORE_CONFIG& stAltConfig) const;
 	sint16 GetAngleDiff(sint16& nAngle1, sint16& nAngle2);

@@ -1,2 +1,5 @@
-path=`pwd -P`
-nohup $path/KSMapMatchSvr>/dev/null 2>&1 &
+﻿#!/bin/bash
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# shellcheck source=../../test_lib.sh
+source "$ROOT/test_lib.sh"
+engine_start "$MM_BIN"

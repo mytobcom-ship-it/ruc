@@ -321,10 +321,12 @@ void CGISUtil::GetNearGridID(const uint32& dwGridID, const SGMT_MATCH_INPUT& stS
  * @brief 좌표와 세그먼트 매핑
  * @param[in] stSgmtMatchInput 세그먼트 매칭 정보
  * @param[in] stSgmtInfo 세그먼트 정보
- * @param[out] pstSgmtMatchRes 세그먼트 맵매칭 결과 
+ * @param[out] pstSgmtMatchRes 세그먼트 맵매칭 결과
+ * @param[in] bIgnoreRadiusCheck true 이면 nRadius 초과여도 기하 매칭 허용(진단용 최근접) (2026-07-10 최정우 수정)
  * @return true, false
 */
-bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtInfo, SGMT_MATCH_RES *pstSgmtMatchRes)
+bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtInfo, SGMT_MATCH_RES *pstSgmtMatchRes,
+		bool bIgnoreRadiusCheck)
 {
 	if ((stSgmtMatchInput.stPoint.dfX == stSgmtInfo.stPoint.dfX) && 
 		(stSgmtMatchInput.stPoint.dfY == stSgmtInfo.stPoint.dfY))
@@ -411,8 +413,8 @@ bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtIn
 	// 경위도간 거리 계산 (요청 좌표와 세그먼트 교차점까지 거리)
 	dfIntersectLenSgmt = GetDistanceGEO1(stSgmtMatchInput.stPoint, stIntersect);
 
-	// 맵매칭 유효거리내에 포함되는지 검사
-	if (dfIntersectLenSgmt > stSgmtMatchInput.nRadius)
+	// 맵매칭 유효거리내에 포함되는지 검사 (진단 최근접 시 생략) (2026-07-10 최정우 수정)
+	if (!bIgnoreRadiusCheck && (dfIntersectLenSgmt > stSgmtMatchInput.nRadius))
 		return false;
 
 	// 세그먼트 시작 좌표부터 매핑좌표까지 거리(m)

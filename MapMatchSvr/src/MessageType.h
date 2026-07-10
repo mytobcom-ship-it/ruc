@@ -185,7 +185,7 @@ typedef struct sMatchLinkInfo
 	double							dfEdNodeX;							// 종료 노드 X
 	double							dfEdNodeY;							// 종료 노드 Y
 	uint8							nEdNodeType;						// 종료 노드 속성[3]
-	bool							bOutOfRadius;						// 반경 밖 최근접(진단) 여부 — true 면 좌표·교차거리는 유효하나 정식매칭 아님(SKIP) (2026-07-10 최정우 추가)
+	bool							bOutOfRadius;						// 반경 밖·진단반경 초과 최근접 — SKIP 참고용 좌표·거리 유효, 정식 MATCHED 아님 (2026-07-10 최정우 수정)
 } MATCH_LINK_INFO, *PMATCH_LINK_INFO;
 
 #define MATCH_LINK_INFO_SIZE											sizeof(MATCH_LINK_INFO)

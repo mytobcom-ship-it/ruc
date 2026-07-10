@@ -5,6 +5,8 @@
 #include "Vehicle.h"
 #include "GeoUtil.h"
 #include "log4z.h"
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 
@@ -13,6 +15,44 @@ using namespace zsummer::log4z;
 static const double TICK_SEC = 1.0;		// tick 간격 (초)
 static const double ACCEL_MPS = 2.0;	// 가속 한계 (m/s per tick)
 static const double DECEL_MPS = 3.5;	// 감속 한계 (m/s per tick)
+
+/**
+ * @brief 보조 GPS 필드(속도·방위각·고도·수평오차·배터리) 간헐적 누락 시뮬레이션
+ * @remark 좌표(GPS_LAT/LON)는 유지. MapMatchSvr 은 NULL → NO_SPEED/NO_ANGLE/NO_ACCURACY 등으로 처리
+*/
+static void ApplySensorFieldOmit(GPS_SAMPLE& stSample, mt19937& rng, const SIM_CONFIG& stConfig)
+{
+	uniform_real_distribution<double> dist01(0.0, 1.0);
+	if (dist01(rng) < stConfig.dfOmitAllProb)
+	{
+		stSample.bHasSpeed = false;
+		stSample.bHasHeading = false;
+		stSample.bHasAltitude = false;
+		stSample.bHasAccuracy = false;
+		stSample.bHasBattery = false;
+		return;
+	}
+
+	if (dist01(rng) >= stConfig.dfOmitPartialProb)
+		return;
+
+	uniform_int_distribution<int> distCnt(1, 2);
+	const int nOmit = distCnt(rng);
+	array<int, 5> aIdx = { {0, 1, 2, 3, 4} };
+	shuffle(aIdx.begin(), aIdx.end(), rng);
+	for (int i = 0; i < nOmit; ++i)
+	{
+		switch (aIdx[static_cast<size_t>(i)])
+		{
+		case 0: stSample.bHasSpeed = false; break;
+		case 1: stSample.bHasHeading = false; break;
+		case 2: stSample.bHasAltitude = false; break;
+		case 3: stSample.bHasAccuracy = false; break;
+		case 4: stSample.bHasBattery = false; break;
+		default: break;
+		}
+	}
+}
 
 CVehicle::CVehicle()
 	: m_pcRoute(nullptr), m_dfPos(0.0), m_dfSpeedMps(0.0),
@@ -281,6 +321,9 @@ void CVehicle::Tick(const char *pszGpsDt, vector<GPS_SAMPLE>& vtOut)
 	stSample.bRawValid = true;
 	memset(stSample.szGpsDt, 0, sizeof(stSample.szGpsDt));
 	snprintf(stSample.szGpsDt, sizeof(stSample.szGpsDt), "%s", pszGpsDt);
+
+	// 실제 단말처럼 속도·방위각·고도·수평오차·배터리가 가끔 NULL 로 수집되는 경우 (2026-07-10 최정우 추가)
+	ApplySensorFieldOmit(stSample, m_rng, m_stConfig);
 
 	vtOut.push_back(stSample);
 

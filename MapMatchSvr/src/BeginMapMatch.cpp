@@ -204,3 +204,124 @@ bool CBeginMapMatch::GridSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, uint32
 
 	return (*pwErrorCode == NO_ERROR) ? true : false;
 }
+
+/**
+ * @brief GRID 내 세그먼트 기하 최근접(반경 무시) — 진단반경 초과 SKIP 참고용 (2026-07-10 최정우 수정)
+*/
+bool CBeginMapMatch::GridSgmtGeomNearest(SGMT_MATCH_INPUT& stSgmtMatchInput, uint32 dwStartSgmtOffset,
+		uint32 dwEndSgmtOffset, MATCH_ENTRY& stBest, double& dfBestDist, bool& bFound)
+{
+	if ((m_pcDataLoader == nullptr) || (!m_pcDataLoader->IsLoad()))
+		return false;
+
+	for (uint32 i = dwStartSgmtOffset; i < dwEndSgmtOffset; ++i)
+	{
+		PGRID_SGMT_INFO pstGridSgmtInfo = m_pcDataLoader->GetGridSgmtInfo(i);
+		if (!pstGridSgmtInfo)
+			continue;
+
+		SGMT_INFO stSgmtInfo;
+		stSgmtInfo.stPoint.dfX = static_cast<double>(pstGridSgmtInfo->dwX);
+		stSgmtInfo.stPoint.dfY = static_cast<double>(pstGridSgmtInfo->dwY);
+		stSgmtInfo.nDirAng = static_cast<sint16>(pstGridSgmtInfo->wDirAng);
+		stSgmtInfo.dfLen = static_cast<double>(pstGridSgmtInfo->wLenSgmt);
+		stSgmtInfo.qwLinkID = pstGridSgmtInfo->qwLinkID;
+
+		SGMT_MATCH_RES stSgmtMatchRes;
+		// 반경(nRadius) 초과여도 수직거리·스냅 좌표만 계산 (정식 매칭 아님) (2026-07-10 최정우 수정)
+		if (!m_cGISUtil.SgmtMatch(stSgmtMatchInput, stSgmtInfo, &stSgmtMatchRes, true))
+			continue;
+
+		PLINK_INFO pstLinkInfo = m_pcDataLoader->GetLinkInfo(stSgmtInfo.qwLinkID);
+		if (!pstLinkInfo)
+			continue;
+
+		if (bFound && (stSgmtMatchRes.dfIntersectLenSgmt >= dfBestDist))
+			continue;
+
+		MATCH_ENTRY stMatchEntry;
+		stMatchEntry.dfMatchX = stSgmtMatchRes.stMatchPoint.dfX;
+		stMatchEntry.dfMatchY = stSgmtMatchRes.stMatchPoint.dfY;
+		stMatchEntry.dfSgmtMatchLen = stSgmtMatchRes.dfSgmtMatchLen;
+		stMatchEntry.dfIntersectLenSgmt = stSgmtMatchRes.dfIntersectLenSgmt;
+		stMatchEntry.dfCost = stSgmtMatchRes.dfCost;
+		stMatchEntry.dfAngleCost = stSgmtMatchRes.dfCost - stSgmtMatchRes.dfIntersectLenSgmt;
+		stMatchEntry.dfAltAdj = 0.0;
+		stMatchEntry.nDirAngleDiff = stSgmtMatchRes.nDirAngleDiff;
+		stMatchEntry.qwLinkID = stSgmtMatchRes.qwLinkID;
+		stMatchEntry.wLenFromLink = pstGridSgmtInfo->wLenFromLink;
+		stMatchEntry.nMaxSpeed = pstLinkInfo->nMaxSpeed;
+		stMatchEntry.dfLen = pstLinkInfo->dfLen;
+		stMatchEntry.nRoadRank = pstLinkInfo->nRoadRank;
+		stMatchEntry.nConnect = pstLinkInfo->nConnect;
+		stMatchEntry.nRoadType = pstLinkInfo->nRoadType;
+		stMatchEntry.nLanes = pstLinkInfo->nLanes;
+		memcpy(stMatchEntry.szRoadName, pstLinkInfo->szRoadName, sizeof(stMatchEntry.szRoadName));
+		stMatchEntry.qwStNodeID = pstLinkInfo->qwStNodeID;
+		stMatchEntry.dfStNodeX = static_cast<double>(pstLinkInfo->dwStNodeX);
+		stMatchEntry.dfStNodeY = static_cast<double>(pstLinkInfo->dwStNodeY);
+		stMatchEntry.nStNodeType = pstLinkInfo->nStNodeType;
+		stMatchEntry.qwEdNodeID = pstLinkInfo->qwEdNodeID;
+		stMatchEntry.dfEdNodeX = static_cast<double>(pstLinkInfo->dwEdNodeX);
+		stMatchEntry.dfEdNodeY = static_cast<double>(pstLinkInfo->dwEdNodeY);
+		stMatchEntry.nEdNodeType = pstLinkInfo->nEdNodeType;
+
+		stBest = stMatchEntry;
+		dfBestDist = stSgmtMatchRes.dfIntersectLenSgmt;
+		bFound = true;
+	}
+
+	return bFound;
+}
+
+/**
+ * @brief 소속·인접 GRID 에서 반경 무시 기하 최근접 세그먼트 1건 (2026-07-10 최정우 수정)
+ * @remark 정식 매칭 실패·진단반경(MM_DIAG_RADIUS_M) 내 후보도 없을 때 호출.
+ *         그리드에 링크가 있으나 거리만 먼 경우 SKIP 참고용 좌표·교차거리 확보.
+*/
+bool CBeginMapMatch::FindGeomNearest(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& stSgmtMatchInput,
+		uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry)
+{
+	m_pcDataLoader = pcDataLoader;
+
+	if ((m_pcDataLoader == nullptr) || (!m_pcDataLoader->IsLoad()))
+	{
+		LOGFMTE("data loading fail!");
+		return false;
+	}
+
+	uint32 dwGridID = m_cGISUtil.GetGridID(stSgmtMatchInput.stPoint.dfX, stSgmtMatchInput.stPoint.dfY);
+	vector<uint32> vtNearGridIDList;
+	vtNearGridIDList.push_back(dwGridID);
+	// 인접 GRID 탐색 반경은 MM_DIAG_RADIUS_M 과 동일(그리드 선정용) (2026-07-10 최정우 수정)
+	m_cGISUtil.GetNearGridID(dwGridID, stSgmtMatchInput, vtNearGridIDList);
+
+	stSgmtMatchInput.stPoint.dfX *= 360000.0;
+	stSgmtMatchInput.stPoint.dfY *= 360000.0;
+
+	bool bFound = false;
+	double dfBestDist = -1.0;
+	MATCH_ENTRY stBest;
+
+	for (size_t i = 0; i < vtNearGridIDList.size(); ++i)
+	{
+		PGRID_INFO pstGridInfo = m_pcDataLoader->GetGridInfo(vtNearGridIDList[i]);
+		if (!pstGridInfo)
+			continue;
+
+		uint32 dwStartSgmtOffset = pstGridInfo->dwSgmtOffset;
+		uint32 dwEndSgmtOffset = dwStartSgmtOffset + pstGridInfo->wSgmtCount;
+		GridSgmtGeomNearest(stSgmtMatchInput, dwStartSgmtOffset, dwEndSgmtOffset,
+			stBest, dfBestDist, bFound);
+	}
+
+	if (!bFound)
+	{
+		*pwErrorCode = MAP_MATCH_FAIL;
+		return false;
+	}
+
+	*pwErrorCode = NO_ERROR;
+	*pstMatchEntry = stBest;
+	return true;
+}

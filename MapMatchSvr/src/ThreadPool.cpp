@@ -1,6 +1,6 @@
-﻿/**
+/**
  * @file ThreadPool.cpp
- * @brief Thread Pool 클래스 소스 파일
+ * @brief 스레드 풀 클래스 소스 파일
 */
 #include "ThreadPool.h"
 
@@ -174,7 +174,7 @@ void CThreadPool::Enqueue(int nThreadId, const RAW_LOG_BATCH &vtRawLog)
 	if (vtRawLog.empty())
 		return;
 
-	// enqueue + signal 을 동일 mutex 로 보호 (lost-wakeup 방지)
+	// Enqueue + 시그널 을 동일 mutex 로 보호 (lost-wakeup 방지)
 	m_paMutex[nThreadId].lock();
 	m_paQueues[nThreadId].Enqueue(vtRawLog);
 	m_paCondition[nThreadId].signal();
@@ -270,7 +270,7 @@ int CThreadPool::GetStoppedThreads()
 /**
  * @brief 워커 스레드 종료 요청 (큐 처리 중단)
  * @return void
- * @remark #8 shutdown: 신규 dequeue 중단, 진행 중 run() 은 완료 후 종료
+ * @remark #8 종료: 신규 Dequeue 중단, 진행 중 run() 은 완료 후 종료
 */
 void CThreadPool::RequestShutdown()
 {
@@ -284,9 +284,9 @@ void CThreadPool::RequestShutdown()
 }
 
 /**
- * @brief active 워커·큐가 비울 때까지 대기
+ * @brief 활성 워커·큐가 비울 때까지 대기
  * @param[in] nMaxWaitMs 최대 대기 (ms)
- * @return true(idle), false(타임아웃 시 잔여 작업 있음)
+ * @return true(유휴), false(타임아웃 시 잔여 작업 있음)
 */
 bool CThreadPool::WaitForIdle(int nMaxWaitMs)
 {
@@ -309,10 +309,37 @@ bool CThreadPool::WaitForIdle(int nMaxWaitMs)
 }
 
 /**
+ * @brief 진행 중(활성) 워커만 유휴 될 때까지 대기
+ * @param[in] nMaxWaitMs 최대 대기 (ms)
+ * @return true(활성 없음), false(타임아웃 시 진행 중 batch 잔존)
+ * @remark 종료 시 RequestShutdown() 이후 큐는 워커가 Dequeue 하지 않으므로
+ *         큐 비움은 WaitForIdle 이 아닌 DrainQueuedBatches 로 처리한다.
+*/
+bool CThreadPool::WaitForActiveIdle(int nMaxWaitMs)
+{
+	if (nMaxWaitMs <= 0)
+		return (GetActiveThreads() <= 0);
+
+	const int nStepMs = 100;
+	int nElapsedMs = 0;
+
+	while (nElapsedMs < nMaxWaitMs)
+	{
+		if (GetActiveThreads() <= 0)
+			return true;
+
+		CThread::sleep(nStepMs);
+		nElapsedMs += nStepMs;
+	}
+
+	return (GetActiveThreads() <= 0);
+}
+
+/**
  * @brief 워커 큐에 남은 batch 전량 추출 (처리·release 용)
  * @param[out] pvtBatches 잔여 batch 목록
  * @return void
- * @remark #8 shutdown drain: dequeue 만 수행, DB release 는 RawLogWorker 가 담당
+ * @remark #8 종료 drain: Dequeue 만 수행, DB release 는 RawLogWorker 가 담당
 */
 void CThreadPool::DrainQueuedBatches(vector<RAW_LOG_BATCH> *pvtBatches)
 {

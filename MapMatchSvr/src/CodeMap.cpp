@@ -22,7 +22,7 @@ CCodeMap::~CCodeMap()
  * @brief 메시지에 해당하는 코드
  * @param[in] pstCodeEntry 코드 테이블 구조체
  * @param[in] nEntryCount 코드 등록 갯수
- * @param[in] pszValue  코드 해당 값
+ * @param[in] pszValue 코드 해당 값
  * @return 코드
 */
 int CCodeMap::GetCode(PCODE_ENTRY pstCodeEntry, int nEntryCount, char *pszValue)

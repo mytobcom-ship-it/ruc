@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file ContinueMapMatch.h
  * @brief 연속 맵매칭 클래스 헤더 파일
 */

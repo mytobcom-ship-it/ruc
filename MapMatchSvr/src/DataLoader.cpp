@@ -66,7 +66,7 @@ void CDataLoader::Uninitialize()
 
 /**
  * @brief 데이터 업데이트
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CDataLoader::SetDataUpdate()
 {

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file MatchTrace.cpp
  * @brief 맵매칭 후보·비용 디버그 로그
 */
@@ -34,6 +34,7 @@ void AltValue(char *pszBuf, size_t nBufLen, sint16 nAlt)
  * @param[in] bHasAltAdj Continue 고도 보조 점수 포함 여부
  * @return void
  * @remark
+ *   · dist = INTERSECT_LEN (GPS↔세그먼트 교차점 거리, m)
  *   · bHasAltAdj=true  → dist+angle_cost+alt_adj=cost
  *   · bHasAltAdj=false → dist+angle_cost=cost
 */
@@ -54,8 +55,8 @@ void FormatCostFormula(char *pszBuf, size_t nBufLen, const MATCH_ENTRY& stEntry,
 } // namespace
 
 /**
- * @brief 맵매칭 trace·input·후보·당선 winner 디버그 로그 출력
- * @param[in] pstCtx GPS 1건 trace 컨텍스트 (ProcessManager → MapMatch)
+ * @brief 맵매칭 추적·input·후보·당선 winner 디버그 로그 출력
+ * @param[in] pstCtx GPS 1건 추적 컨텍스트 (ProcessManager → MapMatch)
  * @param[in] stSgmtMatchInput 세그먼트 매칭 입력 (고도 점수·반경 등)
  * @param[in] listCandidates 정렬된 후보 MATCH_ENTRY 목록
  * @param[in] stWinner 최종 선택 링크
@@ -105,7 +106,7 @@ void CMatchTrace::LogResult(const MATCH_TRACE_CTX *pstCtx, const SGMT_MATCH_INPU
 			&& it->dfCost == stWinner.dfCost
 			&& it->dfIntersectLenSgmt == stWinner.dfIntersectLenSgmt);
 
-		LOGFMTD("[#%02d] match cand   seq=[%u] rank=[%d] %s link=[%llu] cost=[%.1f] dist=[%.1f] "
+		LOGFMTD("[#%02d] match cand   seq=[%u] rank=[%d] %s link=[%llu] cost=[%.1f] intersect_len=[%.1f] "
 			"angle_cost=[%.1f] alt_adj=[%+.1f] road=[%03u] rank_road=[%03u] formula=[%s]",
 			pstCtx->nThreadId, pstCtx->dwSeqNo, nRank + 1, bSelect ? "SELECT" : "      ",
 			static_cast<unsigned long long>(it->qwLinkID), it->dfCost,
@@ -121,7 +122,7 @@ void CMatchTrace::LogResult(const MATCH_TRACE_CTX *pstCtx, const SGMT_MATCH_INPU
 		? static_cast<int>(stWinner.dfIntersectLenSgmt + 0.5) : -1;
 
 	LOGFMTD("[#%02d] match winner seq=[%u] link=[%llu] cost=[%.1f] match_lat=[%.06f] match_lon=[%.06f] "
-		"intersect_m=[%d]",
+		"intersect_len=[%d]",
 		pstCtx->nThreadId, pstCtx->dwSeqNo,
 		static_cast<unsigned long long>(stWinner.qwLinkID), stWinner.dfCost,
 		dfMatchLat, dfMatchLon, nIntersectM);

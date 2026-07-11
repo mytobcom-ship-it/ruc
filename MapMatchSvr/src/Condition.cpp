@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file Condition.cpp
  * @brief Thread 접근 제어용 클래스 소스 파일
 */
@@ -51,10 +51,10 @@ void CCondition::wait(CMutex& mutex)
 }
 
 /**
- * @brief 동작 중인 Thread 를 최대 nWaitMs 밀리초 대기 (signal 시 즉시 반환)
- * @param[in] mutex 동기화용 Mutex (호출 전 lock 상태)
+ * @brief 동작 중인 Thread 를 최대 nWaitMs 밀리초 대기 (시그널 시 즉시 반환)
+ * @param[in] mutex 동기화용 Mutex (호출 전 잠금 상태)
  * @param[in] nWaitMs 최대 대기 시간 (ms)
- * @return true(signal), false(timeout)
+ * @return true(시그널), false(timeout)
  */
 bool CCondition::waitTimed(CMutex& mutex, int nWaitMs)
 {

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file RawLogWorker.cpp
  * @brief 원시 GPS batch 맵매칭·DB 결과 갱신 워커 클래스 소스 파일
 */
@@ -181,7 +181,7 @@ int CRawLogWorker::ExpireTtlSessions(int nThreadId, int nTtlSec)
 
 /**
  * @brief 예약된 batch 전건 PROCESSING→PENDING release (#7/#8)
- * @param[in] pcConn DB connection
+ * @param[in] pcConn DB 커넥션
  * @param[in] vtBatch 예약된 GPS batch
  * @param[in] nThreadId 로그용 워커 ID (-1 이면 생략)
  * @return true(전건 release), false(실패·인자 무효)
@@ -240,7 +240,7 @@ bool CRawLogWorker::ReleaseReservedBatch(PGconn *pcConn, const RAW_LOG_BATCH& vt
 /**
  * @brief TRIP_EVENT 값 유효 여부 (0/1/2)
  * @param[in] nTripEvent TRIP_EVENT SMALLINT
- * @return true(유효), false
+ * @return true(유효), false(실패)
 */
 bool CRawLogWorker::IsValidTripEvent(sint16 nTripEvent)
 {
@@ -252,7 +252,7 @@ bool CRawLogWorker::IsValidTripEvent(sint16 nTripEvent)
 /**
  * @brief TRIP_ID 가 DEVICE_KEY 기반 형식인지 검사
  * @param[in] stRawLogInfo 원시 GPS
- * @return true(유효), false
+ * @return true(유효), false(실패)
  * @remark 형식: {DEVICE_KEY}_{YYYYMMDDHH24MISS}
 */
 bool CRawLogWorker::IsValidTripIdForDevice(const sRawLogInfo& stRawLogInfo)
@@ -355,7 +355,7 @@ bool CRawLogWorker::ShouldSkipGpsInput(int nThreadId, const sRawLogInfo& stRawLo
  * @param[in] stSession 현재 trip_id 세션
  * @param[out] pbFullReset true 이면 START 에 의한 전체 세션 초기화
  * @remark
- *   - TRIP_EVENT=0(START) 또는 GPS_SEQ<=dwLastGpsSeq(역전·동일 seq 재처리) → Begin
+ *   - TRIP_EVENT=0(START) 또는 GPS_SEQ<=dwLastGpsSeq(역전·동일 seq 재처리) → 시작
 */
 bool CRawLogWorker::NeedsBeginReset(int nThreadId, const sRawLogInfo& stRawLogInfo,
 		const VEHICLE_TRIP_SESSION& stSession, bool *pbFullReset)
@@ -396,7 +396,7 @@ bool CRawLogWorker::NeedsBeginReset(int nThreadId, const sRawLogInfo& stRawLogIn
 }
 
 /**
- * @brief 연속 맵매칭 세션을 Begin 상태로 초기화
+ * @brief 연속 맵매칭 세션을 시작 상태로 초기화
  * @param[in,out] stSession trip_id 세션
  * @param[in] bFullReset true 이면 START 누락 경고 플래그도 초기화
  * @return void
@@ -406,7 +406,7 @@ void CRawLogWorker::ResetTripSessionForBegin(VEHICLE_TRIP_SESSION& stSession, bo
 	stSession.qwLinkID = 0;
 	stSession.dwLastGpsSeq = 0;
 
-	// Begin 전환 시 직전 매칭·고도 앵커 폐기 → 끊긴/역전 구간 오계산 방지 (2026-07-08 최정우 추가)
+	// 시작 전환 시 직전 매칭·고도 앵커 폐기 → 끊긴/역전 구간 오계산 방지 (2026-07-08 최정우 추가)
 	stSession.dfLastMatchX = 0.0;
 	stSession.dfLastMatchY = 0.0;
 	stSession.dtLastMatchGps = 0;
@@ -425,7 +425,7 @@ void CRawLogWorker::ResetTripSessionForBegin(VEHICLE_TRIP_SESSION& stSession, bo
  * @param[in] context RAW_LOG_BATCH 포인터 (동일 trip_id GPS 묶음)
  * @return void
  * @remark
- *   - 세션은 배치 임시(stWorkSession)로 맵매칭 후 bulk 성공 시에만 m_vtTripSessions 에 commit
+ *   - 세션은 배치 임시(stWorkSession)로 맵매칭 후 bulk 성공 시에만 m_vtTripSessions 에 커밋
  *   - #7: 조기 종료 시 ReleaseReservedBatch() 로 PROCESSING 해제
 */
 void CRawLogWorker::run(int nThreadId, void *context)
@@ -549,7 +549,7 @@ void CRawLogWorker::run(int nThreadId, void *context)
 				static_cast<int>(vtUpdates.size()));
 			bProcessOk = false;
 
-			// PROCESSING 좀비 방지: match_status=0, intersect/match 좌표 '' → 기존 컬럼 유지
+			// PROCESSING 좀비 방지: match_status=0, INTERSECT_LEN/MATCH_* '' → 기존 컬럼 유지
 			// bulk update 실패 시 동일 PK release (2026-07-08 최정우 주석 추가)
 			if (!BulkReleaseRawLogs(pcConn, vtUpdates))
 			{
@@ -567,7 +567,7 @@ void CRawLogWorker::run(int nThreadId, void *context)
 		}
 		else
 		{
-			// DB 반영 성공 후에만 세션 commit (bulk 실패·release 시 연속 맵매칭 맥락 보존)
+			// DB 반영 성공 후에만 세션 커밋 (bulk 실패·release 시 연속 맵매칭 맥락 보존)
 			// #9: bTripEnded 이면 MATCHED/ERROR/SKIP 무관 trip_id 세션 제거
 			if (bTripEnded)
 				mapSessions.erase(strDeviceKey);					// (2026-07-08 최정우 수정) 키 = DEVICE_KEY
@@ -592,9 +592,9 @@ void CRawLogWorker::run(int nThreadId, void *context)
 
 /**
  * @brief 커넥션 반환 전 미완료 트랜잭션 ROLLBACK 가드 후 pool 반환 (#14)
- * @param[in] pcConn DB connection
+ * @param[in] pcConn DB 커넥션
  * @return void
- * @remark 현재 워커는 autocommit 단일 문장이라 in-transaction 상태가 되지 않지만,
+ * @remark 현재 워커는 autocommit 단일 문장이라 in-트랜잭션 상태가 되지 않지만,
  *         향후 명시적 BEGIN/COMMIT(예: #10 과금 INSERT 동시 커밋) 도입 대비 방어 가드.
  *         Fetcher::ReleaseConnection 과 동일 패턴.
 */
@@ -633,14 +633,14 @@ void CRawLogWorker::stop(int nThreadId, void *context)
  * @param[in] stRawLogInfo 원시 GPS 정보 (TRIP_ID 는 수집서버 적재분)
  * @param[out] pvtUpdates bulk UPDATE 대상 행 목록
  * @param[in,out] pstSession 배치 임시 세션 (bulk 성공 전까지 m_vtTripSessions 미반영)
- * @param[out] pbTripEnded TRIP END(2) 시 true 설정 — match 결과 무관, bulk 성공 후 세션 제거 (#9)
+ * @param[out] pbTripEnded TRIP END(2) 시 true 설정 — 일치 결과 무관, bulk 성공 후 세션 제거 (#9)
  * @return true(처리·적재 성공), false(인자 null·적재 실패)
  * @remark 2026-07-08 최정우 추가
  *   - TRIP_ID 없음/불일치, TRIP_EVENT 비정상 → SKIP
- *   - TRIP_EVENT=0(START) 또는 GPS_SEQ<=dwLastGpsSeq → 세션 초기화 후 Begin
+ *   - TRIP_EVENT=0(START) 또는 GPS_SEQ<=dwLastGpsSeq → 세션 초기화 후 시작
  *   - 맵매칭 실패 → ERROR, 성공 → MATCHED
  *   - TRIP_EVENT=2(END) 이면 MATCHED/ERROR/SKIP 무관 pbTripEnded=true (#9)
- * @remark 세션 갱신은 pstSession(배치 임시)에만 적용. run() 이 bulk 성공 시 commit.
+ * @remark 세션 갱신은 pstSession(배치 임시)에만 적용. run() 이 bulk 성공 시 커밋.
 */
 bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo,
 		vector<RAW_LOG_UPDATE_ROW> *pvtUpdates, VEHICLE_TRIP_SESSION *pstSession, bool *pbTripEnded)
@@ -657,7 +657,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 	stSession.dtLastSeen = time(nullptr);
 
 	bool bFullReset = false;
-	// Begin(세션 초기화) 필요 여부 판단 (2026-07-08 최정우 주석 추가)
+	// 시작(세션 초기화) 필요 여부 판단 (2026-07-08 최정우 주석 추가)
 	if (NeedsBeginReset(nThreadId, stRawLogInfo, stSession, &bFullReset))
 	{
 		if (bFullReset)
@@ -667,7 +667,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 				stRawLogInfo.dwSeqNo);
 		}
 
-		// 연속 맵매칭 세션 Begin 상태로 초기화 (2026-07-08 최정우 주석 추가)
+		// 연속 맵매칭 세션 시작 상태로 초기화 (2026-07-08 최정우 주석 추가)
 		ResetTripSessionForBegin(stSession, bFullReset);
 	}
 	else if (!stSession.bStartWarned && stRawLogInfo.nTripEvent != TRIP_EVENT_START)
@@ -709,15 +709,14 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		if (stRawLogInfo.nTripEvent == TRIP_EVENT_END)
 			*pbTripEnded = true;
 
-		// 정확도 SKIP — 최근접 있으면 DB 참고용 MATCH_LAT/LON·INTERSECT_LEN 만 저장 (2026-07-10 최정우 수정)
+		// 정확도 SKIP — 최근접 있으면 참고용 MATCH_LAT/LON·INTERSECT_LEN(GPS↔세그먼트 교차점 거리) 저장
 		MATCH_LINK_INFO stNear;
 		memset(reinterpret_cast<void *>(&stNear), 0, MATCH_LINK_INFO_SIZE);
 		stNear.dfIntersectLenSgmt = -1.0;
 		CProcessManager& cPM = m_stConfig.pcProcessManager[nThreadId];
 		if (cPM.FindNearestSegment(stRawLogInfo, &stNear))
 		{
-			int nNearLenM = (stNear.dfIntersectLenSgmt >= 0.0)
-				? static_cast<int>(stNear.dfIntersectLenSgmt + 0.5) : -1;
+			int nNearLenM = CalcIntersectLenM(stRawLogInfo, stNear.dfMatchX, stNear.dfMatchY);
 			return AppendUpdateRow(pvtUpdates, stRawLogInfo, MATCH_STATUS_SKIP, nNearLenM,
 				&stNear.dfMatchY, &stNear.dfMatchX);
 		}
@@ -733,19 +732,19 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 	// 맵매칭 처리 시간 측정 시작 (2026-07-08 최정우 주석 추가)
 	CClock cMatchClock;
 	cMatchClock.Start();
-	// ProcessManager 경유 Begin/Continue 맵매칭 (2026-07-08 최정우 주석 추가)
+	// ProcessManager 경유 시작/Continue 맵매칭 (2026-07-08 최정우 주석 추가)
 	bool bMatched = RunMapMatch(nThreadId, stRawLogInfo, &stSession, &stMatchLinkInfo);
 	// 맵매칭 처리 시간 측정 종료 (2026-07-08 최정우 주석 추가)
 	cMatchClock.Stop();
 
-	// 반경 밖·진단반경 초과 최근접 — MATCHED 아님, SKIP(3)·세션 미갱신·DB 참고용 좌표·거리 저장 (2026-07-10 최정우 수정)
+	// 반경 밖·진단반경 초과 최근접 — MATCHED 아님, SKIP(3)·세션 미갱신·MATCH_LAT/LON·INTERSECT_LEN 저장 (2026-07-10 최정우 수정)
 	const bool bOut = (!bMatched) && stMatchLinkInfo.bOutOfRadius;
 
 	if (!bMatched && bOut)
 	{
-		// SKIP: 성공 아님. qwLinkID·bHasLastMatch 등 세션 앵커 미갱신, MATCH_LAT/LON·INTERSECT_LEN 만 DB 저장 (2026-07-10 최정우 수정)
+		// SKIP: MATCH_LAT/LON·INTERSECT_LEN(GPS↔세그먼트 교차점 거리)만 DB 저장, 세션 앵커 미갱신
 		LOGFMTW("[#%02d] out-of-radius skip! device=[%s] trip_id=[%s] seq=[%u] "
-			"intersect=[%.1fm] match_lat=[%.06lf] match_lon=[%.06lf]",
+			"intersect_len=[%.1fm] match_lat=[%.06lf] match_lon=[%.06lf]",
 			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRawLogInfo.dwSeqNo,
 			stMatchLinkInfo.dfIntersectLenSgmt, stMatchLinkInfo.dfMatchY, stMatchLinkInfo.dfMatchX);
 		nFinalStatus = MATCH_STATUS_SKIP;
@@ -796,12 +795,14 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		}
 	}
 
-	int nIntersectLenM = -1;
-	if (stMatchLinkInfo.dfIntersectLenSgmt >= 0.0)
-		nIntersectLenM = static_cast<int>(stMatchLinkInfo.dfIntersectLenSgmt + 0.5);
-
-	// DB 저장: MATCHED 또는 SKIP(반경밖·진단반경초과) 시 참고용 좌표·교차거리. ERROR 는 미저장 (2026-07-10 최정우 수정)
+	// INTERSECT_LEN: GPS↔세그먼트 교차점(MATCH_LAT/LON) 하버사인 거리(m) → 정수 반올림
 	const bool bHasCoords = (bMatched || bOut);
+	int nIntersectLenM = -1;
+	if (bHasCoords)
+		nIntersectLenM = CalcIntersectLenM(stRawLogInfo,
+			stMatchLinkInfo.dfMatchX, stMatchLinkInfo.dfMatchY);
+
+	// DB 저장: MATCHED/SKIP 시 MATCH_LAT/LON·INTERSECT_LEN(GPS↔세그먼트 교차점 거리). ERROR 는 미저장
 	if (!AppendUpdateRow(pvtUpdates, stRawLogInfo, nFinalStatus, nIntersectLenM,
 		bHasCoords ? &stMatchLinkInfo.dfMatchY : nullptr,
 		bHasCoords ? &stMatchLinkInfo.dfMatchX : nullptr))
@@ -865,7 +866,7 @@ bool CRawLogWorker::AppendReleaseRowFromRawLog(vector<RAW_LOG_UPDATE_ROW> *pvtRe
  * @param[in] nThreadId 워커 스레드 ID (ProcessManager 인덱스)
  * @param[in] stRawLogInfo 원시 GPS
  * @param[in,out] pstSession trip_id 세션 (qwLinkID 연속 맵매칭용)
- * @return true(매칭 성공), false
+ * @return true(매칭 성공), false(실패)
 */
 bool CRawLogWorker::RunMapMatch(int nThreadId, const sRawLogInfo& stRawLogInfo,
 		VEHICLE_TRIP_SESSION *pstSession, MATCH_LINK_INFO *pstMatchLinkInfo)
@@ -884,7 +885,7 @@ bool CRawLogWorker::RunMapMatch(int nThreadId, const sRawLogInfo& stRawLogInfo,
 	// ── HEADING/SPEED 보정: DB 적재값 우선, NULL(미적재) 이면 직전 매칭좌표로 계산 (2026-07-08 최정우 추가) ──
 	//   · 전제 : 세션에 직전 "매칭 성공" 좌표(dfLastMatchX/Y)와 그 GPS 시각(dtLastMatchGps) 보유 시에만
 	//   · nAngle < 0(NO_ANGLE) / fSpeed < 0(NO_SPEED) 가 곧 DB NULL 을 의미(파서에서 그렇게 세팅)
-	//   · gap 가드 : 직전 매칭점과의 시간간격이 (0, MM_CALC_MAX_GAP_SEC] 일 때만 계산(끊긴 구간 오계산 방지)
+	// · 차이 가드: 직전 매칭점과의 시간간격이 (0, MM_CALC_MAX_GAP_SEC] 일 때만 계산(끊긴 구간 오계산 방지)
 	//   · 원본 stRawLogInfo 는 불변 유지, 보정본(stAdjusted)으로 맵매칭 입력
 	sRawLogInfo stAdjusted = stRawLogInfo;
 	ALT_MATCH_CTX stAltCtx;
@@ -920,7 +921,7 @@ bool CRawLogWorker::RunMapMatch(int nThreadId, const sRawLogInfo& stRawLogInfo,
 	//   · 전제: bHasPrevAlt (직전 매칭 성공 시 ALTITUDE_M 있었음)
 	//   · dfHorizMoveM: 직전 매칭 XY → 현재 GPS XY 하버사인(m) — 경사 판정용
 	//   · Δalt = 현재 ALTITUDE_M − nPrevAltitudeM (ProcessManager/ContinueMapMatch에서 사용)
-	//   · 예) seq10 매칭·고도100m 저장 → seq11 고도106m·같은 고가 → gap=8 이내 bonus −3
+	// · 예) seq10 매칭·고도100m 저장 → seq11 고도106m·같은 고가 → 차이=8 이내 보너스 −3
 	if (pstSession->bHasPrevAlt)
 	{
 		stAltCtx.nPrevAltitudeM = pstSession->nPrevAltitudeM;
@@ -959,6 +960,28 @@ double CRawLogWorker::HaversineMeters(const POINT& stA, const POINT& stB)
 		+ cos(dfLat1) * cos(dfLat2) * sin(dfDLon / 2.0) * sin(dfDLon / 2.0);
 	if (dfA > 1.0) dfA = 1.0;									// 부동소수 오차 클램프
 	return 2.0 * dfR * asin(sqrt(dfA));
+}
+
+/**
+ * @brief INTERSECT_LEN 산출 — GPS 좌표와 세그먼트 교차점(MATCH) 사이 거리(m)
+ * @param[in] stRawLogInfo 원시 GPS (dfX=경도, dfY=위도, 도)
+ * @param[in] dfMatchLon 세그먼트 교차점 경도 (MATCH_LON)
+ * @param[in] dfMatchLat 세그먼트 교차점 위도 (MATCH_LAT)
+ * @return 반올림 정수 거리(m), GPS 무효 시 -1
+*/
+int CRawLogWorker::CalcIntersectLenM(const sRawLogInfo& stRawLogInfo,
+		double dfMatchLon, double dfMatchLat)
+{
+	if (stRawLogInfo.bGpsLatNull || stRawLogInfo.bGpsLonNull)
+		return -1;
+
+	POINT stGps;
+	POINT stMatch;
+	stGps.dfX = stRawLogInfo.dfX;
+	stGps.dfY = stRawLogInfo.dfY;
+	stMatch.dfX = dfMatchLon;
+	stMatch.dfY = dfMatchLat;
+	return static_cast<int>(HaversineMeters(stGps, stMatch) + 0.5);
 }
 
 /**
@@ -1008,11 +1031,11 @@ string CRawLogWorker::BuildPgTextArray(const vector<string>& vtValues)
  * @param[out] pvtUpdates bulk UPDATE 대상 목록
  * @param[in] stRawLogInfo 원시 GPS
  * @param[in] nStatus MATCH_STATUS (1/3/4/0)
- * @param[in] nIntersectLenM 교차 길이(m), -1 이면 미갱신
+ * @param[in] nIntersectLenM GPS↔세그먼트 교차점 거리(m, INTERSECT_LEN), -1 이면 미갱신
  * @param[in] pdfMatchLat 매칭 위도 (MATCHED 시), nullptr 이면 미갱신
  * @param[in] pdfMatchLon 매칭 경도 (MATCHED 시), nullptr 이면 미갱신
  * @return true(적재 성공), false(pvtUpdates null·trip_id 무효)
- * @remark invalid trip_id 시 false — run() orphan release 가 PK 없으면 recover 대기
+ * @remark invalid trip_id 시 false — run() orphan release 가 PK 없으면 복구 대기
 */
 bool CRawLogWorker::AppendUpdateRow(vector<RAW_LOG_UPDATE_ROW> *pvtUpdates,
 		const sRawLogInfo& stRawLogInfo, sint16 nStatus, int nIntersectLenM,
@@ -1086,7 +1109,7 @@ int CRawLogWorker::GetPgCmdTuples(PGresult *pcResult)
  * @brief UPDATE 영향 행 수가 기대값과 일치하는지 검증
  * @param[in] pcResult PQ 실행 결과
  * @param[in] nExpected 기대 갱신 행 수
- * @param[in] pszLogTag 로그 태그 (nullptr 이면 "worker")
+ * @param[in] pszLogTag 로그 태그 (nullptr 이면 "워커")
  * @return true(일치), false(불일치·pcResult null)
 */
 bool CRawLogWorker::CheckPgUpdateAffected(PGresult *pcResult, int nExpected,
@@ -1105,12 +1128,12 @@ bool CRawLogWorker::CheckPgUpdateAffected(PGresult *pcResult, int nExpected,
 
 /**
  * @brief prim_rawgps 처리 결과 일괄 갱신 [rawgps_update]
- * @param[in] pcConn DB connection
+ * @param[in] pcConn DB 커넥션
  * @param[in] vtUpdates bulk UPDATE 대상 행 목록
  * @return true(전건 갱신), false(실행 오류·부분 갱신·인자 무효)
  * @remark
  *   - WHERE MATCH_STATUS=2 인 행만 갱신 (예약된 batch)
- *   - $4=1/3/4 : 맵매칭 완료. MATCH_LAT/LON·INTERSECT_LEN 은 AppendUpdateRow 값 사용
+ *   - $4=INTERSECT_LEN[] : GPS↔세그먼트 교차점 거리(m). MATCH_LAT/LON 과 함께 AppendUpdateRow 값 사용
  *   - 별도 release SQL 없음. 실패 복구는 BulkReleaseRawLogs() 가 $4=0 으로 동일 SQL 호출
  *   - PGRES_COMMAND_OK 뿐 아니라 PQcmdTuples == vtUpdates.size() 검증 (#5)
  */
@@ -1211,14 +1234,14 @@ bool CRawLogWorker::BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDAT
 
 /**
  * @brief bulk update 실패 시 예약 해제 [rawgps_update] — reserve 의 release 경로
- * @param[in] pcConn DB connection
+ * @param[in] pcConn DB 커넥션
  * @param[in] vtUpdates release 대상 PK 목록 (match_status 등은 내부에서 0으로 치환)
  * @return true(전건 release), false(실행 오류·부분 release·인자 무효)
  * @remark
  *   - rawgps_select 가 PROCESSING(2) 로 예약한 PK 목록을 PENDING(0) 으로 되돌린다.
- *   - 동일 [rawgps_update] SQL: $4 전부 "0", $5~$7 전부 '' (MATCH_*·INTERSECT_LEN 미변경)
+ *   - 동일 [rawgps_update] SQL: $4 전부 '', $5~$7 전부 '' (MATCH_*·INTERSECT_LEN 미변경)
  *   - SQL CASE: status 0 은 MATCH_LAT/LON ELSE 분기 → 기존 DB 값 유지
- *   - 다음 poll 에서 PENDING 으로 재예약·재맵매칭 (기동 recover 없이 런타임 복구)
+ *   - 다음 poll 에서 PENDING 으로 재예약·재맵매칭 (기동 복구 없이 런타임 복구)
  *   - BulkUpdateRawLogs() 경유 — PQcmdTuples 전건 검증 (#5)
  */
 bool CRawLogWorker::BulkReleaseRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDATE_ROW>& vtUpdates)

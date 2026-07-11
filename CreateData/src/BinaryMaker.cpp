@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file BinaryMaker.cpp
  * @brief 형상 정보 → 맵매칭 바이너리(link.psf) 생성 클래스 소스 파일
  * @remark CDataManager 의 생성(CreateData) 로직을 독립 실행용으로 분리
@@ -41,7 +41,7 @@ CBinaryMaker::~CBinaryMaker()
  * @param[in] pcShapeLoader 형상 정보(shapefile) 로딩 클래스 포인터
  * @param[in] strGeometryPath 형상 정보 바이너리 파일 경로
  * @param[in] strGeometryFile 형상 정보 바이너리 파일명 및 경로 (절대 경로)
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CBinaryMaker::Initialize(CShapeFileLoader *pcShapeLoader, 
 		const string& strGeometryPath, const string& strGeometryFile,
@@ -87,7 +87,7 @@ void CBinaryMaker::Uninitialize()
 
 /**
  * @brief 데이터 생성 (구 CDataManager::CreateData)
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CBinaryMaker::Create()
 {
@@ -258,7 +258,7 @@ bool CBinaryMaker::Create()
 
 /**
  * @brief 데이터 생성 메모리 초기화
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CBinaryMaker::SetCreateInitial()
 {
@@ -398,7 +398,7 @@ void CBinaryMaker::SetCreateUninitial()
 /**
  * @brief 바이너리 데이터 생성
  * @param[in] fp 바이너리 파일 포인터
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CBinaryMaker::SetCreateBinary(FILE *fp)
 {
@@ -465,7 +465,7 @@ bool CBinaryMaker::SetCreateBinary(FILE *fp)
 
 /**
  * @brief 링크 정보 데이터 생성 후 회전 정보, 그리드 정보 생성
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CBinaryMaker::SetGridMapData()
 {
@@ -552,7 +552,7 @@ bool CBinaryMaker::SetGridMapData()
  * @param[in] qwInLinkID 진입 링크 ID
  * @param[in] vtVertexs 진입링크 버텍스 정보
  * @param[in,out] stLinkInfoData 진입링크 속성에 회전정보 Offset, Count 업데이트
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CBinaryMaker::GetTurnInfo(const uint64& qwInLinkID, 
 		const vector<POINT>& vtVertexs, LINK_INFO_DATA& stLinkInfoData)
@@ -697,7 +697,7 @@ bool CBinaryMaker::GetTurnInfo(const uint64& qwInLinkID,
  * @param[in] qwLinkID 링크 ID
  * @param[in] vtVertexs 버텍스 정보
  * @param[in,out] stLinkInfoData 링크 정보에 Offset, Count 업데이트
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CBinaryMaker::GetLinkSgmtInfo(const uint64& qwLinkID, 
 		const vector<POINT>& vtVertexs, LINK_INFO_DATA& stLinkInfoData)
@@ -817,9 +817,9 @@ void CBinaryMaker::GetLinkInfoData(LINK_INFO_DATA& stLinkInfoData)
 
 /**
  * @brief GRID 별 세그먼트 정보 구하기
- * @param[in] qwLinkID 링크 ID 
+ * @param[in] qwLinkID 링크 ID
  * @param[in] vtVertexs 버텍스 정보
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CBinaryMaker::GetGridSgmtInfo(const uint64& qwLinkID, const vector<POINT>& vtVertexs)
 {

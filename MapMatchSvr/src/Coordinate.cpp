@@ -23,7 +23,7 @@ CCoordinate::~CCoordinate()
  * @param[in] eCoordType 측지계 코드
  * @param[in,out] dfX X 좌표
  * @param[in,out] dfY Y 좌표
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CCoordinate::ConvertCoordinateToWGS84GEO(enum eCoordinateType &eCoordType, double *dfX, double *dfY)
 {
@@ -49,7 +49,7 @@ bool CCoordinate::ConvertCoordinateToWGS84GEO(enum eCoordinateType &eCoordType, 
  * @brief WGS84GEO 좌표 유효성 검사
  * @param[in] dfX X 좌표
  * @param[in] dfY Y 좌표
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CCoordinate::IsValidWGS84GEO(double dfX, double dfY)
 {

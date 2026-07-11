@@ -112,7 +112,7 @@ typedef struct sAltMatchCtx
 
 /**
  * @struct sMapMatchInput
- * @brief 맵 매칭 입력 정보 (CMapMatch Begin/Continue 호출용)
+ * @brief 맵 매칭 입력 정보 (CMapMatch 시작/Continue 호출용)
 */
 typedef struct sMapMatchInput
 {
@@ -166,7 +166,7 @@ typedef struct sMatchLinkInfo
 	double							dfMatchX;							// 매핑 X 좌표
 	double							dfMatchY;							// 매핑 Y 좌표
 	double							dfSgmtMatchLen;						// 세그먼트 시작 좌표에서 매핑 좌표까지의 거리(m)
-	double                          dfIntersectLenSgmt;					// 요청 좌표(GPS)와 세그먼트 교차점까지의 거리
+	double                          dfIntersectLenSgmt;					// GPS 좌표와 세그먼트 교차점까지 거리(m) — DB INTERSECT_LEN
 	sint16							nDirAngleDiff;						// 매핑 각도 차이
 	uint64							qwLinkID;							// 링크 ID
 	uint16							wLenFromLink;						// 링크의 시작점부터 세그먼트 시작점까지 거리 (m)

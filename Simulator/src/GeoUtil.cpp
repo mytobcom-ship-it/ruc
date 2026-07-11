@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file GeoUtil.cpp
  * @brief 좌표 계산 유틸 구현
 */

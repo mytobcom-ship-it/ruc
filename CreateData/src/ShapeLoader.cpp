@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file ShapeLoader.cpp
  * @brief Shapefile(링크/노드) → 형상 정보 맵 생성 클래스 소스 파일
 */
@@ -175,7 +175,7 @@ CShapeFileLoader::~CShapeFileLoader()
  * @param[in] strNodeShp 노드 Point shapefile 경로 (빈 문자열이면 링크 끝점으로 대체)
  * @param[in] nSourceCoord 입력 좌표계 (eSourceCoord)
  * @param[in] stFieldMap DBF 필드 매핑
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CShapeFileLoader::Initialize(const string& strLinkShp, const string& strNodeShp, 
 		int nSourceCoord, const SHAPE_FIELD_MAP& stFieldMap)
@@ -265,7 +265,7 @@ void CShapeFileLoader::ConvertToWGS84(double dfX, double dfY, double& dfLon, dou
 /**
  * @brief 노드 shapefile 로딩 (노드 ID → 좌표/속성)
  * @param[out] mapNode 노드 ID → NODE_DATA
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CShapeFileLoader::LoadNode(unordered_map<uint64, NODE_DATA>& mapNode)
 {
@@ -305,9 +305,9 @@ bool CShapeFileLoader::LoadNode(unordered_map<uint64, NODE_DATA>& mapNode)
 
 /**
  * @brief 형상 정보 로딩 (CSQLManager::GetShapeInfoLoad 대체)
- * @param[out] pmapShapeLinkInfoList 링크 형상 정보 (key:링크 ID)
- * @param[out] pmapShapeNodeInfoList 노드 형상 정보 (key:링크 시작 노드 ID)
- * @return true, false
+ * @param[out] pmapShapeLinkInfoList 링크 형상 정보 (키:링크 ID)
+ * @param[out] pmapShapeNodeInfoList 노드 형상 정보 (키:링크 시작 노드 ID)
+ * @return true(성공), false(실패)
 */
 bool CShapeFileLoader::Load(mapShapeLinkInfo *pmapShapeLinkInfoList, 
 		mapShapeNodeInfo *pmapShapeNodeInfoList)
@@ -478,7 +478,7 @@ bool CShapeFileLoader::Load(mapShapeLinkInfo *pmapShapeLinkInfoList,
 		pstShapeLinkInfo->dwEdNodeY = static_cast<uint32>(dfEdLat * 360000);
 		pstShapeLinkInfo->nEdNodeType = nEdNodeType;
 
-		// 노드 형상 정보 (회전정보 그래프용 : key 는 링크 시작 노드 ID)
+		// 노드 형상 정보 (회전정보 그래프용: 키 는 링크 시작 노드 ID)
 		pstShapeNodeInfo->qwLinkID = qwLinkID;
 
 		// 맵에 등록 (중복 링크 ID 는 무시)

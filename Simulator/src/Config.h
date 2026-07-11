@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file Config.h
  * @brief 시뮬레이터 환경설정 구조체
 */
@@ -44,7 +44,7 @@ typedef struct sConfig
 	double		dfMaxLon;
 	double		dfMaxLat;
 
-	// [route] 경로 생성
+	// [경로] 경로 생성
 	int			nRouteMinM;			// 최소 경로 길이 (m)
 	int			nRouteMaxLinks;		// 최대 연결 링크 수
 	int			nSeedCandidates;	// 시작 링크 후보 수

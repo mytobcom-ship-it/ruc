@@ -70,7 +70,7 @@ private:
 	PGRID_INFO						m_pstGridInfoList;					// 그리드별 세그먼트 범위 로딩 메모리
 	PGRID_SGMT_INFO					m_pstGridSgmtInfoList;				// 그리드별 세그먼트 정보 로딩 메모리
 	PLINK_SGMT_INFO					m_pstLinkSgmtInfoList;				// 링크별 세그먼트 정보 로딩 메모리
-	mapLinkInfo						*m_mapLinkInfoList;					// 세그먼트별 링크 정보 (key:링크 ID)
+	mapLinkInfo						*m_mapLinkInfoList;					// 세그먼트별 링크 정보 (키:링크 ID)
 	PTURN_INFO						m_pstTurnInfoList;					// 시작 링크 기준으로 연결된 링크 회전 정보 로딩 메모리
 };
 

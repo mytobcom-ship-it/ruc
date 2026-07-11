@@ -84,7 +84,7 @@ int CThread::GetThreadId()
 /**
  * @brief 쓰레드 생성
  * @param[in] context 쓰레드 전달 데이터
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CThread::start(void *context)
 {
@@ -177,5 +177,5 @@ long CThread::InterlockedIncrement(volatile long *val)
 */
 long CThread::InterlockedDecrement(volatile long *val)
 {
-	return --(*val); // unsafe
+	return --(*val); // 비안전
 }

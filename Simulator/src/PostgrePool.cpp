@@ -46,7 +46,7 @@ CPostgrePool::~CPostgrePool()
  * @param[in] nMinConnect 최소 접속 수
  * @param[in] nMaxConnect 최대 접속 수
  * @param[in] nTimeOut 데이터베이스 연결 검사 (초)
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CPostgrePool::InitializePool(string strUserID, string strPassword, string strDataBase, 
 		string strHost, int nPort, int nMinConnect, int nMaxConnect, int nTimeOut)
@@ -119,7 +119,7 @@ void CPostgrePool::UninitializePool()
 
 /**
  * @brief DB 연결
- * @return DB 연결 핸들 값, nullptr 
+ * @return DB 연결 핸들 값, nullptr
 */
 PGconn *CPostgrePool::createConnection()
 {
@@ -287,7 +287,7 @@ void CPostgrePool::keepPoolAlive()
 /**
  * @brief DB 연결 상태 확인
  * @param[in] pcHandle DB 연결 핸들 값
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CPostgrePool::pingConnection(PGconn *pcHandle)
 {

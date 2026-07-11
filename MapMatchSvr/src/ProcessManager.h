@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file ProcessManager.h
  * @brief 작업용 클래스 헤더 파일
 */
@@ -125,7 +125,7 @@ public:
 	bool StartProcess(const char *pszStartDate, const char *pszDriveID, const char *pszOperID);
 	bool ProcessRawLog(const sRawLogInfo& stRawLogInfo, uint64& qwInOutLinkID,
 		MATCH_LINK_INFO *pstMatchLinkInfo, const ALT_MATCH_CTX *pstAltCtx = nullptr);
-	// 반경 밖이라도 최근접 세그먼트 좌표·교차거리 탐색(진단용, 방위각 무시, Begin) (2026-07-10 최정우 추가)
+	// 반경 밖 최근접 세그먼트 탐색(진단용) — INTERSECT_LEN(GPS↔세그먼트 교차점 거리) 확보
 	bool FindNearestSegment(const sRawLogInfo& stRawLogInfo, MATCH_LINK_INFO *pstMatchLinkInfo);
 	// 진단반경(MM_DIAG_RADIUS_M) 초과여도 기하 최근접 1건 (SKIP 참고용, 세션 미갱신) (2026-07-10 최정우 수정)
 	bool FindGeomNearestSegment(const sRawLogInfo& stRawLogInfo, MATCH_LINK_INFO *pstMatchLinkInfo);
@@ -134,7 +134,7 @@ private:
 	void BuildMapMatchInput(const sRawLogInfo& stRawLogInfo, MAP_MATCH_INPUT *pstMapMatchInput,
 		uint64 qwLinkID, const ALT_MATCH_CTX *pstAltCtx) const;
 	sint16 CalcAdaptiveRadius(sint16 nAccuracyM) const;
-	// 지정 반경(stMapMatchInput.nRadius)으로 Continue→Begin 1회 시도 (widen-on-miss 재시도용) (2026-07-10 최정우 추가)
+	// 지정 반경(stMapMatchInput.nRadius)으로 Continue→시작 1회 시도 (widen-on-miss 재시도용) (2026-07-10 최정우 추가)
 	bool AttemptMatch(const sRawLogInfo& stRawLogInfo, MAP_MATCH_INPUT& stMapMatchInput,
 		uint64& qwInOutLinkID, uint64 qwPrevLinkId, MATCH_LINK_INFO *pstMatchLinkInfo,
 		const ALT_MATCH_CTX *pstAltCtx);
@@ -155,9 +155,8 @@ private:
 	double							m_dfRadiusScale;					// config radius_scale — 검색반경 = scale × ACCURACY_M (2026-07-08 최정우)
 	sint16							m_nRadiusMin;						// config radius_min — 적응형 검색 반경 하한 (m) (2026-07-08 최정우)
 	sint16							m_nRadiusMax;						// config radius_max — 적응형 검색 반경 상한 (m) (2026-07-08 최정우)
-	ALTITUDE_SCORE_CONFIG			m_stAltitudeConfig;					// config altitude_* — 연속 맵매칭 고도 보조 점수
-	// double							m_dfAccuracyK;						// (구) config accuracy_k (2026-07-08 최정우)
-	uint64							m_qwLinkID;							// 맵 매칭 성공시 링크 ID (연속 맵 매칭시 사용)
+	ALTITUDE_SCORE_CONFIG			m_stAltitudeConfig;
+	uint64							m_qwLinkID;
 	uint32							m_dwMaxDistance;					// 연속 맵매칭시 Heading 유효거리
 	char							m_szStartDate[14+1];				// 맵 매칭 요청 SEQ 1번 저장 일시
 	char							m_szDriveID[20+1];					// 주행 ID

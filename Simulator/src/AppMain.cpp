@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file AppMain.cpp
  * @brief RUC 맵매칭 시뮬레이터 데몬 main
 */
@@ -107,7 +107,7 @@ static bool LoadConfig(const string& strFile, SIM_CONFIG& stConfig, int& nLogLev
 	stConfig.dfMaxLon = GetProfileDouble(cIni, "area", "max_lon", 127.10);
 	stConfig.dfMaxLat = GetProfileDouble(cIni, "area", "max_lat", 37.62);
 
-	// [route]
+	// [경로]
 	cIni.GetProfileInt("route", "min_m", 2000, stConfig.nRouteMinM);
 	cIni.GetProfileInt("route", "max_links", 20, stConfig.nRouteMaxLinks);
 	cIni.GetProfileInt("route", "seed_candidates", 20, stConfig.nSeedCandidates);

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file TurnInfoLoader.cpp
  * @brief MOCT TURNINFO.dbf 회전 제한 정보 로더 소스 파일
 */
@@ -92,7 +92,7 @@ uint8 CTurnInfoLoader::ParseTurnOper(const string& strTurnOper)
 /**
  * @brief TURNINFO.dbf 로드
  * @param[in] strDbfPath TURNINFO.dbf 경로
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CTurnInfoLoader::Load(const string& strDbfPath)
 {

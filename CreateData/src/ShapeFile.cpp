@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file ShapeFile.cpp
  * @brief ESRI Shapefile(.shp) + 속성(.dbf) 자체 리더 클래스 소스 파일
  * @remark host(x86_64) 는 little-endian 가정. (.shp 의 double/정수 본문은 little-endian)
@@ -124,7 +124,7 @@ CShapeFile::~CShapeFile()
 /**
  * @brief .shp + .dbf 로드
  * @param[in] strShpFile .shp 파일 경로
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CShapeFile::Open(const string& strShpFile)
 {
@@ -174,7 +174,7 @@ void CShapeFile::Close()
 /**
  * @brief .shp 형상 파일 파싱
  * @param[in] strShpFile .shp 파일 경로
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CShapeFile::LoadShp(const string& strShpFile)
 {
@@ -267,7 +267,7 @@ bool CShapeFile::LoadShp(const string& strShpFile)
 /**
  * @brief .dbf 속성 파일 파싱 (dBASE III)
  * @param[in] strDbfFile .dbf 파일 경로
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CShapeFile::LoadDbf(const string& strDbfFile)
 {
@@ -337,7 +337,7 @@ bool CShapeFile::LoadDbf(const string& strDbfFile)
 
 /**
  * @brief Point 형상 구하기
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CShapeFile::GetPoint(uint32 dwIndex, POINT& stPoint) const
 {
@@ -350,7 +350,7 @@ bool CShapeFile::GetPoint(uint32 dwIndex, POINT& stPoint) const
 
 /**
  * @brief PolyLine 형상 구하기
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CShapeFile::GetPolyLine(uint32 dwIndex, vector<POINT>& vtPoints) const
 {
@@ -363,7 +363,7 @@ bool CShapeFile::GetPolyLine(uint32 dwIndex, vector<POINT>& vtPoints) const
 
 /**
  * @brief 필드 존재 여부
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CShapeFile::HasField(const string& strField) const
 {
@@ -373,7 +373,7 @@ bool CShapeFile::HasField(const string& strField) const
 
 /**
  * @brief 레코드 필드 원본 값(trim) 구하기
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CShapeFile::GetRawField(uint32 dwIndex, const string& strField, string& strValue) const
 {
@@ -400,7 +400,7 @@ bool CShapeFile::GetRawField(uint32 dwIndex, const string& strField, string& str
 
 /**
  * @brief 필드 문자열 값
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CShapeFile::GetString(uint32 dwIndex, const string& strField, string& strValue) const
 {

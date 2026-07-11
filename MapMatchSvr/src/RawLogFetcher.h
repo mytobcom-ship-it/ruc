@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file RawLogFetcher.h
  * @brief 원시 GPS 로그 DB 폴링 및 워커 큐 적재 클래스 헤더 파일
 */
@@ -10,6 +10,7 @@
 #include <vector>
 #include "TypeDefine.h"
 #include "MessageType.h"
+#include "ConfigDefaults.h"
 #include "SingleThread.h"
 #include "PostgrePool.h"
 #include "ThreadPool.h"
@@ -17,13 +18,6 @@
 
 using namespace zsummer::log4z;
 using namespace std;
-
-#define FETCH_LIMIT_DEFAULT				500
-#define FETCH_INTERVAL_DEFAULT			500
-#define QUEUE_PAUSE_COUNT_DEFAULT		400
-#define QUEUE_MAX_COUNT_DEFAULT			800
-#define QUEUE_BUSY_MIN_DEFAULT			2000
-#define QUEUE_BUSY_MAX_DEFAULT			10000
 
 /**
  * @class CRawLogFetcher
@@ -42,12 +36,12 @@ public:
 		const string& strSelectSQL, const string& strUpdateSQL,
 		int nWorkerThreads, uint8 nCoordinateType,
 		volatile bool *pbRun,
-		int nFetchLimit = FETCH_LIMIT_DEFAULT,
-		int nFetchInterval = FETCH_INTERVAL_DEFAULT,
-		int nQueuePauseCount = QUEUE_PAUSE_COUNT_DEFAULT,
-		int nQueueMaxCount = QUEUE_MAX_COUNT_DEFAULT,
-		int nQueueBusyMin = QUEUE_BUSY_MIN_DEFAULT,
-		int nQueueBusyMax = QUEUE_BUSY_MAX_DEFAULT);
+		int nFetchLimit = CFG_DEF_LIMIT,
+		int nFetchInterval = CFG_DEF_FETCH_INTVL,
+		int nQueuePauseCount = CFG_DEF_Q_PAUSE_CNT,
+		int nQueueMaxCount = CFG_DEF_Q_MAX_CNT,
+		int nQueueBusyMin = CFG_DEF_Q_BUSY_MIN,
+		int nQueueBusyMax = CFG_DEF_Q_BUSY_MAX);
 
 	static bool RunRecover(CPostgrePool *pcPostgrePool,
 		const string& strRecoverSQL);
@@ -64,7 +58,7 @@ private:
 	bool ParseRow(PGresult *pcResult, int nRow, sRawLogInfo *pstRawLogInfo);
 	static bool ExtractRowPk(PGresult *pcResult, int nRow,
 		string *pstrTripId, string *pstrGpsSeq);
-	// parse 실패 행 PROCESSING 해제 — Worker BulkRelease 와 동일 [rawgps_update] $3=0
+	// 파싱 실패 행 PROCESSING 해제 — Worker BulkRelease 와 동일 [rawgps_update] $3=0
 	bool ReleaseReservedRows(PGconn *pcConn,
 		const string *pstrTripIds, const string *pstrGpsSeqs,
 		size_t nCount);
@@ -75,10 +69,10 @@ private:
 	static time_t ParseDateTime(const char *pszDateTime);
 
 private:
-	CPostgrePool					*m_pcPostgrePool;					// DB connection pool
+	CPostgrePool					*m_pcPostgrePool;					// DB 커넥션 풀
 	CThreadPool						*m_pcThreadPool;					// 워커 ThreadPool (Enqueue 대상)
 	string							m_strSelectSQL;						// [rawgps_select] SQL
-	string							m_strUpdateSQL;						// [rawgps_update] parse-fail release(0) 공용
+	string							m_strUpdateSQL;						// [rawgps_update] 파싱-fail release(0) 공용
 	volatile bool					*m_pbRun;							// 서버 실행 플래그
 	int								m_nWorkerThreads;					// 워커 스레드 수 (hash % N)
 	uint8							m_nCoordinateType;					// GPS 좌표 측지계 (ParseRow)

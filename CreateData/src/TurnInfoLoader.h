@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file TurnInfoLoader.h
  * @brief MOCT TURNINFO.dbf 회전 제한 정보 로더 헤더 파일
 */

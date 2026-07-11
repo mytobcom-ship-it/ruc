@@ -1,6 +1,6 @@
 /**
  * @file PostgrePool.h
- * @brief Postgre Connection Pool 클래스 헤더 파일
+ * @brief Postgre DB 커넥션 풀 클래스 헤더 파일
 */
 #ifndef __POSTGREPOOL_H__
 #define __POSTGREPOOL_H__

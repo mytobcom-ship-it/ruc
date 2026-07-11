@@ -9,7 +9,7 @@
  * @param[in] data 데이터
  * @param[in] delimiter 구분자
  * @param[out] pvtStringList 문자열 결과 값
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CUtil::StringSplit(string data, string delimiter, vector<string> *pvtStringList)
 {
@@ -33,7 +33,7 @@ bool CUtil::StringSplit(string data, string delimiter, vector<string> *pvtString
  * @param[in] data 데이터
  * @param[in] delimiter 구분자
  * @param[out] pvtIntList 정수형 결과 값
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CUtil::StringSplit(string data, string delimiter, vector<int> *pvtIntList)
 {
@@ -57,7 +57,7 @@ bool CUtil::StringSplit(string data, string delimiter, vector<int> *pvtIntList)
  * @param[in] data 데이터
  * @param[in] delimiter 구분자
  * @param[out] psetIntList 정수형 결과 값
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CUtil::StringSplit(string data, string delimiter, set<uint16> *psetIntList)
 {
@@ -96,7 +96,7 @@ bool CUtil::StringSplit(string data, string delimiter, set<uint16> *psetIntList)
  * @param[in] data 데이터
  * @param[in] delimiter 구분자
  * @param[out] pmapEntries 결과 값
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CUtil::StringSplit(string data, string delimiter, map<string, string> *pmapEntries)
 {
@@ -145,7 +145,7 @@ void CUtil::SetLower(char *pszData)
  * @brief 문자열 characterset 변환
  * @param[in] inBuff 변환전 문자열
  * @param[out] outBuff 변환된 문자열
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CUtil::SetEucKrToUtf8(string inBuff, string& outBuff)
 {
@@ -205,7 +205,7 @@ void CUtil::Sleep(int sec, int micro)
 /**
  * @brief 문자열이 숫자인지 검사
  * @param[in] data 검사 문자열
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CUtil::Isdigit(string data)
 {
@@ -215,7 +215,7 @@ bool CUtil::Isdigit(string data)
 /**
  * @brief 문자열이 정수,실수 숫자인지 검사
  * @param[in] data 검사 문자열
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CUtil::Isdecimal(string data)
 {

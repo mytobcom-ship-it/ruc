@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file MatchTrace.h
  * @brief 맵매칭 후보·비용 디버그 로그 (LOGFMTD — config level=1 DEBUG 이하)
 */
@@ -13,7 +13,7 @@
 
 /**
  * @struct sMatchTraceCtx
- * @brief GPS 1건 맵매칭 trace 컨텍스트 (ProcessManager → MapMatch)
+ * @brief GPS 1건 맵매칭 추적 컨텍스트 (ProcessManager → MapMatch)
 */
 typedef struct sMatchTraceCtx
 {
@@ -42,8 +42,8 @@ class CMatchTrace
 {
 public:
 	/**
-	 * @brief 맵매칭 trace·input·후보·당선 winner 디버그 로그 출력
-	 * @param[in] pstCtx GPS 1건 trace 컨텍스트
+	 * @brief 맵매칭 추적·input·후보·당선 winner 디버그 로그 출력
+	 * @param[in] pstCtx GPS 1건 추적 컨텍스트
 	 * @param[in] stSgmtMatchInput 세그먼트 매칭 입력
 	 * @param[in] listCandidates 후보 목록
 	 * @param[in] stWinner 최종 선택 링크

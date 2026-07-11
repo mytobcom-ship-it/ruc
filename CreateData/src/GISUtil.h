@@ -113,9 +113,9 @@ typedef struct sSgmtInfo
 typedef struct sSgmtMatchRes
 {
 	POINT							stMatchPoint;						// 매칭 X,Y 좌표
-	double							dfSgmtMatchLen;						// 세그먼트 시작점부터 교차점까지의 거리
-	double							dfIntersectLenSgmt;					// 요청 좌표와 세그먼트 교차점까지의 거리
-	double							dfCost;								// 소프트 비용 = 수직거리(m) + w_a·|방위각차| (2026-07-08 최정우 추가)
+	double							dfSgmtMatchLen;						// 세그먼트 시작점부터 교차점까지 거리(m)
+	double							dfIntersectLenSgmt;					// GPS 좌표와 세그먼트 교차점까지 거리(m) — DB INTERSECT_LEN
+	double							dfCost;								// 소프트 비용 = INTERSECT_LEN(m) + w_a·|방위각차| (2026-07-08 최정우 추가)
 	sint16							nDirAngleDiff;						// 주행방향 각도 차이
 	uint64							qwLinkID;							// 링크 ID
 

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file SimTypes.h
  * @brief 시뮬레이터 공용 자료형
 */

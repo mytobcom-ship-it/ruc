@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file ProcessManager.cpp
  * @brief 작업용 클래스 소스 파일
 */
@@ -78,7 +78,7 @@ CProcessManager::~CProcessManager()
  * @param[in] nRadiusMin config radius_min — 적응형 검색 반경 하한 (m) (2026-07-08 최정우)
  * @param[in] nRadiusMax config radius_max — 적응형 검색 반경 상한 (m) (2026-07-08 최정우)
  * @param[in] stAltitudeConfig config altitude_* — 연속 맵매칭 고도 보조 점수
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CProcessManager::Initialize(const int nThreadId, CDataLoader *pcDataLoader, 
 		const uint8& nCoordinateType, const sint16& nRadius, const uint32& dwMaxDistance,
@@ -160,7 +160,7 @@ sint16 CProcessManager::CalcAdaptiveRadius(sint16 nAccuracyM) const
  * @brief RAW_LOG_INFO → MAP_MATCH_INPUT 변환
  * @param[in] stRawLogInfo 원시 GPS
  * @param[out] pstMapMatchInput 맵매칭 입력
- * @param[in] qwLinkID 직전 링크 ID (0이면 Begin 후보)
+ * @param[in] qwLinkID 직전 링크 ID (0이면 시작 후보)
  * @param[in] pstAltCtx 연속 맵매칭 고도 컨텍스트 (nullable)
  * @return void
  * @remark
@@ -203,11 +203,11 @@ void CProcessManager::BuildMapMatchInput(const sRawLogInfo& stRawLogInfo,
 }
 
 /**
- * @brief 실시간 GPS 1건 맵매칭 (Begin / Continue)
+ * @brief 실시간 GPS 1건 맵매칭 (시작 / Continue)
  * @param[in] stRawLogInfo 원시 GPS
  * @param[in,out] qwInOutLinkID 직전 링크 ID (device_key 세션). 성공 시 갱신
  * @param[out] pstMatchLinkInfo 맵매칭 결과
- * @return true(매칭 성공), false
+ * @return true(매칭 성공), false(실패)
 */
 bool CProcessManager::ProcessRawLog(const sRawLogInfo& stRawLogInfo, uint64& qwInOutLinkID,
 		MATCH_LINK_INFO *pstMatchLinkInfo, const ALT_MATCH_CTX *pstAltCtx)
@@ -224,7 +224,7 @@ bool CProcessManager::ProcessRawLog(const sRawLogInfo& stRawLogInfo, uint64& qwI
 	// RAW GPS → MAP_MATCH_INPUT 변환 (적응형 검색 반경 포함) (2026-07-08 최정우 주석 추가)
 	BuildMapMatchInput(stRawLogInfo, &stMapMatchInput, qwInOutLinkID, pstAltCtx);
 
-	// 1차: 적응형 반경으로 Continue→Begin 시도 (2026-07-10 최정우 수정)
+	// 1차: 적응형 반경으로 Continue→시작 시도 (2026-07-10 최정우 수정)
 	if (AttemptMatch(stRawLogInfo, stMapMatchInput, qwInOutLinkID, qwPrevLinkId, pstMatchLinkInfo, pstAltCtx))
 		return true;
 
@@ -247,22 +247,22 @@ bool CProcessManager::ProcessRawLog(const sRawLogInfo& stRawLogInfo, uint64& qwI
 	qwInOutLinkID = 0;
 
 	// 정식 매칭 실패 — ① 진단반경(MM_DIAG_RADIUS_M) 이내 최근접 (2026-07-10 최정우 수정)
-	//   MATCHED 아님 → SKIP·세션(qwLinkID/앵커) 미갱신, DB 에 참고용 MATCH_LAT/LON·INTERSECT_LEN 만 저장
+	//   MATCHED 아님 → SKIP·세션 미갱신, DB에 MATCH_LAT/LON·INTERSECT_LEN(GPS↔세그먼트 교차점 거리) 저장
 	if (FindNearestSegment(stRawLogInfo, pstMatchLinkInfo))
 	{
 		pstMatchLinkInfo->bOutOfRadius = true;
-		LOGFMTD("[#%02d] out-of-radius nearest captured!device=[%s] seq=[%u] intersect=[%.1fm]",
+		LOGFMTD("[#%02d] out-of-radius nearest captured!device=[%s] seq=[%u] intersect_len=[%.1fm]",
 			m_nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.dwSeqNo,
 			pstMatchLinkInfo->dfIntersectLenSgmt);
 		return false;
 	}
 
 	// ② 그리드에 후보 있으나 진단반경 초과 — 반경 무시 기하 최근접 (2026-07-10 최정우 수정)
-	//   동일하게 SKIP·세션 미갱신·DB 참고용 좌표·교차거리만 저장
+	//   동일하게 SKIP·세션 미갱신·INTERSECT_LEN(GPS↔세그먼트 교차점 거리) 저장
 	if (FindGeomNearestSegment(stRawLogInfo, pstMatchLinkInfo))
 	{
 		pstMatchLinkInfo->bOutOfRadius = true;
-		LOGFMTW("[#%02d] beyond-diag nearest captured!device=[%s] seq=[%u] intersect=[%.1fm] diag_max=[%dm]",
+		LOGFMTW("[#%02d] beyond-diag nearest captured!device=[%s] seq=[%u] intersect_len=[%.1fm] diag_max=[%dm]",
 			m_nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.dwSeqNo,
 			pstMatchLinkInfo->dfIntersectLenSgmt, MM_DIAG_RADIUS_M);
 		return false;
@@ -275,11 +275,11 @@ bool CProcessManager::ProcessRawLog(const sRawLogInfo& stRawLogInfo, uint64& qwI
 }
 
 /**
- * @brief 반경 밖이라도 최근접 세그먼트 좌표·교차거리 탐색(진단용) (2026-07-10 최정우 추가)
+ * @brief 반경 밖 최근접 세그먼트 탐색(진단용) — MATCH_LAT/LON·INTERSECT_LEN(GPS↔세그먼트 교차점 거리) 확보
  * @param[in] stRawLogInfo 원시 GPS
- * @param[out] pstMatchLinkInfo 최근접 세그먼트 결과(좌표·교차거리·링크정보)
+ * @param[out] pstMatchLinkInfo 최근접 세그먼트 결과(좌표·INTERSECT_LEN·링크정보)
  * @return true(최근접 후보 발견), false(진단 반경 내 후보 없음)
- * @remark 방위각 무시, Begin(연속 아님), 진단반경 MM_DIAG_RADIUS_M 이내.
+ * @remark 방위각 무시, 시작(연속 아님), 진단반경 MM_DIAG_RADIUS_M 이내.
  *         MATCHED 아님 — SKIP·세션 미갱신·DB 참고용만 (2026-07-10 최정우 수정)
 */
 bool CProcessManager::FindNearestSegment(const sRawLogInfo& stRawLogInfo,
@@ -289,7 +289,7 @@ bool CProcessManager::FindNearestSegment(const sRawLogInfo& stRawLogInfo,
 		return false;
 
 	MAP_MATCH_INPUT stDiagInput;
-	// 입력 재구성(고도 컨텍스트 없음, Begin) 후 방위각 무시·최대 반경으로 최근접 탐색 (2026-07-10 최정우 추가)
+	// 입력 재구성(고도 컨텍스트 없음, 시작) 후 방위각 무시·최대 반경으로 최근접 탐색 (2026-07-10 최정우 추가)
 	BuildMapMatchInput(stRawLogInfo, &stDiagInput, 0, nullptr);
 	stDiagInput.qwLinkID = 0;
 	stDiagInput.nAngle = NO_ANGLE;					// 순수 기하 최근접(방위각 필터 미적용)
@@ -297,7 +297,7 @@ bool CProcessManager::FindNearestSegment(const sRawLogInfo& stRawLogInfo,
 
 	MATCH_TRACE_CTX stTraceCtx;
 	FillMatchTraceCtx(stTraceCtx, m_nThreadId, stRawLogInfo, stDiagInput, 0, false, nullptr);
-	// GRID 기반 Begin 으로 최근접 세그먼트 1개 획득 (좌표는 /360000 역스케일되어 채워짐) (2026-07-10 최정우 수정)
+	// GRID 기반 시작 으로 최근접 세그먼트 1개 획득 (좌표는 /360000 역스케일되어 채워짐) (2026-07-10 최정우 수정)
 	return m_pcMapMatch->BeginMapMatch(stDiagInput, pstMatchLinkInfo, &stTraceCtx);
 }
 
@@ -321,14 +321,14 @@ bool CProcessManager::FindGeomNearestSegment(const sRawLogInfo& stRawLogInfo,
 }
 
 /**
- * @brief 지정 반경(stMapMatchInput.nRadius)으로 연속(Continue)→초기(Begin) 1회 시도 (2026-07-10 최정우 추가)
+ * @brief 지정 반경(stMapMatchInput.nRadius)으로 연속(Continue)→초기(시작) 1회 시도 (2026-07-10 최정우 추가)
  * @param[in] stRawLogInfo 원시 GPS
  * @param[in,out] stMapMatchInput 맵매칭 입력 (nRadius 등 호출측에서 세팅). 내부에서 qwLinkID/nAngle 갱신
  * @param[in,out] qwInOutLinkID 직전 링크 ID. 연속 실패 시 0, 성공 시 매칭 링크로 갱신
  * @param[in] qwPrevLinkId 트레이스용 직전 링크 ID
  * @param[out] pstMatchLinkInfo 맵매칭 결과
  * @param[in] pstAltCtx 고도 컨텍스트 (nullable)
- * @return true(매칭 성공), false
+ * @return true(매칭 성공), false(실패)
  * @remark widen-on-miss 재시도에서 동일 로직을 반경만 바꿔 재사용하기 위한 분리
 */
 bool CProcessManager::AttemptMatch(const sRawLogInfo& stRawLogInfo, MAP_MATCH_INPUT& stMapMatchInput,
@@ -375,7 +375,7 @@ bool CProcessManager::AttemptMatch(const sRawLogInfo& stRawLogInfo, MAP_MATCH_IN
  * @param[in] pszStartDate 맵 매칭 요청 SEQ 1번 저장 일시
  * @param[in] pszDriveID 매칭 요청 ID
  * @param[in] pszOperID 운영자 ID
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CProcessManager::StartProcess(const char *pszStartDate, const char *pszDriveID, const char *pszOperID)
 {
@@ -679,7 +679,7 @@ const double CProcessManager::GetDistance(POINT stPrePoint,
  * @param[in] stMatchPt 매칭 X,Y 좌표
  * @param[in] stPoint 요청 X,Y 좌표
  * @param[out] pnHeading 진행 각도(방위각)
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CProcessManager::GetDirAzimuth(POINT& stMatchPt, POINT& stPoint, sint16 *pnHeading)
 {

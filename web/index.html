@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Cache-Control" content="no-cache" />
   <title>RUC 맵매칭 GPS 뷰어</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
@@ -24,6 +25,16 @@
     }
     .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
     .line { display: inline-block; width: 18px; height: 3px; margin-right: 4px; vertical-align: middle; }
+    .road-dir-arrow { background: transparent; border: none; }
+    .tip-gps, .tip-match, .tip-skip {
+      font-size: 10px; font-weight: 700; padding: 1px 4px; border-radius: 3px;
+      box-shadow: 0 1px 2px rgba(0,0,0,.15); border-width: 1px; border-style: solid;
+    }
+    .tip-gps { color: #b71c1c; background: #fff; border-color: #e53935; }
+    .tip-match { color: #0d47a1; background: #fff; border-color: #1e88e5; }
+    .tip-skip { color: #e65100; background: #fff; border-color: #fb8c00; }
+    /* SKIP(3)·ERROR(4) 맵매칭 좌표(M) — 실패 표시 */
+    .tip-fail { text-decoration: line-through; opacity: 0.88; }
   </style>
 </head>
 <body>
@@ -32,17 +43,22 @@
       <select id="tripSelect"><option value="">로딩…</option></select>
     </label>
     <button id="btnReload" type="button">새로고침</button>
-    <label><input type="checkbox" id="chkPoll" /> 자동 갱신</label>
+    <label><input type="checkbox" id="chkPoll" checked /> 자동 갱신</label>
+    <label><input type="checkbox" id="chkFollow" checked /> 최신 Trip</label>
     <span id="status" style="font-size:12px;color:#64748b;"></span>
   </div>
   <div id="map"></div>
   <div id="legend">
-    <div><span class="line" style="background:#1e3a8a;"></span>주변 도로 (moct_link)</div>
-    <div><span class="dot" style="background:#e53935;"></span>GPS 원시</div>
-    <div><span class="dot" style="background:#1e88e5;"></span>맵매칭 성공 (MATCHED)</div>
-    <div><span class="dot" style="background:#fb8c00;"></span>SKIP (참고 좌표)</div>
+    <div><span class="line" style="background:#1e3a8a;"></span>주변 도로 (prim_link_info · PSF)</div>
+    <div style="padding-left:14px;color:#64748b;">▶ f_node → t_node 진행방향 (줌 14+)</div>
+    <div><span class="dot" style="background:#e53935;"></span>GPS 원시 <span style="color:#64748b;">(G순번)</span></div>
+    <div><span class="dot" style="background:#1e88e5;"></span>맵매칭 성공 <span style="color:#64748b;">(M순번)</span></div>
+    <div><span class="dot" style="background:#fb8c00;"></span>SKIP <span style="color:#64748b;">(M순번)</span></div>
+    <div><span style="text-decoration:line-through;color:#e65100;">M순번</span> 맵매칭 실패 <span style="color:#64748b;">(SKIP·ERROR)</span></div>
+    <div><span class="line" style="background:#94a3b8;height:0;border-top:2px dashed #94a3b8;"></span>GPS↔세그먼트 교차 <span style="color:#64748b;">(intersect_len)</span></div>
+    <div><span class="line" style="background:#e53935;height:0;border-top:2px dashed #e53935;"></span>GPS 궤적(순서 연결)</div>
   </div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="/app.js"></script>
+  <script src="/app.js?v=20260711prim"></script>
 </body>
 </html>

@@ -65,6 +65,7 @@ COMMENT ON COLUMN roadnet.prim_rawgps.gps_dt       IS 'INDEX①·②. GPS 측정
 COMMENT ON COLUMN roadnet.prim_rawgps.trip_event   IS '0:START, 1:NONE, 2:END';
 COMMENT ON COLUMN roadnet.prim_rawgps.drive_status IS '0:ON_ROAD, 1:IDLE, 2:PARKED, 3:TUNNELING';
 COMMENT ON COLUMN roadnet.prim_rawgps.match_status IS '0:PENDING, 1:MATCHED, 2:PROCESSING, 3:SKIP, 4:ERROR';
+COMMENT ON COLUMN roadnet.prim_rawgps.intersect_len IS 'GPS 좌표와 세그먼트 교차점까지 거리(m)';
 
 -- ---------------------------------------------------------------------------
 -- [3] 인덱스 (위치검증서버 PENDING 폴링 최적화)

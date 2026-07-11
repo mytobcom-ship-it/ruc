@@ -10,7 +10,7 @@
 
 /**
  * @class CMutex
- * @brief mutex 관리용 클래스 
+ * @brief mutex 관리용 클래스
 */
 class CMutex
 {

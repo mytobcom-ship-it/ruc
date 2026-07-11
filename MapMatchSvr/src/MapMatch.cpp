@@ -40,7 +40,7 @@ CMapMatch::~CMapMatch()
 /**
  * @brief 데이터 초기화
  * @param[in]
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CMapMatch::Initialize(CDataLoader *pcDataLoader)
 {
@@ -67,7 +67,7 @@ void CMapMatch::SetAltitudeConfig(const ALTITUDE_SCORE_CONFIG& stAltConfig)
  * @brief 초기 맵매칭
  * @param[in] stMapMatchInput 초기 맵매칭 입력 정보
  * @param[out] pstMatchLinkInfo 초기 맵매칭 응답 정보
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CMapMatch::BeginMapMatch(MAP_MATCH_INPUT stMapMatchInput, 
 		PMATCH_LINK_INFO pstMatchLinkInfo, PMATCH_TRACE_CTX pstTraceCtx)
@@ -111,7 +111,7 @@ bool CMapMatch::BeginMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 
 /**
  * @brief 반경 무시 기하 최근접 Begin — 진단반경 초과 SKIP 참고용 (2026-07-10 최정우 수정)
- * @remark MATCHED 아님. 좌표·교차거리만 확보, 세션 링크·앵커 갱신은 호출측에서 하지 않음.
+ * @remark MATCHED 아님. MATCH_LAT/LON·INTERSECT_LEN(GPS↔세그먼트 교차점 거리)만 확보.
 */
 bool CMapMatch::BeginGeomNearest(MAP_MATCH_INPUT stMapMatchInput, PMATCH_LINK_INFO pstMatchLinkInfo)
 {
@@ -152,7 +152,7 @@ bool CMapMatch::BeginGeomNearest(MAP_MATCH_INPUT stMapMatchInput, PMATCH_LINK_IN
  * @brief 연속 맵매칭
  * @param[in] stMapMatchInput 연속 맵매칭 입력 정보
  * @param[out] pstMatchLinkInfo 연속 맵매칭 응답 정보
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput, 
 		PMATCH_LINK_INFO pstMatchLinkInfo, PMATCH_TRACE_CTX pstTraceCtx)
@@ -185,7 +185,7 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 	stSgmtMatchInput.nRadius = nRadius;
 	stSgmtMatchInput.nDirAng = nAngle;
 	stSgmtMatchInput.nSpeed = stMapMatchInput.nSpeed;		// 방위각 가중치 적응용(속도) (2026-07-08 최정우 추가)
-	// 연속 맵매칭 고도 컨텍스트 — 세션 앵커·현재 GPS 고도 (Begin 미전달)
+	// 연속 맵매칭 고도 컨텍스트 — 세션 앵커·현재 GPS 고도 (시작 미전달)
 	stSgmtMatchInput.nAltitudeM = stMapMatchInput.nAltitudeM;
 	stSgmtMatchInput.nPrevAltitudeM = stMapMatchInput.nPrevAltitudeM;
 	stSgmtMatchInput.nPrevRoadType = stMapMatchInput.nPrevRoadType;
@@ -216,7 +216,7 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
  * @param[in,out] dfY Y 좌표
  * @param[in] nAngle 방위각
  * @param pstMatchLinkInfo 에러 코드 및 에러 메시지
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CMapMatch::IsValidCommonRequestValue(enum eCoordinateType& eCoordType, 
 		sint16& nRadius, double& dfX, double& dfY, sint16 nAngle, 
@@ -272,7 +272,7 @@ bool CMapMatch::IsValidCommonRequestValue(enum eCoordinateType& eCoordType,
  * @param[in] wErrorCode 에러 코드
  * @param[in] stMatchEntry 매칭 링크 정보
  * @param[out] pstMatchLinkInfo 결과 정보
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CMapMatch::SetResponseValue(uint16 wErrorCode, MATCH_ENTRY stMatchEntry, 
 		PMATCH_LINK_INFO pstMatchLinkInfo)
@@ -337,7 +337,7 @@ bool CMapMatch::SetResponseValue(uint16 wErrorCode, MATCH_ENTRY stMatchEntry,
 /**
  * @brief 측지계 코드 유효성 검사
  * @param[in] eCoordType 측지계 코드
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CMapMatch::IsValidCoordinateType(enum eCoordinateType& eCoordType)
 {
@@ -352,7 +352,7 @@ bool CMapMatch::IsValidCoordinateType(enum eCoordinateType& eCoordType)
  * @param[in] eCoordType 측지계 코드
  * @param[in,out] dfX X 좌표
  * @param[in,out] dfY Y 좌표
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CMapMatch::IsValidCoordinate(enum eCoordinateType& eCoordType, 
 		double *dfX, double *dfY)
@@ -371,7 +371,7 @@ bool CMapMatch::IsValidCoordinate(enum eCoordinateType& eCoordType,
 /**
  * @brief 검색 반경 유효성 검사
  * @param[in] nRadius 검색 반경
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CMapMatch::IsValidSearchRadius(sint16& nRadius)
 {
@@ -384,7 +384,7 @@ bool CMapMatch::IsValidSearchRadius(sint16& nRadius)
 /**
  * @brief 방위각 유효성 검사
  * @param[in] nAngle 방위각
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CMapMatch::IsValidAngle(sint16& nAngle)
 {
@@ -398,7 +398,7 @@ bool CMapMatch::IsValidAngle(sint16& nAngle)
 /**
  * @brief 최대 연속 측위 유효성 검사
  * @param[in] nSearchStep 최대 연속 측위 값
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CMapMatch::IsValidSearchStep(sint16& nSearchStep)
 {

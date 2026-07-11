@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file Vehicle.cpp
  * @brief 차량 주행 시뮬레이션 구현
 */

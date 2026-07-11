@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file DataDefine.h
  * @brief 각 데이터 정의 헤더 파일
 */
@@ -92,25 +92,25 @@ enum eLinkNodeType : uint8
  * @brief 연속 맵매칭 고도(ALTITUDE_M) 보조 점수 설정 — config [mapmatch] altitude_*
  * @remark Begin 맵매칭 미적용. altitude_weight=0 이면 전체 비활성.
  *
- * 고도 보조 비용(음수=유리·양수=불리)은 기존 dfCost(수직거리+방위각)에 가산.
+ * 고도 보조 비용(음수=유리·양수=불리)은 기존 dfCost(INTERSECT_LEN+방위각)에 가산.
  *   |Δalt| ≤ altitude_gap:
  *     · 같은 ROAD_TYPE  → −altitude_bonus
  *     · 호환 ROAD_TYPE  → 0  (고가↔교량)
  *     · 불일치          → +altitude_penalty
  *   |Δalt| > altitude_gap:
  *     · altitude_weight × (|Δalt| − altitude_gap) + 방향 패널티
- *     · 상승(Δ>gap) 시 지하 후보 +penalty / 하강(Δ<−gap) 시 고가·교량 후보 +penalty
+ *     · 상승(Δ>차이) 시 지하 후보 +페널티 / 하강(Δ<−차이) 시 고가·교량 후보 +페널티
  *   |Δalt|/수평거리 > altitude_slope → 고도 신호 무시(0)
  *
- * 예) gap=8, bonus=3, penalty=10, weight=0.5 / 직전·현재 100m·106m, 같은 고가
+ * 예) 차이=8, 보너스=3, 페널티=10, 가중치=0.5 / 직전·현재 100m·106m, 같은 고가
  *     → Δ=6 ≤ 8 → 고도 보조 −3m (후보 우선)
 */
 typedef struct sAltitudeScoreConfig
 {
 	sint16							nGap;								// config altitude_gap — 직전 매칭 고도와 허용 차이(m)
-	sint16							nBonus;								// config altitude_bonus — gap 안·같은 ROAD_TYPE 비용 감산(m)
-	sint16							nPenalty;							// config altitude_penalty — gap 안·ROAD_TYPE 불일치 추가 비용(m)
-	double							dfWeight;							// config altitude_weight — gap 초과 시 고도차 가중. 0=비활성
+	sint16							nBonus;								// config altitude_bonus — 차이 안·같은 ROAD_TYPE 비용 감산(m)
+	sint16							nPenalty;							// config altitude_penalty — 차이 안·ROAD_TYPE 불일치 추가 비용(m)
+	double							dfWeight;							// config altitude_weight — 차이 초과 시 고도차 가중. 0=비활성
 	double							dfSlope;							// config altitude_slope — |Δ고도|/수평거리 상한. 초과 시 고도 무시
 
 	sAltitudeScoreConfig() :
@@ -171,9 +171,9 @@ typedef struct sMatchEntry
 {
 	double							dfMatchX;							// 매핑 X 좌표
 	double							dfMatchY;							// 매핑 Y 좌표
-	double							dfSgmtMatchLen;						// 세그먼트 시작 좌표에서 교차점 거리
-	double							dfIntersectLenSgmt;					// 요청 좌표에서 세그먼트 교차점까지의 거리
-	double							dfCost;								// 소프트 비용 = 수직거리(m) + w_a·|방위각차| (링크 선택 기준) (2026-07-08 최정우 추가)
+	double							dfSgmtMatchLen;						// 세그먼트 시작점부터 교차점까지 거리(m)
+	double							dfIntersectLenSgmt;					// GPS 좌표와 세그먼트 교차점까지 거리(m) — DB INTERSECT_LEN
+	double							dfCost;								// 소프트 비용 = INTERSECT_LEN(m) + w_a·|방위각차| (링크 선택 기준) (2026-07-08 최정우 추가)
 	sint16							nDirAngleDiff;						// 주행방향 각도 차이
 	uint64							qwLinkID;							// 링크 ID
 	uint16							wLenFromLink;						// 링크의 시작점에서 부터 매핑된 세그먼트 시작점까지 거리
@@ -226,7 +226,7 @@ typedef struct sMatchEntry
 		//return dfIntersectLenSgmt < data.dfIntersectLenSgmt;
 
 		// 소프트 비용(거리 + 방위각 가중) 최소 우선.
-		// 비용 동일 시 수직거리로 tie-break (2026-07-08 최정우 수정)
+		// 비용 동일 시 INTERSECT_LEN(GPS↔세그먼트 교차점 거리)로 tie-break (2026-07-08 최정우 수정)
 		if (dfCost != data.dfCost)
 			return dfCost < data.dfCost;
 		return dfIntersectLenSgmt < data.dfIntersectLenSgmt;

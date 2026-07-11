@@ -1,0 +1,470 @@
+[
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "Mutex.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/Mutex.cpp"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "Condition.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/Condition.cpp"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "Clock.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/Clock.cpp"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "CodeMap.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/CodeMap.cpp"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "LoggerManager.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/LoggerManager.cpp"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "log4z.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/log4z.cpp"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "CoordConvert.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/CoordConvert.cpp"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "Coordinate.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/Coordinate.cpp"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "Util.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/Util.cpp"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "GISUtil.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/GISUtil.cpp"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "IniReader.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/IniReader.cpp"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "Thread.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/Thread.cpp"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "ThreadPool.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/ThreadPool.cpp"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "SingleThread.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/SingleThread.cpp"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "SQLAccessor.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/SQLAccessor.cpp"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "DataLoader.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/DataLoader.cpp"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "PostgrePool.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/PostgrePool.cpp"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "ContinueMapMatch.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/ContinueMapMatch.cpp"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "BeginMapMatch.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/BeginMapMatch.cpp"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "MatchTrace.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/MatchTrace.cpp"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "MapMatch.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/MapMatch.cpp"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "ProcessManager.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/ProcessManager.cpp"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "RawLogFetcher.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/RawLogFetcher.cpp"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "RawLogWorker.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/RawLogWorker.cpp"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "Server.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/Server.cpp"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-m64",
+      "-Wall",
+      "-g3",
+      "-O0",
+      "-std=c++11",
+      "-Wno-write-strings",
+      "-I.",
+      "-I/usr/include",
+      "-I/usr/pgsql-18/include",
+      "AppMain.cpp"
+    ],
+    "directory": "/home/mytobcom/ruc/MapMatchSvr/src",
+    "file": "/home/mytobcom/ruc/MapMatchSvr/src/AppMain.cpp"
+  }
+]

@@ -1,6 +1,6 @@
-﻿/**
+/**
  * @file ThreadPool.h
- * @brief Thread Pool 관리용 클래스 헤더 파일
+ * @brief 스레드 풀 관리용 클래스 헤더 파일
 */
 #ifndef __THREADPOOL_H__
 #define __THREADPOOL_H__
@@ -61,16 +61,17 @@ public:
 	int GetWaitingThreads();
 	int GetActiveThreads();
 	int GetStoppedThreads();
-	// #8: 워커 종료 요청 후 idle 대기·큐 잔여 batch 추출
+	// #8: 워커 종료 요청 후 유휴 대기·큐 잔여 batch 추출
 	void RequestShutdown();
 	bool WaitForIdle(int nMaxWaitMs);
+	bool WaitForActiveIdle(int nMaxWaitMs);
 	void DrainQueuedBatches(vector<RAW_LOG_BATCH> *pvtBatches);
 
 private:
 	Runnable						*m_pcRunnable;						// 작업 쓰레드 클래스
 	CQueue<RAW_LOG_BATCH>			*m_paQueues;						// 워커별 고정 큐
 	CMutex							*m_paMutex;							// 워커별 대기 mutex
-	CCondition						*m_paCondition;						// 워커별 signal
+	CCondition						*m_paCondition;						// 워커별 시그널
 
 private:
 	friend class 					CThreadPoolWorker;

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file IniReader.cpp
  * @brief ini 파일 읽기 클래스 소스 파일
 */
@@ -39,7 +39,7 @@ CIniReader::CIniReader(const string strFile)
 		m_strPath = "";
 		m_strFile = strFile;
 	}
-	else												// Key
+	else												// 키
 	{
 		m_strPath = strFile.substr(0, nIndex);
 		m_strFile = strFile.substr(nIndex, strFile.length());
@@ -66,7 +66,7 @@ CIniReader::~CIniReader()
 
 /**
  * @brief ini 파일 읽기
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CIniReader::Open()
 {
@@ -95,7 +95,7 @@ bool CIniReader::Open()
 
 /**
  * @brief ini 파일 줄 단위로 읽기
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CIniReader::ReadIniFile()
 {
@@ -131,11 +131,11 @@ bool CIniReader::ReadIniFile()
 			transform(strToken.begin(), strToken.end(), strToken.begin(), ::toupper);
 			m_mapSection.insert(pair<string, void *>(strToken, pCurrentSection));
 		}
-		else												// Key
+		else												// 키
 		{
 			if (pCurrentSection == nullptr) continue;
 
-			// key=value 한 줄을 Key/Value 로 분리 (2026-07-08 최정우 주석 추가)
+			// 키=값 한 줄을 키/Value 로 분리 (2026-07-08 최정우 주석 추가)
 			if (!ReadKeyValue(pPos, szToken, szValue)) continue;
 
 			string strToken(szToken);
@@ -148,11 +148,11 @@ bool CIniReader::ReadIniFile()
 }
 
 /**
- * @brief ini 파일에서 Key/Value 로 분리
- * @param[in] pBuf ini 파일에서 읽은 key/value 한쌍
- * @param[out] pKey Key 값
- * @param[out] pVal Value 값
- * @return true, false
+ * @brief ini 파일에서 키/Value 로 분리
+ * @param[in] pBuf ini 파일에서 읽은 키/value 한쌍
+ * @param[out] pKey 키 값
+ * @param[out] pVal 값 값
+ * @return true(성공), false(실패)
 */
 bool CIniReader::ReadKeyValue(char *pBuf, char *pKey, char *pVal)
 {
@@ -165,7 +165,7 @@ bool CIniReader::ReadKeyValue(char *pBuf, char *pKey, char *pVal)
 	// = 가 없는 경우
 	if (*pBuf == '\0') return false;
 
-	// Key 우측 공백 무시
+	// 키 우측 공백 무시
 	*pPos = '\0';
 	pPos--;
 	while ((pPos >= pKey) && 
@@ -175,7 +175,7 @@ bool CIniReader::ReadKeyValue(char *pBuf, char *pKey, char *pVal)
 		pPos--;
 	}
 
-	// Value
+	// 값
 	pPos = pVal;
 	pBuf++;
 	while ((*pBuf == ' ') || (*pBuf == '\t'))
@@ -184,7 +184,7 @@ bool CIniReader::ReadKeyValue(char *pBuf, char *pKey, char *pVal)
 	while (*pBuf != '\0')
 		*pPos++ = *pBuf++;
 
-	// Value 우측 공백 무시
+	// 값 우측 공백 무시
 	*pPos = '\0';
 	pPos--;
 	while ((pPos >= pVal) && 
@@ -198,12 +198,12 @@ bool CIniReader::ReadKeyValue(char *pBuf, char *pKey, char *pVal)
 }
 
 /**
- * @brief ini 파일에서 Section, Key 에 해당하는 문자열 값
+ * @brief ini 파일에서 Section, 키 에 해당하는 문자열 값
  * @param[in] strSection Section 명
- * @param[in] strKey Key Key 명
- * @param[in] strDefault Section, Key 에 해당하는 값이 없을 경우 기본 값
- * @param[out] strValue Section, Key 에 해당하는 문자열 값
- * @return true, false
+ * @param[in] strKey 키 키 명
+ * @param[in] strDefault Section, 키 에 해당하는 값이 없을 경우 기본 값
+ * @param[out] strValue Section, 키 에 해당하는 문자열 값
+ * @return true(성공), false(실패)
 */
 bool CIniReader::GetProfileStr(const string strSection, const string strKey, const string strDefault, string& strValue)
 {
@@ -235,12 +235,12 @@ bool CIniReader::GetProfileStr(const string strSection, const string strKey, con
 }
 
 /**
- * @brief ini 파일에서 Section, Key 에 해당하는 숫자형 값
+ * @brief ini 파일에서 Section, 키 에 해당하는 숫자형 값
  * @param[in] strSection Section 명
- * @param[in] strKey Key Key 명
- * @param[in] nDefault Section, Key 에 해당하는 값이 없을 경우 기본 값
- * @param[out] nValue Section, Key 에 해당하는 숫자형 값
- * @return true, false
+ * @param[in] strKey 키 키 명
+ * @param[in] nDefault Section, 키 에 해당하는 값이 없을 경우 기본 값
+ * @param[out] nValue Section, 키 에 해당하는 숫자형 값
+ * @return true(성공), false(실패)
 */
 bool CIniReader::GetProfileInt(const string strSection, const string strKey, const int nDefault, int& nValue)
 {
@@ -272,12 +272,12 @@ bool CIniReader::GetProfileInt(const string strSection, const string strKey, con
 }
 
 /**
- * @brief ini 파일에서 Section, Key 에 해당하는 값 목록
+ * @brief ini 파일에서 Section, 키 에 해당하는 값 목록
  * @param[in] strSection Section 명
- * @param[in] strKey Key Key 명
- * @param[out] strValue Section, Key 에 해당하는 값 목록
- * @param[in,out] nCount Section, Key 에 해당하는 값 목록 갯수
- * @return true, false
+ * @param[in] strKey 키 키 명
+ * @param[out] strValue Section, 키 에 해당하는 값 목록
+ * @param[in,out] nCount Section, 키 에 해당하는 값 목록 갯수
+ * @return true(성공), false(실패)
 */
 bool CIniReader::GetProfileArrayStr(const string strSection, const string strKey, string *strValue, int& nCount)
 {

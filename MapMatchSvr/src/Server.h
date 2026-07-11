@@ -15,6 +15,7 @@
 #include <memory>
 #include "TypeDefine.h"
 #include "Config.h"
+#include "ConfigDefaults.h"
 #include "log4z.h"
 #include "Util.h"
 #include "Thread.h"
@@ -34,12 +35,13 @@
 using namespace zsummer::log4z;
 using namespace std;
 
-#define SERVER_RUN_WAIT_MS				1000								// run 루프 cond 대기 (ms)
-#define SERVER_MONITOR_INTERVAL_SEC		30									// 상태 로그 주기 (초)
-#define TTL_SEC_DEFAULT					3600								// trip_id 세션 유지 기본 (초)
-#define SHUTDOWN_WAIT_DEFAULT			30000								// 종료 시 워커 처리 완료 대기 기본 (ms)
-#define RECOVER_RETRY_MAX				3									// 기동 recover 재시도 횟수 (#15)
-#define RECOVER_RETRY_INTERVAL_MS		2000								// 기동 recover 재시도 간격 (ms, #15)
+// 단위: ms (2026-07-11 최정우 주석 추가)
+#define SERVER_RUN_WAIT					CFG_DEF_RUN_WAIT
+// 단위: sec (2026-07-11 최정우 주석 추가)
+#define SERVER_MONITOR_INTERVAL			CFG_DEF_MONITOR
+#define RECOVER_RETRY_MAX				CFG_DEF_RECOVER_MAX
+// 단위: ms (2026-07-11 최정우 주석 추가)
+#define RECOVER_RETRY_INTERVAL			CFG_DEF_RECOVER_WAIT
 
 /**
  * @class CServer
@@ -66,11 +68,11 @@ private:
 	void WaitForNextCycle();
 
 private:
-	CPostgrePool					*m_pcPostgrePool;					// PostgreSQL connection pool
+	CPostgrePool					*m_pcPostgrePool;					// PostgreSQL DB 커넥션 풀
 	CSQLAccessor					*m_pcSQLAccessor;					// SQL 파일 읽기
 	CLoggerManager					*m_pcLoggerManager;					// 로그 관리 클래스
 	CDataLoader						*m_pcDataLoader;					// 기반 데이터 클래스
-	CThreadPool						*m_pcThreadPool;					// thread pool
+	CThreadPool						*m_pcThreadPool;					// 스레드 풀
 	CProcessManager					*m_pcProcessManager;				// GPS 정보 맵 매칭 처리 클래스
 	CRawLogFetcher					*m_pcRawLogFetcher;					// 원시 GPS DB 폴링 클래스
 	CRawLogWorker					*m_pcRawLogWorker;					// 원시 GPS batch 처리 워커
@@ -82,7 +84,7 @@ private:
 	int								m_nLogLevel;						// 로그 레벨
 	int								m_nLogKeepRunTime;					// 로그 삭제 시간 설정
 	int								m_nLogKeepDay;						// 로그 보관일
-	int								m_nWorkerThread;					// thread pool 개수
+	int								m_nWorkerThread;					// 스레드 풀 개수
 	pthread_t						m_hTimerThread;						// 로그 관리 Thread 핸들
 	string							m_strSQLFile;						// SQL 파일
 	string							m_strDBHost;						// DB 연결 Host
@@ -105,7 +107,7 @@ private:
 	int								m_nTtlSec;							// trip_id 세션 유지 시간 (초)
 	int								m_nShutdownWait;					// 종료 시 워커 처리 완료 대기 (ms)
 	int								m_nRetryMax;						// release 재시도 상한 (0=무제한)
-	int								m_nThreads;							// thread pool 개수
+	int								m_nThreads;							// 스레드 풀 개수
 	string							m_strDataFile;						// 데이터 바이너리 파일명 및 경로
 	uint8							m_nCoordinateType;					// GPS 좌표 측지계
 	sint16							m_nRadius;							// 맵 매칭 유효 거리
@@ -117,20 +119,17 @@ private:
 	int								m_nRadiusMax;						// config radius_max — 적응형 검색 반경 상한 (m) (2026-07-08 최정우)
 	int								m_nRadiusSkip;						// config radius_skip — ACCURACY_M 초과 시 SKIP (m). 0=비활성 (2026-07-08 최정우)
 	int								m_nAltitudeGap;						// config altitude_gap — 직전 매칭 고도와 허용 차이(m)
-	int								m_nAltitudeBonus;					// config altitude_bonus — gap 안·같은 ROAD_TYPE 비용 감산(m)
-	int								m_nAltitudePenalty;					// config altitude_penalty — gap 안·ROAD_TYPE 불일치 추가 비용(m)
-	double							m_dfAltitudeWeight;					// config altitude_weight — gap 초과 시 고도차 가중. 0=비활성
-	double							m_dfAltitudeSlope;					// config altitude_slope — |Δ고도|/수평거리 상한. 초과 시 고도 무시
-	// int								m_nRadiusSkipM;						// (구) config radius_skip_m (2026-07-08 최정우)
-	// double							m_dfAccuracyK;						// (구) config accuracy_k (2026-07-08 최정우)
-	// int								m_nAccuracySkip;					// (구) config accuracy_skip (2026-07-08 최정우)
+	int								m_nAltitudeBonus;					// config altitude_bonus — 차이 안·같은 ROAD_TYPE 비용 감산(m)
+	int								m_nAltitudePenalty;					// config altitude_penalty — 차이 안·ROAD_TYPE 불일치 추가 비용(m)
+	double							m_dfAltitudeWeight;					// config altitude_weight — 차이 초과 시 고도차 가중. 0=비활성
+	double							m_dfAltitudeSlope;					// altitude_slope
 
-	CMutex							m_cRunMutex;						// run 루프 동기화
-	CCondition						m_cRunCondition;					// shutdown signal
+	CMutex							m_cRunMutex;
+	CCondition						m_cRunCondition;					// 종료 시그널
 	time_t							m_dtLastMonitorLog;					// 마지막 모니터링 시각
 	int								m_nLastQueueCount;					// 이전 큐 적재량
 	bool							m_bQueueWarnActive;					// 큐 backlog WARN 상태
-	bool							m_bAllBusyWarnActive;				// 워커 전원 busy WARN 상태
+	bool							m_bAllBusyWarnActive;				// 워커 전원 사용 중 WARN 상태
 };
 
 #endif //__SERVER_H__

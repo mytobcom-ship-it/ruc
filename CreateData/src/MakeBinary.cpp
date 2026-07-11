@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file MakeBinary.cpp
  * @brief Shapefile(표준노드링크) → 맵매칭 바이너리(link.psf) 생성 독립 실행 프로그램 main
  * @remark
@@ -44,7 +44,7 @@ typedef struct sMakerConfig
 
 /**
  * @brief 환경 설정 파일 읽기
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool Initialize(const string& strConfigFile, PMAKER_CONFIG pstConfig)
 {

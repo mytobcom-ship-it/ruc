@@ -10,7 +10,7 @@ pthread_attr_t CSingleThread::m_attr;
 /**
  * @brief 쓰레드 핸들러
  * @param[in] pParam 쓰레드 전달 포인터
- * @return nullptr 
+ * @return nullptr
 */
 void *CSingleThread::threadHandler(void *pParam)
 {
@@ -173,7 +173,7 @@ void CSingleThread::interrupt()
 
 /**
  * @brief 인터럽트 여부
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CSingleThread::IsInterrupted()
 {
@@ -182,7 +182,7 @@ bool CSingleThread::IsInterrupted()
 
 /**
  * @brief 쓰레드가 실행 중인지 여부
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CSingleThread::IsAlive()
 {

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file BeginMapMatch.h
  * @brief 초기 맵매칭 클래스 헤더 파일
 */

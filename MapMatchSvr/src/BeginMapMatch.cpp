@@ -25,7 +25,7 @@ CBeginMapMatch::~CBeginMapMatch()
  * @param[in] stSgmtMatchInput 세그먼트 매칭 입력 정보
  * @param[out] pwErrorCode 에러 코드
  * @param[out] pstMatchEntry 검색 정보
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CBeginMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& stSgmtMatchInput, 
 		uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry, PMATCH_TRACE_CTX pstTraceCtx)
@@ -108,11 +108,11 @@ bool CBeginMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& 
 /**
  * @brief GRID 별 세그먼트 맵매칭
  * @param[in] stSgmtMatchInput 세그먼트 입력 정보
- * @param[in] dwStartSgmtOffset 세그먼트 시작 
+ * @param[in] dwStartSgmtOffset 세그먼트 시작
  * @param[in] dwEndSgmtOffset 세그먼트 종료
  * @param[out] pwErrorCode 에러 코드
  * @param[out] pstMatchEntry 검색 정보
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CBeginMapMatch::GridSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, uint32 dwStartSgmtOffset, 
 		uint32 dwEndSgmtOffset, uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry)
@@ -152,7 +152,7 @@ bool CBeginMapMatch::GridSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, uint32
 		// 링크 ID
 		stSgmtInfo.qwLinkID = pstGridSgmtInfo->qwLinkID;
 
-		// GPS 좌표와 세그먼트 수직거리·방위 비용 매칭 (2026-07-08 최정우 주석 추가)
+		// INTERSECT_LEN(GPS↔세그먼트 교차점 거리)·방위 비용 매칭 (2026-07-08 최정우 주석 추가)
 		if (!m_cGISUtil.SgmtMatch(stSgmtMatchInput, stSgmtInfo, &stSgmtMatchRes))
 			continue;
 
@@ -166,7 +166,7 @@ bool CBeginMapMatch::GridSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, uint32
 		stMatchEntry.dfMatchY = stSgmtMatchRes.stMatchPoint.dfY;
 		stMatchEntry.dfSgmtMatchLen = stSgmtMatchRes.dfSgmtMatchLen;
 		stMatchEntry.dfIntersectLenSgmt = stSgmtMatchRes.dfIntersectLenSgmt;
-		stMatchEntry.dfCost = stSgmtMatchRes.dfCost;		// 소프트 비용(거리+방위각) → sort 선택 기준 (2026-07-08 최정우 추가)
+		stMatchEntry.dfCost = stSgmtMatchRes.dfCost;		// 소프트 비용(INTERSECT_LEN+방위각) → sort 선택 기준 (2026-07-08 최정우 추가)
 		stMatchEntry.dfAngleCost = stSgmtMatchRes.dfCost - stSgmtMatchRes.dfIntersectLenSgmt;
 		stMatchEntry.dfAltAdj = 0.0;
 		stMatchEntry.nDirAngleDiff = stSgmtMatchRes.nDirAngleDiff;
@@ -228,7 +228,7 @@ bool CBeginMapMatch::GridSgmtGeomNearest(SGMT_MATCH_INPUT& stSgmtMatchInput, uin
 		stSgmtInfo.qwLinkID = pstGridSgmtInfo->qwLinkID;
 
 		SGMT_MATCH_RES stSgmtMatchRes;
-		// 반경(nRadius) 초과여도 수직거리·스냅 좌표만 계산 (정식 매칭 아님) (2026-07-10 최정우 수정)
+		// 반경(nRadius) 초과여도 INTERSECT_LEN·스냅 좌표만 계산 (정식 매칭 아님) (2026-07-10 최정우 수정)
 		if (!m_cGISUtil.SgmtMatch(stSgmtMatchInput, stSgmtInfo, &stSgmtMatchRes, true))
 			continue;
 
@@ -277,7 +277,7 @@ bool CBeginMapMatch::GridSgmtGeomNearest(SGMT_MATCH_INPUT& stSgmtMatchInput, uin
 /**
  * @brief 소속·인접 GRID 에서 반경 무시 기하 최근접 세그먼트 1건 (2026-07-10 최정우 수정)
  * @remark 정식 매칭 실패·진단반경(MM_DIAG_RADIUS_M) 내 후보도 없을 때 호출.
- *         그리드에 링크가 있으나 거리만 먼 경우 SKIP 참고용 좌표·교차거리 확보.
+ *         그리드에 링크가 있으나 거리만 먼 경우 SKIP용 MATCH_LAT/LON·INTERSECT_LEN 확보.
 */
 bool CBeginMapMatch::FindGeomNearest(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& stSgmtMatchInput,
 		uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry)

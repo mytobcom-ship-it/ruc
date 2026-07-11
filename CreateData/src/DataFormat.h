@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file DataFormat.h
  * @brief 세그먼트 및 링크 정보 구조 헤더 파일
 */

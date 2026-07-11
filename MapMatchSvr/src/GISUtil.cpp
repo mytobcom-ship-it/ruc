@@ -86,7 +86,7 @@ const sint32 CGISUtil::GetGridRowNo(double& dfY)
  * @param[in] stPoint2 세그먼트 종료 X,Y 좌표
  * @param[in] dwGridColNo X 좌표 GRID 번호
  * @param[in] dwGridRowNo Y 좌표 GRID 번호
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CGISUtil::IsCrossSgmt2Grid(POINT& stPoint1, POINT& stPoint2, 
 		uint32& dwGridColNo, uint32& dwGridRowNo)
@@ -119,7 +119,7 @@ bool CGISUtil::IsCrossSgmt2Grid(POINT& stPoint1, POINT& stPoint2,
  * @param[in] dfYMin 세그먼트 시작 Y 좌표 (GRID)
  * @param[in] dfXMax 세그먼트 종료 X 좌표 (GRID)
  * @param[in] dfYMax 세그먼트 종료 Y 좌표 (GRID)
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CGISUtil::IsCrossSgmt2Sgmt(POINT& stPoint1, POINT& stPoint2, 
 		double& dfXMin, double& dfYMin, double& dfXMax, double& dfYMax)
@@ -232,10 +232,10 @@ const uint8 CGISUtil::GridSplitIndex(const uint32& dwGridID, const double& dfX, 
  * @param[in,out] vtNearGridIDList 인접 GRID ID 목록
  * @return void
  * @remark 2026-07-08 최정우 수정
- *   유효 인덱스: col 0..X_GRID_COUNT-1, row 0..Y_GRID_COUNT-1
+ *   유효 인덱스: col 0..X_GRID_COUNT-1, 행 0..Y_GRID_COUNT-1
  *   경계 검사 (off-by-one 방지):
- *     · 서/남서/남: col>0 또는 row>0
- *     · 동/북/대각: col+1<X_GRID_COUNT, row+1<Y_GRID_COUNT
+ *     · 서/남서/남: col>0 또는 행>0
+ *     · 동/북/대각: col+1<X_GRID_COUNT, 행+1<Y_GRID_COUNT
  *   반경(nRadius)이 셀 경계거리보다 크면 해당 방향 이웃만 push.
  *   잘못된 ID(다음 행 col=0 등) 산출 시 엉뚱한 그리드 검색 → INVALID_GRID_ID 유지.
 */
@@ -258,7 +258,7 @@ void CGISUtil::GetNearGridID(const uint32& dwGridID, const SGMT_MATCH_INPUT& stS
 	// GRID 경계 거리
 	GridBorderDistance(dwGridID, stSgmtMatchInput.stPoint.dfX, stSgmtMatchInput.stPoint.dfY, stGridBorderDist);
 
-	// 인접 GRID ID (맵 경계 밖은 INVALID_GRID_ID — BeginMapMatch에서 GetGridInfo null 시 skip)
+	// 인접 GRID ID (맵 경계 밖은 INVALID_GRID_ID — BeginMapMatch에서 GetGridInfo null 시 건너뜀)
 	if (dwColNo > 0)
 		nGridLeftID = static_cast<sint32>(dwRowNo * X_GRID_COUNT + dwColNo - 1);
 
@@ -323,7 +323,7 @@ void CGISUtil::GetNearGridID(const uint32& dwGridID, const SGMT_MATCH_INPUT& stS
  * @param[in] stSgmtInfo 세그먼트 정보
  * @param[out] pstSgmtMatchRes 세그먼트 맵매칭 결과
  * @param[in] bIgnoreRadiusCheck true 이면 nRadius 초과여도 기하 매칭 허용(진단용 최근접) (2026-07-10 최정우 수정)
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtInfo, SGMT_MATCH_RES *pstSgmtMatchRes,
 		bool bIgnoreRadiusCheck)
@@ -372,36 +372,37 @@ bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtIn
 	// 진행 각도 차이
 	sint16 nDirAngleDiff = GetAngleDiff(stSgmtInfo.nDirAng, nDirAngle);
 
-	// 요청 좌표와 세그먼트 시작 좌표와의 거리 계산
+	// 요청 좌표(GPS)와 세그먼트 시작점 사이 거리
 	double dfVertexDistance = sqrt(pow(stSgmtMatchInput.stPoint.dfX - stSgmtInfo.stPoint.dfX, 2.0) + pow(stSgmtMatchInput.stPoint.dfY - stSgmtInfo.stPoint.dfY, 2.0));
 
-	// 요청 좌표와 세그먼트 교차점까지 거리 초기화
+	// ── INTERSECT_LEN (dfIntersectLenSgmt) — GPS 좌표와 세그먼트 교차점 거리(m) (2026-07-11 최정우 수정)
+	//   stSgmtMatchInput.stPoint = GPS(요청) 좌표, stIntersect = 세그먼트 위 교차점(수선의 발 또는 끝점 snap)
+	//   1) nDirAngle     = 세그먼트 시작점 → GPS 방향각
+	//   2) nDirAngleDiff = 세그먼트 방위각 − nDirAngle
+	//   3) dfIntersectSgmtDistance = dfVertexDistance × cos(nDirAngleDiff)   // 좌표 정수단위 투영 길이
+	//   3b) dfSegLenCoord = stSgmtInfo.dfLen / 360000  (wLenSgmt[m] → 좌표단위 세그먼트 길이)
+	//   4) stIntersect   = 세그먼트 시작점 + 방위각 × dfIntersectSgmtDistance (범위 밖이면 끝점 snap)
+	//   5) dfIntersectLenSgmt = GetDistanceGEO1(GPS, stIntersect)             // 최종 GPS↔교차점 거리(m)
+	//   ※ DB INTERSECT_LEN = (int)(dfIntersectLenSgmt + 0.5)
 	double dfIntersectLenSgmt = 0;
-
-	// 세그먼트 교차점 거리 = 요청좌표와 세그먼트 좌표와의 거리 * con(라디안)
 	double dfIntersectSgmtDistance = dfVertexDistance * cos(RAD(static_cast<double>(nDirAngleDiff)));
-
-	// 매핑 거리 초기화
-	//double dfIntersectDistance = -1.0;
-
-	// 매핑 X,Y 좌표 초기화
+	const double dfSegLenCoord = stSgmtInfo.dfLen / 360000.0;	// wLenSgmt(m) ↔ 좌표 정수단위 길이
 	POINT stIntersect;
 
-	if ((dfIntersectSgmtDistance <= stSgmtInfo.dfLen) && (dfIntersectSgmtDistance >= 0))		// 수선의 발이 내려지는 경우
+	if ((dfIntersectSgmtDistance <= dfSegLenCoord) && (dfIntersectSgmtDistance >= 0))		// 수선의 발이 세그먼트 위
 	{
-		// 매핑 X,Y 좌표
 		stIntersect.dfX = stSgmtInfo.stPoint.dfX + fabs(dfIntersectSgmtDistance) * sin(RAD(static_cast<double>(stSgmtInfo.nDirAng)));
 		stIntersect.dfY = stSgmtInfo.stPoint.dfY + fabs(dfIntersectSgmtDistance) * cos(RAD(static_cast<double>(stSgmtInfo.nDirAng)));
 	}
 	else
 	{
 		// 수선 발이 세그먼트 밖이면 가까운 끝점으로 snap (#C-2)
-		if (dfIntersectSgmtDistance > stSgmtInfo.dfLen)
+		if (dfIntersectSgmtDistance > dfSegLenCoord)
 		{
 			stIntersect.dfX = stSgmtInfo.stPoint.dfX
-				+ fabs(stSgmtInfo.dfLen) * sin(RAD(static_cast<double>(stSgmtInfo.nDirAng)));
+				+ dfSegLenCoord * sin(RAD(static_cast<double>(stSgmtInfo.nDirAng)));
 			stIntersect.dfY = stSgmtInfo.stPoint.dfY
-				+ fabs(stSgmtInfo.dfLen) * cos(RAD(static_cast<double>(stSgmtInfo.nDirAng)));
+				+ dfSegLenCoord * cos(RAD(static_cast<double>(stSgmtInfo.nDirAng)));
 		}
 		else
 		{
@@ -410,7 +411,7 @@ bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtIn
 		}
 	}
 
-	// 경위도간 거리 계산 (요청 좌표와 세그먼트 교차점까지 거리)
+	// GPS 좌표와 세그먼트 교차점(stIntersect) 사이 거리(m) → INTERSECT_LEN
 	dfIntersectLenSgmt = GetDistanceGEO1(stSgmtMatchInput.stPoint, stIntersect);
 
 	// 맵매칭 유효거리내에 포함되는지 검사 (진단 최근접 시 생략) (2026-07-10 최정우 수정)
@@ -421,7 +422,7 @@ bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtIn
 	double dfSgmtMatchLen = GetDistanceGEO1(stIntersect, stSgmtInfo.stPoint);
 
 	// ── 링크 선택 비용(값이 작을수록 우선) — 쉬운 설명 (2026-07-08 최정우 추가) ──
-	//   비용 = (GPS점에서 도로까지 수직거리, m) + (방위각 비용)
+	//   비용 = (GPS↔세그먼트 교차점 거리 INTERSECT_LEN, m) + (방위각 비용)
 	//   방위각 비용 = 방향가중치 × (차량 방위각과 도로 방위각의 차이, 도)
 	//     · 방향가중치 : 정지·저속(5km/h 이하)=0(방위각 무시) → 20km/h 이상=1.0(1도당 1m), 그 사이는 비례
 	//     · 예) 거리 10m·각도차 40° → 10 + 1.0×40 = 50
@@ -512,8 +513,8 @@ double RoadTypeDirectionPenalty(double dfDeltaAlt, uint8 nCandRoadType,
  *
  *   |Δalt| > altitude_gap:
  *     · altitude_weight × (|Δalt| − altitude_gap) + 방향 패널티
- *     · Δalt > +gap 이고 후보=지하   → +altitude_penalty
- *     · Δalt < −gap 이고 후보=고가/교량 → +altitude_penalty
+ *     · Δalt > +차이 이고 후보=지하 → +altitude_penalty
+ *     · Δalt < −차이 이고 후보=고가/교량 → +altitude_penalty
  *
  *   |Δalt|/dfHorizMoveM > altitude_slope → 0 (GPS 고도 불신, 폴백)
  *
@@ -521,7 +522,7 @@ double RoadTypeDirectionPenalty(double dfDeltaAlt, uint8 nCandRoadType,
  *     dfAltAdj = CalcAltRoadPenalty(...)
  *     dfCost   = dfIntersectLenSgmt + dfAnglePenalty + dfAltAdj
  *
- *   예) gap=8, bonus=3, penalty=10, weight=0.5
+ *   예) 차이=8, 보너스=3, 페널티=10, 가중치=0.5
  *       직전100m·현재106m(Δ=6), 후보=직전과 동일 고가 → −3
  *       직전100m·현재106m(Δ=6), 후보=일반(직전 고가)   → +10
  *       직전100m·현재120m(Δ=20), 후보=지하             → 0.5×(20−8)+10 = +16
@@ -584,8 +585,8 @@ sint16 CGISUtil::GetAngleDiff(sint16& nAngle1, sint16& nAngle2)
  * @brief 진행 각도 계산
  * @param[in] stSgmtPoint 세그먼트 X,Y 좌표
  * @param[in] stPoint X,Y 좌표
- * @param[out] pnDirAngle 진행 각도 (방위각) 
- * @return true, false
+ * @param[out] pnDirAngle 진행 각도 (방위각)
+ * @return true(성공), false(실패)
 */
 bool CGISUtil::GetDirAngle(POINT& stSgmtPoint, POINT& stPoint, sint16 *pnDirAngle)
 {

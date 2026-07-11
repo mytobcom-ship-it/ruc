@@ -1,7 +1,25 @@
-﻿CompileFlags:
+﻿# 프로젝트별 include 경로 분리 — 동명 헤더(TypeDefine.h 등) 충돌 방지 (2026-07-11 최정우 수정)
+---
+If:
+  PathMatch: MapMatchSvr/.*
+CompileFlags:
+  Add:
+    - -std=c++11
+    - -I/home/mytobcom/ruc/MapMatchSvr/src
+    - -I/usr/pgsql-18/include
+CompilationDatabase: MapMatchSvr/src
+---
+If:
+  PathMatch: CreateData/.*
+CompileFlags:
   Add:
     - -std=c++11
     - -I/home/mytobcom/ruc/CreateData/src
-    - -I/home/mytobcom/ruc/MapMatchSvr/src
+---
+If:
+  PathMatch: Simulator/.*
+CompileFlags:
+  Add:
+    - -std=c++11
     - -I/home/mytobcom/ruc/Simulator/src
     - -I/usr/pgsql-18/include

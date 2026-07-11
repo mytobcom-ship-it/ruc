@@ -24,7 +24,7 @@ CSQLAccessor::~CSQLAccessor()
 /**
  * @brief 초기화
  * @param[in] strSQLFile SQL 파일명
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CSQLAccessor::Initialize(string strSQLFile)
 {
@@ -50,7 +50,7 @@ void CSQLAccessor::Uninitialize()
 
 /**
  * @brief 파일 읽기 및 등록
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CSQLAccessor::Load()
 {
@@ -120,8 +120,8 @@ bool CSQLAccessor::Load()
 }
 
 /**
- * @brief key 값을 이용하여 SQL 문 읽기
- * @param[in] key SQL 문 key 값
+ * @brief 키 값을 이용하여 SQL 문 읽기
+ * @param[in] key SQL 문 키 값
  * @return SQL 문
 */
 string CSQLAccessor::GetSQL(string key)

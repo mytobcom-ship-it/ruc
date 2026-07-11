@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file LoggerManager.cpp
  * @brief 로그 관리 클래스 소스 파일
 */
@@ -28,7 +28,7 @@ CLoggerManager::~CLoggerManager()
  * @param[in] strLogPath 로그 경로
  * @param[in] nLogKeepRunTime 실행 시간
  * @param[in] nLogKeepDay 로그 보관일 (단위 : 날자)
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CLoggerManager::Initialize(const string strLogPath, 
 	const int nLogKeepRunTime, const int nLogKeepDay)
@@ -63,7 +63,7 @@ bool CLoggerManager::Initialize(const string strLogPath,
 			return false;
 		}
 
-		// log keep day check
+		// log 보관 일수 확인
 		if (m_nLogKeepDay <= 0)
 		{
 			LOGFMTE("log keep day is invalid!day=[%d]", m_nLogKeepDay);
@@ -111,10 +111,10 @@ void CLoggerManager::LogDeleteRun(time_t dtNow)
 }
 
 /**
- * @brief 로그 경로내 파일 목록 
- * @param[in] dtRmTime 로그 삭제 파일 시간 (초) 
+ * @brief 로그 경로내 파일 목록
+ * @param[in] dtRmTime 로그 삭제 파일 시간 (초)
  * @param[in] strLogPath 로그 경로
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CLoggerManager::SetRemoveLogFile(time_t dtRmTime, string strLogPath)
 {

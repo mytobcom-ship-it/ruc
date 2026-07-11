@@ -47,7 +47,7 @@ public:
 	/**
 	 * @brief 큐에서 데이터 가져오기
 	 * @param[out] element 큐 데이터
-	 * @return true, false
+	 * @return true(성공), false(실패)
 	*/
 	bool Dequeue(T& element)
 	{
@@ -63,7 +63,7 @@ public:
 	/**
 	 * @brief 큐에서 데이터 가져오기
 	 * @param[out] element 큐 데이터
-	 * @return true, false
+	 * @return true(성공), false(실패)
 	 * @remark 데이터를 큐에서 삭제하지 않음
 	*/
 	bool Peek(T& element)
@@ -96,7 +96,7 @@ public:
 
 	/**
 	 * @brief 큐가 비어 있는지 여부
-	 * @return true, false
+	 * @return true(성공), false(실패)
 	*/
 	bool IsEmpty()
 	{

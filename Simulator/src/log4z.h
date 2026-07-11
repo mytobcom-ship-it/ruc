@@ -197,24 +197,24 @@
 #include <deque>
 
 
-//! logger ID type. DO NOT TOUCH
+//! 로거 ID 타입. 수정 금지
 typedef int LoggerId;
 
-//! the invalid logger id. DO NOT TOUCH
+//! 유효하지 않은 로거 ID. 수정 금지
 const int LOG4Z_INVALID_LOGGER_ID = -1;
 
-//! the main logger id. DO NOT TOUCH
-//! can use this id to set the main logger's attribute.
+//! 메인 로거 ID. 수정 금지
+//! 메인 로거 속성 설정에 이 ID 사용 가능.
 //! example:
 //! ILog4zManager::getPtr()->setLoggerLevel(LOG4Z_MAIN_LOGGER_ID, LOG_LEVEL_WARN);
 //! ILog4zManager::getPtr()->setLoggerDisplay(LOG4Z_MAIN_LOGGER_ID, false);
 const int LOG4Z_MAIN_LOGGER_ID = 0;
 
-//! the main logger name. DO NOT TOUCH
+//! 메인 로거 이름. 수정 금지
 const char*const LOG4Z_MAIN_LOGGER_KEY = "Main";
 
-//! check VC VERSION. DO NOT TOUCH
-//! format micro cannot support VC6 or VS2003, please use stream input log, like LOGI, LOGD, LOG_DEBUG, LOG_STREAM ...
+//! VC 버전 확인. 수정 금지
+//! format micro는 VC6/VS2003 미지원 — LOGI, LOGD, LOG_DEBUG, LOG_STREAM 등 스트림 입력 로그 사용
 #if _MSC_VER >= 1400 //MSVC >= VS2005
 #define LOG4Z_FORMAT_INPUT_ENABLE
 #endif
@@ -223,7 +223,7 @@ const char*const LOG4Z_MAIN_LOGGER_KEY = "Main";
 #define LOG4Z_FORMAT_INPUT_ENABLE
 #endif
 
-//! LOG Level
+//! 로그 레벨
 enum ENUM_LOG_LEVEL
 {
 	LOG_LEVEL_TRACE = 0,
@@ -236,41 +236,41 @@ enum ENUM_LOG_LEVEL
 };
 
 //////////////////////////////////////////////////////////////////////////
-//! -----------------default logger config, can change on this.-----------
+//! -----------------기본 로거 설정(여기서 변경 가능)-----------
 //////////////////////////////////////////////////////////////////////////
-//! the max logger count.
+//! 최대 로거 개수.
 const int LOG4Z_LOGGER_MAX = 20;
-//! the max log content length.
+//! 최대 로그 내용 길이.
 const int LOG4Z_LOG_BUF_SIZE = 1024 * 8;
-//! the max stl container depth.
+//! 최대 STL 컨테이너 깊이.
 const int LOG4Z_LOG_CONTAINER_DEPTH = 5;
-//! the log queue length limit size.
+//! 로그 큐 길이 제한.
 const int LOG4Z_LOG_QUEUE_LIMIT_SIZE = 20000;
 
-//! all logger synchronous output or not
+//! 모든 로거 동기 출력 여부
 const bool LOG4Z_ALL_SYNCHRONOUS_OUTPUT = false;
-//! all logger synchronous display to the windows debug output
+//! 모든 로거를 Windows 디버그 출력에 동기 표시
 const bool LOG4Z_ALL_DEBUGOUTPUT_DISPLAY = false;
 
-//! default logger output file.
+//! 기본 로거 출력 파일.
 const char* const LOG4Z_DEFAULT_PATH = "./log/";
-//! default log filter level
+//! 기본 로그 필터 레벨
 const int LOG4Z_DEFAULT_LEVEL = LOG_LEVEL_DEBUG;
-//! default logger display
+//! 기본 로거 화면 표시
 const bool LOG4Z_DEFAULT_DISPLAY = true;
-//! default logger output to file
+//! 기본 로거 파일 출력
 const bool LOG4Z_DEFAULT_OUTFILE = true;
-//! default logger month dir used status
+//! 기본 로거 월별 디렉터리 사용 여부
 const bool LOG4Z_DEFAULT_DAYDIR = false;
-//! default logger month dir used status
+//! 기본 로거 월별 디렉터리 사용 여부
 const bool LOG4Z_DEFAULT_MONTHDIR = false;
-//! default logger output file limit size, unit M byte.
+//! 기본 로거 출력 파일 크기 제한(M바이트).
 const int LOG4Z_DEFAULT_LIMITSIZE = 100;
-//! default logger show suffix (file name and line number) 
+//! 기본 로거 접미사 표시(파일명·행번호)
 const bool LOG4Z_DEFAULT_SHOWSUFFIX = true;
-//! support ANSI->OEM console conversion on Windows
+//! Windows ANSI→OEM 콘솔 변환 지원
 #undef LOG4Z_OEM_CONSOLE
-//! default logger force reserve log file count.
+//! 기본 로거 보관 로그 파일 강제 개수.
 const size_t LOG4Z_FORCE_RESERVE_FILE_COUNT = 7;
 
 ///////////////////////////////////////////////////////////////////////////
@@ -299,48 +299,48 @@ struct LogData
 	char							_content[1];				//content
 };
 
-//! log4z class
+//! log4z 클래스
 class ILog4zManager
 {
 public:
 	ILog4zManager(){};
 	virtual ~ILog4zManager(){};
 
-	//! Log4z Singleton
+	//! Log4z 싱글톤
 
 	static ILog4zManager * getInstance();
 	inline static ILog4zManager & getRef(){return *getInstance();}
 	inline static ILog4zManager * getPtr(){return getInstance();}
 
-	//! Config or overwrite configure
-	//! Needs to be called before ILog4zManager::Start,, OR Do not call.
+	//! 설정 로드 또는 덮어쓰기
+	//! ILog4zManager::Start 이전 호출 필요, 아니면 호출하지 말 것.
 	virtual bool config(const char * configPath) = 0;
 	virtual bool configFromString(const char * configContent) = 0;
 
-	//! Create or overwrite logger.
-	//! Needs to be called before ILog4zManager::Start, OR Do not call.
+	//! 로거 생성 또는 덮어쓰기.
+	//! ILog4zManager::Start 이전 호출 필요, 아니면 호출하지 말 것.
 	virtual LoggerId createLogger(const char* key) = 0;
 
-	//! Start Log Thread. This method can only be called once by one process.
+	//! 로그 스레드 시작(프로세스당 1회만 호출 가능).
 	virtual bool start() = 0;
 
-	//! Default the method will be calling at process exit auto.
-	//! Default no need to call and no recommended.
+	//! 기본적으로 프로세스 종료 시 자동 호출.
+	//! 기본적으로 호출 불필요·비권장.
 	virtual bool stop() = 0;
 
-	//! Find logger. thread safe.
+	//! 로거 조회(스레드 안전).
 	virtual LoggerId findLogger(const char* key) =0;
 
 	//pre-check the log filter. if filter out return false. 
 	virtual bool prePushLog(LoggerId id, int level) = 0;
-	//! Push log, thread safe.
+	//! 로그 적재(스레드 안전).
 	virtual bool pushLog(LogData * pLog, const char *file = nullptr, int line = 0) = 0;
 
-	//! set logger's attribute, thread safe.
-	virtual bool enableLogger(LoggerId id, bool enable) = 0; // immediately when enable, and queue up when disable. 
+	//! 로거 속성 설정(스레드 안전).
+	virtual bool enableLogger(LoggerId id, bool enable) = 0; // 활성화 시 즉시, 비활성화 시 큐 적재.
 	virtual bool setLoggerName(LoggerId id, const char * name) = 0;
 	virtual bool setLoggerPath(LoggerId id, const char * path) = 0;
-	virtual bool setLoggerLevel(LoggerId id, int nLevel) = 0; // immediately when enable, and queue up when disable. 
+	virtual bool setLoggerLevel(LoggerId id, int nLevel) = 0; // 활성화 시 즉시, 비활성화 시 큐 적재.
 	virtual bool setLoggerFileLine(LoggerId id, bool enable) = 0;
 	virtual bool setLoggerDisplay(LoggerId id, bool enable) = 0;
 	virtual bool setLoggerOutFile(LoggerId id, bool enable) = 0;
@@ -349,11 +349,11 @@ public:
 	virtual bool setLoggerMonthdir(LoggerId id, bool enable) = 0;
 	virtual bool setLoggerReserveTime(LoggerId id, time_t sec) = 0;
 
-	//! Update logger's attribute from config file, thread safe.
-	virtual bool setAutoUpdate(int interval/*per second, 0 is disable auto update*/) = 0;
+	//! 설정 파일에서 로거 속성 갱신(스레드 안전).
+	virtual bool setAutoUpdate(int interval/*per 초, 0 is disable auto update*/) = 0;
 	virtual bool updateConfig() = 0;
 
-	//! Log4z status statistics, thread safe.
+	//! Log4z 상태 통계(스레드 안전).
 	virtual bool isLoggerEnable(LoggerId id) = 0;
 	virtual unsigned long long getStatusTotalWriteCount() = 0;
 	virtual unsigned long long getStatusTotalWriteBytes() = 0;
@@ -378,7 +378,7 @@ class Log4zBinary;
 _ZSUMMER_LOG4Z_END
 _ZSUMMER_END
 
-//! base macro.
+//! 기본 매크로.
 #define LOG_STREAM(id, level, file, line, log)\
 do{\
 	if (zsummer::log4z::ILog4zManager::getPtr()->prePushLog(id,level)) \
@@ -392,7 +392,7 @@ do{\
 } while (0)
 
 
-//! fast macro
+//! 빠른 매크로
 #define LOG_TRACE(id, log) LOG_STREAM(id, LOG_LEVEL_TRACE, __FILE__, __LINE__, log)
 #define LOG_DEBUG(id, log) LOG_STREAM(id, LOG_LEVEL_DEBUG, __FILE__, __LINE__, log)
 #define LOG_INFO(id, log)  LOG_STREAM(id, LOG_LEVEL_INFO, __FILE__, __LINE__, log)
@@ -401,7 +401,7 @@ do{\
 #define LOG_ALARM(id, log) LOG_STREAM(id, LOG_LEVEL_ALARM, __FILE__, __LINE__, log)
 #define LOG_FATAL(id, log) LOG_STREAM(id, LOG_LEVEL_FATAL, __FILE__, __LINE__, log)
 
-//! super macro.
+//! 슈퍼 매크로.
 #define LOGT(log) LOG_TRACE(LOG4Z_MAIN_LOGGER_ID, log)
 #define LOGD(log) LOG_DEBUG(LOG4Z_MAIN_LOGGER_ID, log)
 #define LOGI(log) LOG_INFO(LOG4Z_MAIN_LOGGER_ID, log)
@@ -410,7 +410,7 @@ do{\
 #define LOGA(log) LOG_ALARM(LOG4Z_MAIN_LOGGER_ID, log)
 #define LOGF(log) LOG_FATAL(LOG4Z_MAIN_LOGGER_ID, log)
 
-//! format input log.
+//! 포맷 입력 로그.
 #ifdef LOG4Z_FORMAT_INPUT_ENABLE
 #ifdef WIN32
 #define LOG_FORMAT(id, level, file, line, logformat, ...) \
@@ -438,7 +438,7 @@ do { \
 	} \
 } while (0)
 #endif
-//!format string
+//!포맷 문자열
 #define LOGFMT_TRACE(id, fmt, ...)  LOG_FORMAT(id, LOG_LEVEL_TRACE, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
 #define LOGFMT_DEBUG(id, fmt, ...)  LOG_FORMAT(id, LOG_LEVEL_DEBUG, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
 #define LOGFMT_INFO(id, fmt, ...)  LOG_FORMAT(id, LOG_LEVEL_INFO, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
@@ -476,7 +476,7 @@ inline void empty_log_format_function2(const char*, ...){}
 _ZSUMMER_BEGIN
 _ZSUMMER_LOG4Z_BEGIN
 
-//! optimze from std::stringstream to Log4zStream
+//! std::stringstream → Log4zStream 최적화
 #ifdef WIN32
 #pragma warning(push)
 #pragma warning(disable:4996)

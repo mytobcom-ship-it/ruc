@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file RawLogFetcher.cpp
  * @brief 원시 GPS 로그 DB 폴링 및 워커 큐 적재 클래스 소스 파일
 */
@@ -17,12 +17,12 @@ CRawLogFetcher::CRawLogFetcher() :
 	m_pbRun(nullptr),
 	m_nWorkerThreads(0),
 	m_nCoordinateType(WGS84GEO),
-	m_nFetchLimit(FETCH_LIMIT_DEFAULT),
-	m_nFetchInterval(FETCH_INTERVAL_DEFAULT),
-	m_nQueuePauseCount(QUEUE_PAUSE_COUNT_DEFAULT),
-	m_nQueueMaxCount(QUEUE_MAX_COUNT_DEFAULT),
-	m_nQueueBusyMin(QUEUE_BUSY_MIN_DEFAULT),
-	m_nQueueBusyMax(QUEUE_BUSY_MAX_DEFAULT)
+	m_nFetchLimit(CFG_DEF_LIMIT),
+	m_nFetchInterval(CFG_DEF_FETCH_INTVL),
+	m_nQueuePauseCount(CFG_DEF_Q_PAUSE_CNT),
+	m_nQueueMaxCount(CFG_DEF_Q_MAX_CNT),
+	m_nQueueBusyMin(CFG_DEF_Q_BUSY_MIN),
+	m_nQueueBusyMax(CFG_DEF_Q_BUSY_MAX)
 {
 	setName("RawLogFetcher");
 }
@@ -36,10 +36,10 @@ CRawLogFetcher::~CRawLogFetcher()
 
 /**
  * @brief Feeder 초기화 – DB pool, ThreadPool, poll/backpressure 설정
- * @param[in] pcPostgrePool DB connection pool
+ * @param[in] pcPostgrePool DB 커넥션 풀
  * @param[in] pcThreadPool 워커 ThreadPool (Enqueue 대상)
  * @param[in] strSelectSQL [rawgps_select] SQL (UPDATE RETURNING)
- * @param[in] strUpdateSQL [rawgps_update] parse 실패 예약 해제용 (Worker 와 동일)
+ * @param[in] strUpdateSQL [rawgps_update] 파싱 실패 예약 해제용 (Worker 와 동일)
  * @param[in] nWorkerThreads 워커 스레드 수 (device_key hash % N)
  * @param[in] nCoordinateType GPS 측지계 (ParseRow 시 RAW_LOG_INFO 에 설정)
  * @param[in] pbRun 서버 실행 플래그 (false 시 run 루프 종료)
@@ -49,7 +49,7 @@ CRawLogFetcher::~CRawLogFetcher()
  * @param[in] nQueueMaxCount 큐 더 차면 대기 최대 구간 (건)
  * @param[in] nQueueBusyMin 큐 혼잡 시 조회 대기 최소 (ms)
  * @param[in] nQueueBusyMax 큐 혼잡 시 조회 대기 최대 (ms)
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CRawLogFetcher::Initialize(CPostgrePool *pcPostgrePool, CThreadPool *pcThreadPool,
 		const string& strSelectSQL, const string& strUpdateSQL,
@@ -69,13 +69,13 @@ bool CRawLogFetcher::Initialize(CPostgrePool *pcPostgrePool, CThreadPool *pcThre
 		return false;
 
 	if (nFetchLimit <= 0)
-		nFetchLimit = FETCH_LIMIT_DEFAULT;
+		nFetchLimit = CFG_DEF_LIMIT;
 
 	if (nFetchInterval < 0)
-		nFetchInterval = FETCH_INTERVAL_DEFAULT;
+		nFetchInterval = CFG_DEF_FETCH_INTVL;
 
 	if (nQueuePauseCount <= 0)
-		nQueuePauseCount = QUEUE_PAUSE_COUNT_DEFAULT;
+		nQueuePauseCount = CFG_DEF_Q_PAUSE_CNT;
 
 	if (nQueueMaxCount < nQueuePauseCount)
 		nQueueMaxCount = nQueuePauseCount;
@@ -105,9 +105,9 @@ bool CRawLogFetcher::Initialize(CPostgrePool *pcPostgrePool, CThreadPool *pcThre
 
 /**
  * @brief 기동 시 1회 PROCESSING → PENDING 전량 복구 [rawgps_recover]
- * @param[in] pcPostgrePool DB connection pool
- * @param[in] strRecoverSQL recover SQL
- * @return true(UPDATE 성공), false
+ * @param[in] pcPostgrePool DB 커넥션 풀
+ * @param[in] strRecoverSQL 복구 SQL
+ * @return true(UPDATE 성공), false(실패)
 */
 bool CRawLogFetcher::RunRecover(CPostgrePool *pcPostgrePool,
 		const string& strRecoverSQL)
@@ -115,7 +115,7 @@ bool CRawLogFetcher::RunRecover(CPostgrePool *pcPostgrePool,
 	if (pcPostgrePool == nullptr || strRecoverSQL.empty())
 		return false;
 
-	// recover SQL 실행용 DB 커넥션 풀에서 획득 (2026-07-08 최정우 주석 추가)
+	// 복구 SQL 실행용 DB 커넥션 풀에서 획득 (2026-07-08 최정우 주석 추가)
 	PGconn *pcConn = pcPostgrePool->getConnection();
 	if (pcConn == nullptr)
 	{
@@ -129,7 +129,7 @@ bool CRawLogFetcher::RunRecover(CPostgrePool *pcPostgrePool,
 	if (pcResult == nullptr)
 	{
 		LOGFMTE("raw log recover: exec failed! error=[%s]", PQerrorMessage(pcConn));
-		// recover 실패 시 DB 커넥션 풀 반환 (2026-07-08 최정우 주석 추가)
+		// 복구 실패 시 DB 커넥션 풀 반환 (2026-07-08 최정우 주석 추가)
 		pcPostgrePool->releaseConnection(pcConn);
 		return false;
 	}
@@ -149,7 +149,7 @@ bool CRawLogFetcher::RunRecover(CPostgrePool *pcPostgrePool,
 
 	// PQ 결과 메모리 해제 (2026-07-08 최정우 주석 추가)
 	PQclear(pcResult);
-	// recover 완료 후 DB 커넥션 풀 반환 (2026-07-08 최정우 주석 추가)
+	// 복구 완료 후 DB 커넥션 풀 반환 (2026-07-08 최정우 주석 추가)
 	pcPostgrePool->releaseConnection(pcConn);
 	return bOk;
 }
@@ -159,7 +159,7 @@ bool CRawLogFetcher::RunRecover(CPostgrePool *pcPostgrePool,
  * @return void
  * @remark
  *   - queue < queue_pause_count: FetchAndDispatch() 수행
- *   - queue >= queue_pause_count: DB 조회 skip, sleep 만 증가
+ *   - queue >= queue_pause_count: DB 조회 건너뜀, sleep 만 증가
  *   - 매 사이클 끝 ComputeFetchSleepMs() 만큼 대기
 */
 void CRawLogFetcher::run()
@@ -227,7 +227,7 @@ bool CRawLogFetcher::FetchAndDispatch()
 	if (m_pcPostgrePool == nullptr || m_pcThreadPool == nullptr)
 		return false;
 
-	// fetch·dispatch용 DB 커넥션 풀에서 획득 (2026-07-08 최정우 주석 추가)
+	// fetch·디스패치용 DB 커넥션 풀에서 획득 (2026-07-08 최정우 주석 추가)
 	PGconn *pcConn = m_pcPostgrePool->getConnection();
 	if (pcConn == nullptr)
 	{
@@ -264,12 +264,12 @@ bool CRawLogFetcher::FetchAndDispatch()
 
 /**
  * @brief [rawgps_select] UPDATE RETURNING – PENDING 예약(Reserve) 및 행 조회
- * @param[in] pcConn DB connection
+ * @param[in] pcConn DB 커넥션
  * @param[out] pvtRawLogInfos 예약된 RAW_LOG_INFO 목록 (SQL ORDER BY 순)
  * @return true(예약·파싱 완료), false(SQL 오류·release 실패)
  * @remark
  *   - $1=LIMIT
- *   - ParseRow 실패 시 해당 행만 건너뛰고 나머지 dispatch (#4 orphan 방지)
+ *   - ParseRow 실패 시 해당 행만 건너뛰고 나머지 디스패치 (#4 orphan 방지)
  *   - 실패 행은 [rawgps_update] $4=0 으로 PROCESSING→PENDING 즉시 release
 */
 bool CRawLogFetcher::ReserveFetchBatch(PGconn *pcConn, vector<sRawLogInfo> *pvtRawLogInfos)
@@ -319,7 +319,7 @@ bool CRawLogFetcher::ReserveFetchBatch(PGconn *pcConn, vector<sRawLogInfo> *pvtR
 		{
 			string strTripId;
 			string strGpsSeq;
-			// parse 실패 행 PK 추출 (release 용) (2026-07-08 최정우 주석 추가)
+			// 파싱 실패 행 PK 추출 (release 용) (2026-07-08 최정우 주석 추가)
 			if (ExtractRowPk(pcResult, i, &strTripId, &strGpsSeq))
 			{
 				LOGFMTW("raw log fetcher: parse fail!trip_id=[%s] gps_seq=[%s]",
@@ -342,7 +342,7 @@ bool CRawLogFetcher::ReserveFetchBatch(PGconn *pcConn, vector<sRawLogInfo> *pvtR
 
 	if (!vtFailTripId.empty())
 	{
-		// parse 실패 행 PROCESSING→PENDING 즉시 release (2026-07-08 최정우 주석 추가)
+		// 파싱 실패 행 PROCESSING→PENDING 즉시 release (2026-07-08 최정우 주석 추가)
 		if (!ReleaseReservedRows(pcConn,
 				vtFailTripId.data(), vtFailGpsSeq.data(),
 				vtFailTripId.size()))
@@ -435,8 +435,8 @@ int CRawLogFetcher::GetWorkerId(const char *pszDeviceKey) const
 }
 
 /**
- * @brief connection 반환 전 미완료 트랜잭션 ROLLBACK
- * @param[in] pcConn DB connection
+ * @brief 커넥션 반환 전 미완료 트랜잭션 ROLLBACK
+ * @param[in] pcConn DB 커넥션
  * @return void
 */
 void CRawLogFetcher::ReleaseConnection(PGconn *pcConn)
@@ -469,7 +469,7 @@ enum RawGpsReturningCol
 	RGC_MATCH_LAT,
 	RGC_GPS_LON,
 	RGC_MATCH_LON,
-	RGC_INTERSECT_LEN,
+	RGC_INTERSECT_LEN,					// GPS↔세그먼트 교차점 거리(m)
 	RGC_RAW_VLD,
 	RGC_SPEED_KMH,
 	RGC_HEADING,
@@ -530,7 +530,7 @@ string CRawLogFetcher::BuildPgTextArray(const vector<string>& vtValues)
  * @param[out] pstrTripId TRIP_ID
  * @param[out] pstrGpsSeq GPS_SEQ
  * @return true(추출 성공), false(null·PK NULL)
- * @remark TRIP_ID·GPS_SEQ 가 NULL 이면 false — recover 만 가능
+ * @remark TRIP_ID·GPS_SEQ 가 NULL 이면 false — 복구 만 가능
 */
 bool CRawLogFetcher::ExtractRowPk(PGresult *pcResult, int nRow,
 		string *pstrTripId, string *pstrGpsSeq)
@@ -588,8 +588,8 @@ bool CRawLogFetcher::CheckPgUpdateAffected(PGresult *pcResult, int nExpected,
 }
 
 /**
- * @brief parse 실패·미처리 예약 행 PROCESSING 해제 [rawgps_update]
- * @param[in] pcConn DB connection
+ * @brief 파싱 실패·미처리 예약 행 PROCESSING 해제 [rawgps_update]
+ * @param[in] pcConn DB 커넥션
  * @param[in] pstrTripIds TRIP_ID 배열 (길이 nCount)
  * @param[in] pstrGpsSeqs GPS_SEQ 배열
  * @param[in] nCount release 대상 행 수
@@ -670,9 +670,9 @@ bool CRawLogFetcher::ReleaseReservedRows(PGconn *pcConn,
  * @param[in] pcResult PQ 결과
  * @param[in] nRow 행 인덱스
  * @param[out] pstRawLogInfo 변환된 RAW_LOG_INFO
- * @return true, false
+ * @return true(성공), false(실패)
  * @remark RETURNING 순서: RawGpsReturningCol (설계서 v1.3 §2.1)
- *   - PK NULL 등 변환 불가 시 false. ReserveFetchBatch 가 release 후 skip (#4)
+ *   - PK NULL 등 변환 불가 시 false. ReserveFetchBatch 가 release 후 건너뜀 (#4)
 */
 bool CRawLogFetcher::ParseRow(PGresult *pcResult, int nRow, sRawLogInfo *pstRawLogInfo)
 {

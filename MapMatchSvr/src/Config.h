@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file Config.h
  * @brief 환경설정 구조체 정의 헤더 파일
 */
@@ -6,7 +6,6 @@
 #define __CONFIG_H__
 
 #include <string>
-#include "TypeDefine.h"
 
 using namespace std;
 
@@ -27,19 +26,19 @@ typedef struct sConfig
 	string							strDBName;							// 데이터베이스 이름
 	string							strDBUserID;						// 데이터베이스 아이디
 	string							strDBPasswd;						// 데이터베이스 비밀번호
-	int								nDBMinConnect;						// DB connection pool 최소 연결 수
-	int								nDBMaxConnect;						// DB connection pool 최대 연결 수
-	int								nConnRetryMax;						// [database] conn_retry_max — 풀 연결 핸들 확보 재시도 최대 횟수 (회, 2026-07-10 최정우 추가)
-	int								nConnRetryWait;						// [database] conn_retry_wait — 재시도 사이 대기 (ms, 2026-07-10 최정우 추가)
+	int								nDBMinConnect;						// DB 커넥션 풀 최소 연결 수
+	int								nDBMaxConnect;						// DB 커넥션 풀 최대 연결 수
+	int								nConnRetryMax;						// conn_retry_max
+	int								nConnRetryWait;						// conn_retry_wait
 
 	// SQL 파일명
 	string							strSQLFile;							// SQL 파일명
 
-	// SQL 문 (query.sql 세션 키)
+	// SQL 문 (쿼리.sql 세션 키)
 	string							strRawLogRecoverSession;			// GPS 좀비 PROCESSING 복구 SQL
 	string							strRawLogSelectSession;				// GPS 로그 조회·예약 SQL
 	string							strRawLogUpdateSession;				// GPS 로그 갱신 SQL
-	string							strChargeInsertSession;				// 과금 INSERT SQL (#10 보류: 테이블 재설계 후)
+	string							strChargeInsertSession;				// 과금 INSERT SQL (#10 보류, 비어 있으면 비활성)
 
 	// 피더 (DB poll)
 	int								nFetchLimit;						// 1회 조회·예약 최대 건수 (건)
@@ -51,34 +50,30 @@ typedef struct sConfig
 
 	// 워커 (세션·종료)
 	int								nTtlSec;							// trip_id 세션 유지 시간 (초)
-	int								nShutdownWait;						// 종료 시 워커 처리 완료 대기 (ms)
+	int								nShutdownWait;						// 종료 시 진행 중(활성) batch 완료 대기 (ms)
 	int								nRetryMax;							// release 재시도 상한 (0=무제한)
 
-	// thread pool 개수
-	int								nThreads;							// Thread Pool 개수
+	// 스레드 풀 개수
+	int								nThreads;							// 스레드 풀 개수
 
 	string							strDataFile;						// 데이터 바이너리 파일명 및 경로
 
 	// 연속 맵매칭 정보
 	int								nGeodetic;							// GPS 좌표 측지계
-	int								nRadius;							// config radius — ACCURACY_M NULL 시 검색 반경 폴백 (m) (2026-07-08 최정우)
-	double							dfRadiusScale;					// config radius_scale — 검색반경 = scale × ACCURACY_M (2026-07-08 최정우)
-	int								nRadiusMin;							// config radius_min — 적응형 검색 반경 하한 (m) (2026-07-08 최정우)
-	int								nRadiusMax;							// config radius_max — 적응형 검색 반경 상한 (m) (2026-07-08 최정우)
-	int								nRadiusSkip;						// config radius_skip — ACCURACY_M 초과 시 SKIP (m). 0=비활성 (2026-07-08 최정우)
-	// int								nRadiusSkipM;						// (구) config radius_skip_m (2026-07-08 최정우)
-	// double							dfAccuracyK;						// (구) config accuracy_k (2026-07-08 최정우)
-	// int								nAccuracySkip;						// (구) config accuracy_skip (2026-07-08 최정우)
-	int								nMaxStep;							// 연속 맵매칭 최대 검색단계 설정
-	int								nDistance;							// 연속 맵매칭 각도 유효거리
-	int								nMatchTimeout;						// 1 GPS 맵매칭 처리 임계 (ms, 초과 시 ERROR 격리, 0=비활성)
+	int								nRadius;							// radius
+	double							dfRadiusScale;					// radius_scale
+	int								nRadiusMin;							// radius_min
+	int								nRadiusMax;							// radius_max
+	int								nRadiusSkip;						// radius_skip
+	int								nMaxStep;							// maxstep
+	int								nDistance;							// distance
+	int								nMatchTimeout;						// timeout
 
-	// 연속 맵매칭 고도(ALTITUDE_M) 보조 점수 — Begin 미적용
-	int								nAltitudeGap;						// config altitude_gap — 직전 매칭 고도와 허용 차이(m)
-	int								nAltitudeBonus;						// config altitude_bonus — gap 안·같은 ROAD_TYPE 비용 감산(m)
-	int								nAltitudePenalty;					// config altitude_penalty — gap 안·ROAD_TYPE 불일치 추가 비용(m)
-	double							dfAltitudeWeight;					// config altitude_weight — gap 초과 시 고도차 가중. 0=비활성
-	double							dfAltitudeSlope;					// config altitude_slope — |Δ고도|/수평거리 상한. 초과 시 고도 무시
+	int								nAltitudeGap;						// altitude_gap
+	int								nAltitudeBonus;						// altitude_bonus
+	int								nAltitudePenalty;					// altitude_penalty
+	double							dfAltitudeWeight;					// altitude_weight
+	double							dfAltitudeSlope;					// altitude_slope
 } CONFIG, *PCONFIG;
 
 #define CONFIG_SIZE												sizeof(CONFIG)

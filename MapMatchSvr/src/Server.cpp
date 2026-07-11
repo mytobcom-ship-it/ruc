@@ -7,7 +7,7 @@
 #include <signal.h>
 
 static CServer *g_pcServerInstance = nullptr;
-// SIGINT/SIGTERM 수신 플래그 — 핸들러는 이 값만 세팅(async-signal-safe) (2026-07-10 최정우 추가)
+// SIGINT/SIGTERM 수신 플래그 — 핸들러는 이 값만 세팅(async-시그널-safe) (2026-07-10 최정우 추가)
 static volatile sig_atomic_t g_nShutdownRequested = 0;
 
 /**
@@ -20,13 +20,13 @@ static void ServerSignalHandler(int nSignal)
 	(void)nSignal;
 
 	// 2026-07-10 최정우 주석 처리: 시그널 컨텍스트에서 뮤텍스/조건변수/pthread_kill 호출은
-	//   async-signal-safe 위반. 특히 interrupt()가 run 스레드에 SIGUSR1→예외를 던져
+	// async-시그널-safe 위반. 특히 인터럽트()가 run 스레드에 SIGUSR1→예외를 던져
 	//   pthread_cond_timedwait(m_cRunCondition) 를 강제 언와인드 → 조건변수 내부 ref 오염 →
 	//   종료 시 pthread_cond_destroy 무한 대기(hang) 유발.
 	//if (g_pcServerInstance != nullptr)
 	//{
 	//	g_pcServerInstance->RequestShutdown();
-	//	g_pcServerInstance->interrupt();
+	//g_pcServerInstance->인터럽트();
 	//}
 	// 플래그만 세팅. run 루프가 이를 관찰하여 정상 경로로 종료 (2026-07-10 최정우 수정)
 	g_nShutdownRequested = 1;
@@ -65,7 +65,7 @@ extern "C" void *TimerThread(void *context)
 }
 
 /**
- * @brief 작업용 쓰레드 클래스 (CRawLogWorker 래퍼)
+ * @brief 작업용 스레드 클래스 (CRawLogWorker 래퍼)
 */
 class CWorkerManager : public virtual Runnable
 {
@@ -106,31 +106,31 @@ CServer::CServer() :
 	m_bUninitialized(false),
 	m_nWorkerThread(0), 
 	m_hTimerThread(0),
-	m_nDBMinConnect(3),
+	m_nDBMinConnect(CFG_DEF_MINCONNECT),
 	m_nDBMaxConnect(5),
-	m_nFetchLimit(500),
-	m_nFetchInterval(500),
-	m_nQueuePauseCount(QUEUE_PAUSE_COUNT_DEFAULT),
-	m_nQueueMaxCount(QUEUE_MAX_COUNT_DEFAULT),
-	m_nQueueBusyMin(QUEUE_BUSY_MIN_DEFAULT),
-	m_nQueueBusyMax(QUEUE_BUSY_MAX_DEFAULT),
-	m_nTtlSec(TTL_SEC_DEFAULT),
-	m_nShutdownWait(SHUTDOWN_WAIT_DEFAULT),
-	m_nRetryMax(5),
-	m_nCoordinateType(0), 
-	m_nRadius(0), 
-	m_nMaxStep(0), 
+	m_nFetchLimit(CFG_DEF_LIMIT),
+	m_nFetchInterval(CFG_DEF_FETCH_INTVL),
+	m_nQueuePauseCount(CFG_DEF_Q_PAUSE_CNT),
+	m_nQueueMaxCount(CFG_DEF_Q_MAX_CNT),
+	m_nQueueBusyMin(CFG_DEF_Q_BUSY_MIN),
+	m_nQueueBusyMax(CFG_DEF_Q_BUSY_MAX),
+	m_nTtlSec(CFG_DEF_TTL),
+	m_nShutdownWait(CFG_DEF_SHUTDOWN_WAIT),
+	m_nRetryMax(CFG_DEF_RETRY_MAX),
+	m_nCoordinateType(0),
+	m_nRadius(0),
+	m_nMaxStep(0),
 	m_dwMaxDistance(0),
 	m_nMatchTimeout(0),
-	m_dfRadiusScale(2.5),
-	m_nRadiusMin(20),
-	m_nRadiusMax(50),
-	m_nRadiusSkip(0),
-	m_nAltitudeGap(8),
-	m_nAltitudeBonus(3),
-	m_nAltitudePenalty(10),
-	m_dfAltitudeWeight(0.5),
-	m_dfAltitudeSlope(0.12),
+	m_dfRadiusScale(CFG_DEF_RADIUS_SCALE),
+	m_nRadiusMin(CFG_DEF_RADIUS_MIN),
+	m_nRadiusMax(CFG_DEF_RADIUS),
+	m_nRadiusSkip(CFG_DEF_RADIUS_SKIP),
+	m_nAltitudeGap(CFG_DEF_ALT_GAP),
+	m_nAltitudeBonus(CFG_DEF_ALT_BONUS),
+	m_nAltitudePenalty(CFG_DEF_ALT_PENALTY),
+	m_dfAltitudeWeight(CFG_DEF_ALT_WEIGHT),
+	m_dfAltitudeSlope(CFG_DEF_ALT_SLOPE),
 	m_dtLastMonitorLog(0),
 	m_nLastQueueCount(0),
 	m_bQueueWarnActive(false),
@@ -150,7 +150,7 @@ CServer::~CServer()
 /**
  * @brief 서버 초기화
  * @param[in] stConfig 환경 설정
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CServer::Initialize(const CONFIG& stConfig)
 {
@@ -273,14 +273,17 @@ bool CServer::Initialize(const CONFIG& stConfig)
 		return false;
 	}
 
-	// 과금 대상 INSERT SQL (#10 보류: CHARGE_TARGET 재설계 후 Worker 연동 예정)
-	// 세션명으로 charge_insert SQL 조회 (2026-07-08 최정우 주석 추가)
-	m_strChargeInsertSQL = m_pcSQLAccessor->GetSQL(stConfig.strChargeInsertSession);
-	if (m_strChargeInsertSQL.empty())
+	// 과금 대상 INSERT SQL (#10 보류: 세션 미지정·SQL 없으면 스킵)
+	if (!stConfig.strChargeInsertSession.empty())
 	{
-		LOGFMTE("charge data insert query is empty!");
-		Uninitialize();
-		return false;
+		m_strChargeInsertSQL = m_pcSQLAccessor->GetSQL(stConfig.strChargeInsertSession);
+		if (m_strChargeInsertSQL.empty())
+			LOGFMTW("charge_insert session=[%s] sql is empty — charge disabled",
+				stConfig.strChargeInsertSession.c_str());
+	}
+	else
+	{
+		LOGFMTW("charge_insert session not configured — charge disabled");
 	}
 	LOGFMTI("sql accessor initialize success!");
 
@@ -291,7 +294,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	}
 	LOGFMTI("sql accessor uninitialize success!");
 
-	// PostgreSQL connection pool
+	// PostgreSQL DB 커넥션 풀
 	m_pcPostgrePool = new (std::nothrow)CPostgrePool;
 	if (m_pcPostgrePool == nullptr)
 	{
@@ -398,12 +401,12 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	m_pcThreadPool = new (std::nothrow)CThreadPool(m_nWorkerThread, pcWorkerManager);
 	if (m_pcThreadPool == nullptr)
 	{
-		LOGFMTE("worker thread pool memory allocate failed!");
+		LOGFMTE("worker 스레드 풀 memory allocate failed!");
 		delete pcWorkerManager;
 		Uninitialize();
 		return false;
 	}
-	LOGFMTI("worker thread pool memory allocate success!count=[%d]", m_nWorkerThread);
+	LOGFMTI("worker 스레드 풀 memory allocate success!count=[%d]", m_nWorkerThread);
 
 	m_pcRawLogFetcher = new (std::nothrow)CRawLogFetcher;
 	if (m_pcRawLogFetcher == nullptr)
@@ -429,7 +432,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	m_bRun = true;
 	m_dtLastMonitorLog = time(nullptr);
 	g_pcServerInstance = this;
-	// SIGINT/SIGTERM 수신 시 graceful shutdown 핸들러 등록 (2026-07-08 최정우 주석 추가)
+	// SIGINT/SIGTERM 수신 시 우아한 종료 핸들러 등록 (2026-07-08 최정우 주석 추가)
 	signal(SIGINT, ServerSignalHandler);
 	signal(SIGTERM, ServerSignalHandler);
 
@@ -448,8 +451,8 @@ bool CServer::Initialize(const CONFIG& stConfig)
 		LOGFMTW("raw log recover failed! attempt=[%d/%d]", nAttempt, RECOVER_RETRY_MAX);
 		if (nAttempt < RECOVER_RETRY_MAX)
 		{
-			// recover 재시도 전 대기 (2026-07-08 최정우 주석 추가)
-			usleep(RECOVER_RETRY_INTERVAL_MS * 1000);
+			// 복구 재시도 전 대기 (단위: ms) (2026-07-11 최정우 수정)
+			usleep(RECOVER_RETRY_INTERVAL * 1000);
 		}
 	}
 
@@ -489,7 +492,7 @@ void CServer::Uninitialize()
 
 	if (m_pcRawLogFetcher != nullptr)
 	{
-		// Feeder 쓰레드 interrupt 후 join (2026-07-08 최정우 주석 추가)
+		// Feeder 스레드 인터럽트 후 join (2026-07-08 최정우 주석 추가)
 		m_pcRawLogFetcher->interrupt();
 		m_pcRawLogFetcher->join();
 		delete m_pcRawLogFetcher;
@@ -497,23 +500,30 @@ void CServer::Uninitialize()
 	}
 	LOGFMTI("raw log fetcher uninitialize!");
 
-	// #8: 워커 큐 drain — 진행 중 batch 완료 대기 후 잔여 예약 release
+	// #8: 워커 종료 — 진행 중 batch 완료 대기 후 큐 잔여는 PENDING release
 	if (m_pcThreadPool != nullptr)
 	{
-		// ThreadPool 워커 종료 요청 (2026-07-08 최정우 주석 추가)
+		// ThreadPool 워커 종료 요청: 신규 Dequeue 중단 (2026-07-08 최정우 주석 추가)
 		m_pcThreadPool->RequestShutdown();
 
 		if (m_nShutdownWait > 0)
 		{
-			// shutdown 대기 시간 내 큐·active idle 대기 (2026-07-08 최정우 주석 추가)
-			bool bIdle = m_pcThreadPool->WaitForIdle(m_nShutdownWait);
-			if (!bIdle)
+			// 진행 중(활성) batch 만 대기. 큐 잔여는 워커가 더 이상 꺼내지 않음 (2026-07-11 수정)
+			bool bActiveIdle = m_pcThreadPool->WaitForActiveIdle(m_nShutdownWait);
+			if (!bActiveIdle)
 			{
-				LOGFMTW("shutdown drain timeout!queue=[%d] active=[%d] drain_ms=[%d]",
-					m_pcThreadPool->GetQueueCount(),
+				LOGFMTW("shutdown active drain timeout!active=[%d] queue=[%d] drain_ms=[%d]",
 					m_pcThreadPool->GetActiveThreads(),
+					m_pcThreadPool->GetQueueCount(),
 					m_nShutdownWait);
 			}
+		}
+
+		int nQueuedBatches = m_pcThreadPool->GetQueueCount();
+		if (nQueuedBatches > 0)
+		{
+			LOGFMTI("shutdown: queued batches=[%d] releasing PROCESSING→PENDING (not matching)",
+				nQueuedBatches);
 		}
 
 		// 큐 잔여 batch PROCESSING→PENDING release (#8) (2026-07-08 최정우 주석 추가)
@@ -522,7 +532,7 @@ void CServer::Uninitialize()
 		delete m_pcThreadPool;
 		m_pcThreadPool = nullptr;
 	}
-	LOGFMTI("worker thread pool uninitialize!");
+	LOGFMTI("worker 스레드 풀 uninitialize!");
 
 	if (m_pcRawLogWorker != nullptr)
 	{
@@ -601,7 +611,7 @@ bool CServer::DrainPendingBatchesAndRelease()
 		return false;
 
 	vector<RAW_LOG_BATCH> vtPending;
-	// shutdown 시 ThreadPool 큐에 남은 batch 목록 추출 (2026-07-08 최정우 주석 추가)
+	// 종료 시 ThreadPool 큐에 남은 batch 목록 추출 (2026-07-08 최정우 주석 추가)
 	m_pcThreadPool->DrainQueuedBatches(&vtPending);
 
 	if (vtPending.empty())
@@ -638,7 +648,7 @@ bool CServer::DrainPendingBatchesAndRelease()
 }
 
 /**
- * @brief run 루프 대기 (shutdown signal 또는 타임아웃)
+ * @brief run 루프 대기 (종료 시그널 또는 타임아웃)
  * @return void
  */
 void CServer::WaitForNextCycle()
@@ -646,8 +656,8 @@ void CServer::WaitForNextCycle()
 	m_cRunMutex.lock();
 	if ((m_bRun) && (!IsInterrupted()))
 	{
-		// run 루프 주기 대기 또는 shutdown signal 수신 (2026-07-08 최정우 주석 추가)
-		m_cRunCondition.waitTimed(m_cRunMutex, SERVER_RUN_WAIT_MS);
+		// run 루프 주기 대기 또는 종료 시그널 수신 (단위: ms) (2026-07-11 최정우 수정)
+		m_cRunCondition.waitTimed(m_cRunMutex, SERVER_RUN_WAIT);
 	}
 	m_cRunMutex.unlock();
 }
@@ -721,7 +731,7 @@ void CServer::run()
 	while (m_bRun && !IsInterrupted())
 	{
 		// SIGINT/SIGTERM 플래그 관찰 시 정상 스레드 컨텍스트에서 종료 요청 후 루프 탈출 (2026-07-10 최정우 추가)
-		//   → run() 정상 return → threadHandler 가 m_cond broadcast → main join() 정상 복귀
+		// → run() 정상 return → threadHandler 가 m_cond 브로드캐스트 → main join() 정상 복귀
 		//   → pthread_cond_timedwait 강제 언와인드 없음 → 조건변수 오염/destroy hang 방지
 		if (g_nShutdownRequested)
 		{
@@ -730,14 +740,15 @@ void CServer::run()
 		}
 
 		time_t dtNow = time(nullptr);
-		if ((dtNow - m_dtLastMonitorLog) >= SERVER_MONITOR_INTERVAL_SEC)
+		// 모니터 로그 주기 (단위: sec) (2026-07-11 최정우 주석 추가)
+		if ((dtNow - m_dtLastMonitorLog) >= SERVER_MONITOR_INTERVAL)
 		{
 			// 워커·큐·DB 풀 상태 주기 모니터링 (2026-07-08 최정우 주석 추가)
 			LogMonitorStatus(dtNow);
 			m_dtLastMonitorLog = dtNow;
 		}
 
-		// shutdown 또는 타임아웃까지 run 루프 대기 (2026-07-08 최정우 주석 추가)
+		// 종료 또는 타임아웃까지 run 루프 대기 (2026-07-08 최정우 주석 추가)
 		WaitForNextCycle();
 	}
 }

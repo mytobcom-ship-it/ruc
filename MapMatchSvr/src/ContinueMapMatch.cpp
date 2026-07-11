@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file ContinueMapMatch.cpp
  * @brief 연속 맵매칭 클래스 소스 파일
 */
@@ -37,7 +37,7 @@ void CContinueMapMatch::SetAltitudeConfig(const ALTITUDE_SCORE_CONFIG& stAltConf
  * @param[in] nSearchStep 탐색할 단계 (0~5)
  * @param[out] pwErrorCode 에러 코드
  * @param[out] pstMatchEntry 검색 정보
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& stSgmtMatchInput, 
 		uint64& qwLinkID, sint16& nSearchStep, uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry,
@@ -132,7 +132,7 @@ bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPU
  * @param[in] stSgmtMatchInput 세그먼트 매칭 입력 정보
  * @param[in] stDepthLinkInfoData 링크 회전 정보 및 세그먼트 정보
  * @param[out] plistMatchEntryList 검색 정보 목록
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, 
 		DEPTH_LINK_INFO_DATA& stDepthLinkInfoData, list<MATCH_ENTRY> *plistMatchEntryList)
@@ -169,7 +169,7 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
 		// 링크 ID
 		stSgmtInfo.qwLinkID = pstLinkSgmtInfo->qwLinkID;
 
-		// GPS-세그먼트 거리·방위 기본 매칭 (2026-07-08 최정우 주석 추가)
+		// INTERSECT_LEN(GPS↔세그먼트 교차점 거리)·방위 기본 매칭 (2026-07-08 최정우 주석 추가)
 		if (!m_cGISUtil.SgmtMatch(stSgmtMatchInput, stSgmtInfo, &stSgmtMatchRes))
 			continue;
 
@@ -184,8 +184,8 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
 		stMatchEntry.dfSgmtMatchLen = stSgmtMatchRes.dfSgmtMatchLen;
 		stMatchEntry.dfIntersectLenSgmt = stSgmtMatchRes.dfIntersectLenSgmt;
 		// ── 연속 맵매칭 고도 보조 비용 가산 (Begin 미적용) ──
-		//   dfCost = 수직거리 + 방위각비용 + CalcAltRoadPenalty(Δalt, ROAD_TYPE)
-		//   값이 작을수록 우선 — bonus(음수)면 동일 거리·방향 후보보다 유리
+		//   dfCost = INTERSECT_LEN + 방위각비용 + CalcAltRoadPenalty(Δalt, ROAD_TYPE)
+		// 값이 작을수록 우선 — 보너스(음수)면 동일 거리·방향 후보보다 유리
 		//   예) 기본 25 + 고도−3 = 22 → 같은 고가·Δ6m 후보가 일반도로(+10)보다 선택
 		//   (2026-07-08 최정우 추가)
 		stMatchEntry.dfAngleCost = stSgmtMatchRes.dfCost - stSgmtMatchRes.dfIntersectLenSgmt;
@@ -220,7 +220,7 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
  * @brief 연결 링크 정보
  * @param[in,out] psetSearchHistoryLinkList 검색된 링크 UID 목록 (중복 검사용)
  * @param[out] plistDepthLinkInfoList 연결 링크 UID 정보
- * @return true, false
+ * @return true(성공), false(실패)
 */
 bool CContinueMapMatch::GetLinkDepthInfo(set<uint32> *psetSearchHistoryLinkList, listDepthLinkInfo *plistDepthLinkInfoList)
 {
@@ -280,7 +280,7 @@ bool CContinueMapMatch::GetLinkDepthInfo(set<uint32> *psetSearchHistoryLinkList,
 }
 
 /**
- * @brief 검색 정보 목록 중 비용 최소 후보 추출 (dfCost 오름차순, 동률 시 수직거리)
+ * @brief 검색 정보 목록 중 비용 최소 후보 추출 (dfCost 오름차순, 동률 시 INTERSECT_LEN)
  * @param[in] plistMatchEntryList 검색 정보 목록
  * @param[out] pstMatchEntry 검색 정보
  * @return void

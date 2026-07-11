@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file Condition.h
  * @brief Thread 접근 제어용 클래스 헤더 파일
 */

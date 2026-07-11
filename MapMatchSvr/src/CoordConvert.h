@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file CoordConvert.h
  * @brief 측지계 변환 클래스 헤더 파일
 */

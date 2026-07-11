@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file SimServer.cpp
  * @brief 시뮬레이터 본체 구현
 */
@@ -28,7 +28,7 @@ bool CSimServer::Initialize(const SIM_CONFIG& stConfig)
 {
 	m_stConfig = stConfig;
 
-	// DB connection pool
+	// DB 커넥션 풀
 	m_pcPool = new (std::nothrow) CPostgrePool();
 	if (!m_pcPool) { LOGFMTE("postgre pool alloc fail"); return false; }
 

@@ -1,4 +1,4 @@
--- MapMatchSvr query.sql (PostgreSQL / libpq: $1, $2, ...)
+﻿-- MapMatchSvr query.sql (PostgreSQL / libpq: $1, $2, ...)
 -- 근거: doc/RUC_위치검증서버_테이블설계서_v1.3.docx §2.1, §3.1
 --
 -- TRIP_EVENT   : 0=START, 1=NONE, 2=END
@@ -15,7 +15,7 @@
 --
 -- rawgps_select RETURNING 컬럼 순서 (= ROADNET.PRIM_RAWGPS 컬럼 순서)
 --   0:TRIP_ID 1:GPS_SEQ 2:DEVICE_KEY 3:GPS_DT 4:TRIP_EVENT 5:DRIVE_STATUS
---   6:GPS_LAT 7:MATCH_LAT 8:GPS_LON 9:MATCH_LON 10:INTERSECT_LEN 11:RAW_VLD
+--   6:GPS_LAT 7:MATCH_LAT 8:GPS_LON 9:MATCH_LON 10:INTERSECT_LEN(GPS↔세그먼트 교차점 거리,m) 11:RAW_VLD
 --   12:SPEED_KMH 13:HEADING 14:ALTITUDE_M 15:ACCURACY_M 16:BATTERY
 --   17:RECV_DT 18:MATCH_STATUS
 
@@ -70,7 +70,7 @@ RETURNING
 
 -- ── 2. 결과 갱신 ──────────────────────────────────────────────────────────
 -- [rawgps_update] PROCESSING(2) → MATCHED(1)/SKIP(3)/ERROR(4). DRIVE_STATUS=4 동일 갱신 (2026-07-10 최정우 수정)
--- $1=TRIP_ID[], $2=GPS_SEQ[], $3=MATCH_STATUS[], $4=INTERSECT_LEN[], $5=MATCH_LAT[], $6=MATCH_LON[]
+-- $1=TRIP_ID[], $2=GPS_SEQ[], $3=MATCH_STATUS[], $4=INTERSECT_LEN[](GPS↔세그먼트 교차점 거리,m), $5=MATCH_LAT[], $6=MATCH_LON[]
 [rawgps_update]
 UPDATE ROADNET.PRIM_RAWGPS AS T
 SET
@@ -86,8 +86,9 @@ SET
 		ELSE T.MATCH_LON
 	END,
 	INTERSECT_LEN = CASE
-		WHEN V.INTERSECT_LEN = '' THEN T.INTERSECT_LEN
-		ELSE V.INTERSECT_LEN::INTEGER
+		WHEN V.INTERSECT_LEN <> '' THEN V.INTERSECT_LEN::INTEGER
+		WHEN V.MATCH_STATUS IN (3, 4) THEN 0
+		ELSE T.INTERSECT_LEN
 	END
 FROM (
 	SELECT

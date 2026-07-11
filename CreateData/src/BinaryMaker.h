@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file BinaryMaker.h
  * @brief 형상 정보(표준노드링크) → 맵매칭 바이너리(link.psf) 생성 클래스 헤더 파일
  * @remark

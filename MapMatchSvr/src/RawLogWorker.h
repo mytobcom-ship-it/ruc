@@ -58,14 +58,14 @@ typedef struct sVehicleTripSession
  * @brief rawgps_update 1행 파라미터 (배치 종료 시 일괄 UPDATE)
  * @remark [rawgps_update] $3=match_status:
  *   - 1(MATCHED) / 3(SKIP) / 4(ERROR) : 맵매칭 정상 완료
- *   - 0(PENDING) : bulk 실패 시 예약 해제(release). $4~$6 은 '' 로 MATCH_* 미갱신
+ *   - 0(PENDING) : bulk 실패 시 예약 해제(release). $4~$6 은 '' 로 MATCH_*·INTERSECT_LEN 미갱신
 */
 typedef struct sRawLogUpdateRow
 {
 	string							strTripId;
 	string							strGpsSeq;
 	string							strMatchStatus;
-	string							strIntersectLen;
+	string							strIntersectLen;					// INTERSECT_LEN: GPS↔세그먼트 교차점 거리(m)
 	string							strMatchLat;
 	string							strMatchLon;
 } RAW_LOG_UPDATE_ROW, *PRAW_LOG_UPDATE_ROW;
@@ -123,7 +123,7 @@ private:
 	bool BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDATE_ROW>& vtUpdates);
 	// bulk update 실패 시 동일 rawgps_update 로 PROCESSING(2)→PENDING(0) 예약 해제
 	bool BulkReleaseRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDATE_ROW>& vtUpdates);
-	// #14: 커넥션 반환 전 미완료 트랜잭션 ROLLBACK 가드 (향후 명시적 트랜잭션 대비)
+	// 반환 전 미완료 트랜잭션 ROLLBACK 가드 (향후 명시적 트랜잭션 대비)
 	void ReleaseConnection(PGconn *pcConn);
 	static bool AppendReleaseRowFromRawLog(vector<RAW_LOG_UPDATE_ROW> *pvtRelease,
 		const sRawLogInfo& stRawLogInfo);
@@ -142,6 +142,8 @@ private:
 	static void ResetTripSessionForBegin(VEHICLE_TRIP_SESSION& stSession, bool bFullReset);
 	// 하버사인: WGS84 경위도(도) 두 점 사이 지표거리(m) (2026-07-08 최정우 추가)
 	static double HaversineMeters(const POINT& stA, const POINT& stB);
+	// INTERSECT_LEN: GPS↔세그먼트 교차점(MATCH_LAT/LON) 하버사인 거리(m) 반올림
+	static int CalcIntersectLenM(const sRawLogInfo& stRawLogInfo, double dfMatchLon, double dfMatchLat);
 
 private:
 	RAWLOG_WORKER_CONFIG				m_stConfig;

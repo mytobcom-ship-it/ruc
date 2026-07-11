@@ -232,7 +232,7 @@ public:
 };
 
 //////////////////////////////////////////////////////////////////////////
-//! UTILITY
+//! 유틸리티
 //////////////////////////////////////////////////////////////////////////
 static void fixPath(std::string &path);
 static void trimLogConfig(std::string &str, std::string extIgnore = std::string());
@@ -364,26 +364,26 @@ enum LogDataType
 //////////////////////////////////////////////////////////////////////////
 struct LoggerInfo 
 {
-	//! attribute
-	std::string						_key;						// logger key
-	std::string						_name;						// one logger one name.
-	std::string						_path;						// path for log file.
-	int								_level;						// filter level
-	bool							_display;					// display to screen 
-	bool							_outfile;					// output to file
-	bool							_daydir;					// create directory per day 
-	bool							_monthdir;					// create directory per month 
-	unsigned int					_limitsize;					// limit file's size, unit Million byte.
-	bool							_enable;					// logger is enable 
-	bool							_fileLine;					// enable/disable the log's suffix.(file name:line number)
-	time_t							_logReserveTime;			// log file reserve time. unit is time second.
-	//! runtime info
-	time_t							_curFileCreateTime;			// file create time
-	time_t							_curFileCreateDay;			// file create day time
-	unsigned int					_curFileIndex;				// rolling file index
-	unsigned int					_curWriteLen;				// current file length
-	Log4zFileHandler				_handle;					// file handle.
-	//!history
+	//! 속성
+	std::string						_key;						// 로거 키
+	std::string						_name;						// 로거당 이름 1개.
+	std::string						_path;						// 로그 파일 경로.
+	int								_level;						// 필터 레벨
+	bool							_display;					// 화면 표시
+	bool							_outfile;					// 파일 출력
+	bool							_daydir;					// 일별 디렉터리 생성
+	bool							_monthdir;					// 월별 디렉터리 생성 
+	unsigned int					_limitsize;					// 파일 크기 제한(백만 바이트).
+	bool							_enable;					// 로거 활성화 여부 
+	bool							_fileLine;					// 로그 접미사(파일명:행번호) 활성/비활성
+	time_t							_logReserveTime;			// 로그 파일 보관 시간(초).
+	//! 런타임 정보
+	time_t							_curFileCreateTime;			// 파일 생성 시각
+	time_t							_curFileCreateDay;			// 파일 생성 일자
+	unsigned int					_curFileIndex;				// 롤링 파일 인덱스
+	unsigned int					_curWriteLen;				// 현재 파일 길이
+	Log4zFileHandler				_handle;					// 파일 핸들.
+	//! 이력
 	std::list<std::pair<time_t, std::string> > _historyLogs;
 
 	LoggerInfo()
@@ -427,7 +427,7 @@ public:
     virtual bool stop();
     virtual bool prePushLog(LoggerId id, int level);
     virtual bool pushLog(LogData * pLog, const char * file, int line);
-    //! 查找ID
+    //!ID 조회
     virtual LoggerId findLogger(const char*  key);
     bool hotChange(LoggerId id, LogDataType ldt, int num, const std::string & text);
     virtual bool enableLogger(LoggerId id, bool enable);
@@ -462,23 +462,23 @@ private:
 
     //! thread status.
     bool        _runing;
-    //! wait thread started.
+    //! 스레드 시작 대기.
     SemHelper        _semaphore;
 
-    //! hot change name or path for one logger
+    //! 단일 로거 이름/경로 핫 변경
     int _hotUpdateInterval;
     unsigned int _checksum;
 
-    //! the process info.
+    //! 프로세스 정보.
     std::string _pid;
     std::string _proName;
 
-    //! config file name
+    //! 설정 파일명
     std::string _configFile;
 
-    //! logger id manager, [logger name]:[logger id].
+    //! 로거 ID 관리자 [로거명]:[로거ID].
     std::map<std::string, LoggerId> _ids; 
-    // the last used id of _loggers
+    // _loggers 마지막 사용 ID
     LoggerId    _lastId; 
     LoggerInfo _loggers[LOG4Z_LOGGER_MAX];
 
@@ -493,7 +493,7 @@ private:
     std::vector<LogData*> _freeLogDatas;
 
     char _chunk3[256];
-    //show color lock
+    //show color 잠금
     LockHelper _scLock;
     //status statistics
     //write file
@@ -529,7 +529,7 @@ const std::string Log4zFileHandler::readContent()
 }
 
 //////////////////////////////////////////////////////////////////////////
-//! utility
+//! 유틸리티
 //////////////////////////////////////////////////////////////////////////
 static inline void sleepMillisecond(unsigned int ms)
 {
@@ -575,7 +575,7 @@ static void trimLogConfig(std::string &str, std::string extIgnore)
     int posBegin = 0;
     int posEnd = 0;
 
-    //trim utf8 file bom
+    //UTF-8 파일 BOM 제거
     if (str.length() >= 3 
         && (unsigned char)str[0] == 0xef
         && (unsigned char)str[1] == 0xbb
@@ -737,7 +737,7 @@ static bool parseConfigLine(const std::string& line, int curLineNum, std::string
             iter->second._display = true;
         }
     }
-    //! output to file
+    //! 파일 출력
     else if (kv.first == "outfile")
     {
         if (kv.second == "false" || kv.second == "0")
@@ -778,7 +778,7 @@ static bool parseConfigLine(const std::string& line, int curLineNum, std::string
     {
         iter->second._limitsize = atoi(kv.second.c_str());
     }
-    //! display log in file line
+    //! 파일·행번호 로그 표시
     else if (kv.first == "fileline")
     {
         if (kv.second == "false" || kv.second == "0")
@@ -1392,7 +1392,7 @@ bool LogerManager::configFromStringImpl(std::string content, bool isUpdate)
 	for (std::string::iterator iter = content.begin(); iter != content.end(); ++iter)
 	{
 		sum += (unsigned char)*iter;
-	}							// for (std::string::iterator iter = content.begin(); iter != content.end(); ++iter)
+	}							// for (std::string::iterator iter = content.시작(); iter != content.끝(); ++iter)
 
 	if (sum == _checksum)
 	{
@@ -1405,7 +1405,7 @@ bool LogerManager::configFromStringImpl(std::string content, bool isUpdate)
 	{
 		// printf 에러 표출 주석 처리 (2025-12-04 최정우 주석 처리)
 		/*printf(" !!! !!! !!! !!!\n");
-		printf(" !!! !!! load config file error\n");
+printf(" !!! !!! 설정 파일 로드 오류\n");
 		printf(" !!! !!! !!! !!!\n");*/
 
 		// stderr 로 에러 표출 (2025-12-04 최정우 추가)
@@ -1444,18 +1444,18 @@ bool LogerManager::configFromStringImpl(std::string content, bool isUpdate)
 		setLoggerLimitsize(id, iter->second._limitsize);
 		setLoggerDaydir(id, iter->second._daydir);
 		setLoggerMonthdir(id, iter->second._monthdir);
-	}							// for (std::map<std::string, LoggerInfo>::iterator iter = loggerMap.begin(); iter != loggerMap.end(); ++iter)
+	}							// for (std::map<std::string, LoggerInfo>::iterator iter = loggerMap.시작(); iter != loggerMap.끝(); ++iter)
 	return true;
 }
 
-//! read configure and create with overwriting
+//! 설정 읽기 및 덮어쓰기 생성
 bool LogerManager::config(const char* configPath)
 {
 	// printf 로 에러 표출 주석 처리 (2025-12-04 최정우 주석 처리)
 	/*if (!_configFile.empty())
 	{
 		printf(" !!! !!! !!! !!!\n");
-		printf(" !!! !!! configure error: too many calls to Config. the old config file=%s,  the new config file=%s !!! !!!\n"
+printf(" !!! !!! Config 호출 과다 오류. 이전 설정 파일=%s, 새 설정 파일=%s !!! !!!\n"
 		, _configFile.c_str(), configPath);
 		printf(" !!! !!! !!! !!!\n");
 		return false;
@@ -1487,7 +1487,7 @@ bool LogerManager::config(const char* configPath)
 	{
 		// printf 함수 사용 주석 처리 (2025-12-04 최정우 주석 처리)
 		/*printf(" !!! !!! !!! !!!\n");
-		printf(" !!! !!! load config file error. filename=%s  !!! !!!\n", configPath);
+printf(" !!! !!! 설정 파일 로드 오류. filename=%s !!! !!!\n", configPath);
 		printf(" !!! !!! !!! !!!\n");*/
 
 		// stderr 로 에러 표출 (2025-12-04 최정우 추가)
@@ -1499,19 +1499,19 @@ bool LogerManager::config(const char* configPath)
 	return configFromStringImpl(f.readContent().c_str(), false);
 }
 
-//! read configure and create with overwriting
+//! 설정 읽기 및 덮어쓰기 생성
 bool LogerManager::configFromString(const char* configContent)
 {
     return configFromStringImpl(configContent, false);
 }
 
-//! create with overwriting
+//! 덮어쓰기로 생성
 LoggerId LogerManager::createLogger(const char* key)
 {
     if (key == nullptr)
     {
         return LOG4Z_INVALID_LOGGER_ID;
-    }							// if (key == nullptr)
+    }							// if (키 == nullptr)
     
     std::string copyKey = key;
     trimLogConfig(copyKey);
@@ -1522,7 +1522,7 @@ LoggerId LogerManager::createLogger(const char* key)
 		if (iter != _ids.end())
 		{
 			newID = iter->second;
-		}						// if (iter != _ids.end())
+		}						// if (iter != _ids.끝())
 	}
 
 	if (newID == LOG4Z_INVALID_LOGGER_ID)
@@ -1565,7 +1565,7 @@ bool LogerManager::stop()
 		AutoLock l(_freeLock);
 		while (!_freeLogDatas.empty())
 		{
-			// 메모리 해제 후 초기화 free() 사용을 추가로 안정성 강화 (2025-12-05 최정우 수정)
+			// 메모리 해제 후 초기화 해제() 사용을 추가로 안정성 강화 (2025-12-05 최정우 수정)
 			LogData *pLog = _freeLogDatas.back();
 			if (pLog != nullptr)
 			{
@@ -1709,7 +1709,7 @@ LoggerId LogerManager::findLogger(const char * key)
     if (iter != _ids.end())
     {
         return iter->second;
-    }							// if (iter != _ids.end())
+    }							// if (iter != _ids.끝())
     return LOG4Z_INVALID_LOGGER_ID;
 }
 
@@ -1794,7 +1794,7 @@ bool LogerManager::setLoggerName(LoggerId id, const char * name)
 	if (name == nullptr || strlen(name) == 0) 
 	{
 		return false;
-	}							// if (name == nullptr || strlen(name) == 0) 
+	}							// if (이름 == nullptr || strlen(이름) == 0)
 
 	return hotChange(id, LDT_SET_LOGGER_NAME, 0, name);
 }
@@ -1825,7 +1825,7 @@ bool LogerManager::updateConfig()
 {
 	if (_configFile.empty())
 	{
-		//LOGW("update config file error. filename is empty.");
+		//LOGW("update config file 오류. filename is empty.");
 		return false;
 	}							// if (_configFile.empty())
 
@@ -1913,7 +1913,7 @@ bool LogerManager::openLogger(LogData * pLog)
 		pLogger->_curWriteLen = 0;
 
 		tm t = timeToTm(pLogger->_curFileCreateTime);
-		if (true) //process day time   
+		if (true) //process 일 time
 		{
 			tm day = t;
 			day.tm_hour = 0;
@@ -1950,7 +1950,7 @@ bool LogerManager::openLogger(LogData * pLog)
 		if (LOG4Z_ALL_SYNCHRONOUS_OUTPUT)
 		{
 			//sprintf(buf, "%s_%s_%04d%02d%02d%02d_%s_%03u.log",
-			//    _proName.c_str(), name.c_str(), t.tm_year+1900, t.tm_mon+1, t.tm_mday,
+			// _proName.c_str(), 이름.c_str(), t.tm_year+1900, t.tm_mon+1, t.tm_mday,
 			//    t.tm_hour, _pid.c_str(), pLogger->_curFileIndex);
 
 			// 2020-01-16 Modify
@@ -1966,7 +1966,7 @@ bool LogerManager::openLogger(LogData * pLog)
 		else
 		{
 			//sprintf(buf, "%s_%s_%04d%02d%02d%02d%02d_%s_%03u.log",
-			//   _proName.c_str(), name.c_str(), t.tm_year+1900, t.tm_mon+1, t.tm_mday,
+			// _proName.c_str(), 이름.c_str(), t.tm_year+1900, t.tm_mon+1, t.tm_mday,
 			//    t.tm_hour, t.tm_min, _pid.c_str(), pLogger->_curFileIndex);
 			
 			// 2020-01-16 Modify
@@ -2001,13 +2001,13 @@ bool LogerManager::openLogger(LogData * pLog)
 				{
 					pLogger->_handle.removeFile(pLogger->_historyLogs.front().second.c_str());
 					pLogger->_historyLogs.pop_front();
-				}				// while (!pLogger->_historyLogs.empty() && pLogger->_historyLogs.front().first < time(nullptr) - pLogger->_logReserveTime)
-			}					// if (pLogger->_historyLogs.size() > LOG4Z_FORCE_RESERVE_FILE_COUNT)
+				}				// while (!pLogger->_이력Logs.empty() && pLogger->_이력Logs.앞().첫 < time(nullptr) - pLogger->_logReserveTime)
+			}					// if (pLogger->_이력Logs.size() > LOG4Z_FORCE_RESERVE_FILE_COUNT)
 
 			if (pLogger->_historyLogs.empty() || pLogger->_historyLogs.back().second != path)
 			{
 				pLogger->_historyLogs.push_back(std::make_pair(time(nullptr), path));
-			}					// if (pLogger->_historyLogs.empty() || pLogger->_historyLogs.back().second != path)
+			}					// if (pLogger->_이력Logs.empty() || pLogger->_이력Logs.뒤().초 != path)
 		}						// if (pLogger->_logReserveTime > 0)
 		return true;
 	}							// if (!pLogger->_handle.isOpen())

@@ -1,0 +1,86 @@
+﻿-- PSF 파생 도로망 — 슬림 PRIM_LINK_INFO (지도 표시·M점 보간)
+-- 사용: psql -U postgres -d roadnet -f roadnet/sql/prim_road_create.sql
+--
+-- 사전 조건:
+--   - PostGIS 확장
+--   - network.moct_node (노드명 ETL용, roadnet/sql/create.sql)
+--
+-- ETL (link.psf 적재 후 노드명 보강):
+--   UPDATE ROADNET.PRIM_LINK_INFO l
+--   SET ST_ND_NAME = fn.node_name,
+--       ED_ND_NAME = tn.node_name
+--   FROM network.moct_node fn,
+--        network.moct_node tn
+--   WHERE fn.node_id = l.ST_ND_ID
+--     AND tn.node_id = l.ED_ND_ID;
+
+\c roadnet
+
+CREATE EXTENSION IF NOT EXISTS postgis;
+
+CREATE SCHEMA IF NOT EXISTS ROADNET;
+COMMENT ON SCHEMA ROADNET IS 'PSF 파생 도로망·맵매칭 표시 (PRIM_*)';
+
+SET SEARCH_PATH TO ROADNET, PUBLIC;
+
+-- ---------------------------------------------------------------------------
+-- PRIM_LINK_INFO — PSF LINK_INFO 슬림 (지도 도로선 + MATCH_OFFSET_M M점)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ROADNET.PRIM_LINK_INFO (
+    LINK_ID       VARCHAR(10)                  NOT NULL,
+    LEN           NUMERIC(12, 3)               NOT NULL,
+    GEOM          GEOMETRY(LINESTRING, 4326)   NOT NULL,
+    SPEED_LIMIT   SMALLINT,
+    ROAD_RANK     SMALLINT,
+    ROAD_CONNECT  SMALLINT,
+    ROAD_TYPE     SMALLINT,
+    LANES         SMALLINT,
+    NAME          VARCHAR(46),
+    ST_ND_ID      VARCHAR(10),
+    ST_ND_NAME    VARCHAR(50),
+    ST_ND_LON     NUMERIC(10, 6),
+    ST_ND_LAT     NUMERIC(10, 6),
+    ED_ND_ID      VARCHAR(10),
+    ED_ND_NAME    VARCHAR(50),
+    ED_ND_LON     NUMERIC(10, 6),
+    ED_ND_LAT     NUMERIC(10, 6),
+    PSF_LOADED_AT TIMESTAMPTZ                  NOT NULL DEFAULT NOW(),
+    CONSTRAINT PK_PRIM_LINK_INFO PRIMARY KEY (LINK_ID),
+    CONSTRAINT CK_PRIM_LINK_LEN CHECK (LEN > 0)
+);
+
+COMMENT ON TABLE ROADNET.PRIM_LINK_INFO IS 'PSF 파생 링크 — 지도 도로선·MATCH_OFFSET_M 표시 (슬림)';
+COMMENT ON COLUMN ROADNET.PRIM_LINK_INFO.GEOM IS 'PSF 세그먼트 결합 WGS84 LineString — M 점 보간 기준';
+COMMENT ON COLUMN ROADNET.PRIM_LINK_INFO.LEN IS 'f_node 방향 링크 길이(m) — MATCH_OFFSET_M 분모';
+COMMENT ON COLUMN ROADNET.PRIM_LINK_INFO.NAME IS '도로명 (PSF szRoadName)';
+COMMENT ON COLUMN ROADNET.PRIM_LINK_INFO.ST_ND_ID IS '시작(출발) 노드 ID (PSF f_node)';
+COMMENT ON COLUMN ROADNET.PRIM_LINK_INFO.ST_ND_NAME IS '시작(출발) 노드 명칭 (network.moct_node.node_name)';
+COMMENT ON COLUMN ROADNET.PRIM_LINK_INFO.ST_ND_LON IS '시작 노드 경도 WGS84';
+COMMENT ON COLUMN ROADNET.PRIM_LINK_INFO.ST_ND_LAT IS '시작 노드 위도 WGS84';
+COMMENT ON COLUMN ROADNET.PRIM_LINK_INFO.ED_ND_ID IS '종료(도착) 노드 ID (PSF t_node)';
+COMMENT ON COLUMN ROADNET.PRIM_LINK_INFO.ED_ND_NAME IS '종료(도착) 노드 명칭 (network.moct_node.node_name)';
+COMMENT ON COLUMN ROADNET.PRIM_LINK_INFO.ED_ND_LON IS '종료 노드 경도 WGS84';
+COMMENT ON COLUMN ROADNET.PRIM_LINK_INFO.ED_ND_LAT IS '종료 노드 위도 WGS84';
+COMMENT ON COLUMN ROADNET.PRIM_LINK_INFO.PSF_LOADED_AT IS '마지막 PSF 적재 시각';
+
+CREATE INDEX IF NOT EXISTS IDX_PRIM_LINK_GEOM
+    ON ROADNET.PRIM_LINK_INFO USING GIST (GEOM);
+
+CREATE INDEX IF NOT EXISTS IDX_PRIM_LINK_NAME
+    ON ROADNET.PRIM_LINK_INFO (NAME);
+
+CREATE INDEX IF NOT EXISTS IDX_PRIM_LINK_ST_ND_NAME
+    ON ROADNET.PRIM_LINK_INFO (ST_ND_NAME)
+    WHERE ST_ND_NAME IS NOT NULL AND ST_ND_NAME <> '';
+
+CREATE INDEX IF NOT EXISTS IDX_PRIM_LINK_ED_ND_NAME
+    ON ROADNET.PRIM_LINK_INFO (ED_ND_NAME)
+    WHERE ED_ND_NAME IS NOT NULL AND ED_ND_NAME <> '';
+
+-- 기존 테이블에 노드명 컬럼만 없을 때 (idempotent)
+ALTER TABLE ROADNET.PRIM_LINK_INFO
+    ADD COLUMN IF NOT EXISTS ST_ND_NAME VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS ED_ND_NAME VARCHAR(50);
+
+COMMENT ON COLUMN ROADNET.PRIM_LINK_INFO.ST_ND_NAME IS '시작(출발) 노드 명칭 (network.moct_node.node_name)';
+COMMENT ON COLUMN ROADNET.PRIM_LINK_INFO.ED_ND_NAME IS '종료(도착) 노드 명칭 (network.moct_node.node_name)';

@@ -57,9 +57,18 @@
     L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
       attribution: "&copy; OpenStreetMap &copy; CARTO",
       subdomains: "abcd",
-      maxZoom: 20,
+      // 타일 네이티브 한계(20) 이상은 업스케일로 확대 허용 (2026-07-15 최정우 수정)
+      maxNativeZoom: 20,
+      maxZoom: 24,
     }).addTo(map);
     map.setView([37.55, 126.98], 14);
+
+    // 마커가 항상 연결선(INTERSECT 히트선) 위에 오도록 전용 pane 생성 (2026-07-15 최정우 추가)
+    //   기존엔 넓은 투명 히트선(weight 12)이 마커보다 나중에 그려져 마커 중앙 마우스오버를 가로챔
+    map.createPane("paneConnectors");
+    map.getPane("paneConnectors").style.zIndex = 420;
+    map.createPane("panePoints");
+    map.getPane("panePoints").style.zIndex = 450;
 
     layerRoadsHalo = L.layerGroup().addTo(map);
     layerRoads = L.layerGroup().addTo(map);
@@ -131,13 +140,15 @@
   }
 
   function makeArrowMarker(latlng, bearingDeg) {
+    // 삼각형 기본 방향은 동쪽(→). 방위각(정북=0°, 시계방향)에 맞추려면 -90° 보정 (2026-07-15 최정우 수정)
+    var rotDeg = bearingDeg - 90;
     return L.marker(latlng, {
       interactive: false,
       icon: L.divIcon({
         className: "road-dir-arrow",
         html:
           '<svg width="11" height="11" viewBox="0 0 11 11" ' +
-          'style="transform:rotate(' + bearingDeg + 'deg);display:block">' +
+          'style="transform:rotate(' + rotDeg + 'deg);display:block">' +
           '<path d="M1.5 1.5 L9.5 5.5 L1.5 9.5 Z" fill="#1e40af" stroke="#ffffff" stroke-width="0.6"/>' +
           "</svg>",
         iconSize: [11, 11],
@@ -206,6 +217,9 @@
     return (
       "<b>seq</b> " + p.gps_seq + "<br>" +
       "<b>status</b> " + p.match_status +
+      // 매칭 LinkID·도로명 (엔진 저장값) 표시 (2026-07-15 최정우 수정)
+      (p.match_link_id ? "<br><b>match link</b> " + p.match_link_id +
+        (p.match_link_name ? " (" + p.match_link_name + ")" : "") : "") +
       (p.intersect_len != null ? "<br><b>intersect_len</b> " + p.intersect_len + "m (GPS↔세그먼트)" : "") +
       "<br><b>gps_dt</b> " + p.gps_dt
     );
@@ -223,7 +237,12 @@
   }
 
   function addPointMarker(latlng, style, label, tipClass, dir, popup, layer) {
-    const m = L.circleMarker(latlng, style).bindPopup(popup);
+    // 마커는 전용 pane(panePoints)에 배치 → 연결선보다 항상 위, 중앙 마우스오버 정상 동작 (2026-07-15 최정우 수정)
+    const markerStyle = Object.assign({ pane: "panePoints", bubblingMouseEvents: false }, style);
+    const m = L.circleMarker(latlng, markerStyle).bindPopup(popup);
+    // 마우스오버 시 popup 표시(매칭 LinkID·seq·상태 등), 벗어나면 닫힘 (2026-07-15 최정우 추가)
+    m.on("mouseover", function () { this.openPopup(); });
+    m.on("mouseout", function () { this.closePopup(); });
     if (label) {
       m.bindTooltip(label, {
         permanent: true,
@@ -284,16 +303,28 @@
         layer
       );
 
-      // INTERSECT_LEN: GPS(G) ↔ 세그먼트 교차점(MATCH_LAT/LON) 거리 시각화
+      // INTERSECT_LEN: GPS(G) ↔ 세그먼트 교차점(MATCH_LAT/LON) 거리 시각화 + 마우스오버 툴팁(m) (2026-07-15 최정우 수정)
       if (gpsLl && map.distance(gpsLl, trueMatchLl) > 0.8) {
+        // INTERSECT_LEN(DB, m) 우선, 없으면 화면상 거리로 계산
+        const distM = (p.intersect_len != null)
+          ? p.intersect_len
+          : Math.round(map.distance(gpsLl, trueMatchLl));
+        const tipText = "seq " + p.gps_seq + " · INTERSECT_LEN " + distM + " m (GPS↔매칭)";
+        // 표시용 점선 (연결선 pane → 마커 아래)
         L.polyline([gpsLl, trueMatchLl], {
-          color: "#94a3b8", weight: 1, opacity: 0.55, dashArray: "2,4",
+          pane: "paneConnectors", color: "#94a3b8", weight: 1, opacity: 0.55, dashArray: "2,4",
         }).addTo(layerGpsLine);
+        // 마우스오버 히트영역(투명) — sticky 툴팁으로 거리(m) 표시 (마커 아래 pane, 폭 축소)
+        L.polyline([gpsLl, trueMatchLl], {
+          pane: "paneConnectors", color: "#000000", weight: 8, opacity: 0,
+        })
+          .bindTooltip(tipText, { sticky: true, direction: "top", className: "tip-intersect", opacity: 0.95 })
+          .addTo(layerGpsLine);
       }
     });
 
     if (gpsLatLngs.length >= 2) {
-      L.polyline(gpsLatLngs, { color: "#e53935", weight: 2, opacity: 0.55, dashArray: "4,6" })
+      L.polyline(gpsLatLngs, { pane: "paneConnectors", color: "#e53935", weight: 2, opacity: 0.55, dashArray: "4,6" })
         .addTo(layerGpsLine);
     }
   }
@@ -313,7 +344,7 @@
     layerRoads.eachLayer(function (ly) {
       if (ly.getBounds) bounds.extend(ly.getBounds());
     });
-    if (bounds.isValid()) map.fitBounds(bounds.pad(0.12), { maxZoom: 17 });
+    if (bounds.isValid()) map.fitBounds(bounds.pad(0.12), { maxZoom: 19 });
   }
 
   function viewportHasPoints(points) {

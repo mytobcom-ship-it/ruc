@@ -385,6 +385,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	stWorkerConfig.nConnRetryMax = stConfig.nConnRetryMax;
 	stWorkerConfig.nConnRetryWait = stConfig.nConnRetryWait;
 	stWorkerConfig.nRadiusSkip = m_nRadiusSkip;
+	stWorkerConfig.nHeadingMaxDist = static_cast<int>(m_dwMaxDistance);	// [mapmatch] distance → live heading 거리 상한 (2026-07-15 최정우 추가)
 	// 워커에 DB pool·ProcessManager·SQL·TTL·conn_retry 등 공유 설정 전달 (2026-07-10 최정우 추가)
 	m_pcRawLogWorker->SetConfig(stWorkerConfig);
 

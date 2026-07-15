@@ -131,6 +131,7 @@ typedef struct sMapMatchInput
 	sint16							nDriveStatus;						// DRIVE_STATUS (터널 시 고도 무시)
 	double							dfHorizMoveM;						// 직전 매칭점→현재 GPS 수평거리(m)
 	bool							bUseAltScore;						// 연속 맵매칭 고도 보조 점수 적용 여부
+	uint64							qwBiasLinkID;						// 연속실패 Begin 재검색용: 직전 성공 링크(연결성 편향, 0=미적용) (2026-07-15 최정우 추가)
 
 	sMapMatchInput() :
 		nCoordinateType(WGS84GEO), 
@@ -147,7 +148,8 @@ typedef struct sMapMatchInput
 		nPrevRoadType(ROAD_TYPE_NORMAL),
 		nDriveStatus(DRIVE_STATUS_ON_ROAD),
 		dfHorizMoveM(0.0),
-		bUseAltScore(false)
+		bUseAltScore(false),
+		qwBiasLinkID(0)
 	{}
 } MAP_MATCH_INPUT, *PMAP_MATCH_INPUT;
 

@@ -380,13 +380,13 @@ bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtIn
 	//   1) nDirAngle     = 세그먼트 시작점 → GPS 방향각
 	//   2) nDirAngleDiff = 세그먼트 방위각 − nDirAngle
 	//   3) dfIntersectSgmtDistance = dfVertexDistance × cos(nDirAngleDiff)   // 좌표 정수단위 투영 길이
-	//   3b) dfSegLenCoord = stSgmtInfo.dfLen / 360000  (wLenSgmt[m] → 좌표단위 세그먼트 길이)
+	//   3b) dfSegLenCoord = stSgmtInfo.dfLen  (wLenSgmt, 좌표정수 단위 — dfVertexDistance 와 동일 단위)
 	//   4) stIntersect   = 세그먼트 시작점 + 방위각 × dfIntersectSgmtDistance (범위 밖이면 끝점 snap)
 	//   5) dfIntersectLenSgmt = GetDistanceGEO1(GPS, stIntersect)             // 최종 GPS↔교차점 거리(m)
 	//   ※ DB INTERSECT_LEN = (int)(dfIntersectLenSgmt + 0.5)
 	double dfIntersectLenSgmt = 0;
 	double dfIntersectSgmtDistance = dfVertexDistance * cos(RAD(static_cast<double>(nDirAngleDiff)));
-	const double dfSegLenCoord = stSgmtInfo.dfLen / 360000.0;	// wLenSgmt(m) ↔ 좌표 정수단위 길이
+	const double dfSegLenCoord = stSgmtInfo.dfLen;
 	POINT stIntersect;
 
 	if ((dfIntersectSgmtDistance <= dfSegLenCoord) && (dfIntersectSgmtDistance >= 0))		// 수선의 발이 세그먼트 위
@@ -541,7 +541,7 @@ double CGISUtil::CalcAltRoadPenalty(const SGMT_MATCH_INPUT& stSgmtMatchInput, ui
 	double dfDeltaAlt = static_cast<double>(stSgmtMatchInput.nAltitudeM)
 		- static_cast<double>(stSgmtMatchInput.nPrevAltitudeM);
 
-	if (stSgmtMatchInput.dfHorizMoveM >= MM_CALC_MIN_DIST_M && stAltConfig.dfSlope > 0.0)
+	if (stSgmtMatchInput.dfHorizMoveM >= MM_CALC_MIN_DIST && stAltConfig.dfSlope > 0.0)
 	{
 		double dfSlope = fabs(dfDeltaAlt) / stSgmtMatchInput.dfHorizMoveM;
 		if (dfSlope > stAltConfig.dfSlope)

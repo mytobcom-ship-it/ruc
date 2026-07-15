@@ -56,6 +56,6 @@ pip install -r roadnet/requirements.txt
 | `data/MULTILINK.dbf` | `network.multilink` |
 | `TURNINFO.dbf` | `network.turn_info` |
 
-좌표계: **EPSG:5186** (GRS80 TM Central Belt 2010, 신규 표준노드링크)
+좌표계: 원본 **EPSG:5186** (GRS80 TM Central Belt 2010) → DB 저장 **EPSG:4326** (WGS84GEO, import 시 ST_Transform 변환)
 
 상세 스키마: **[docs/SCHEMA.md](docs/SCHEMA.md)**

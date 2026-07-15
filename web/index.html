@@ -35,6 +35,21 @@
     .tip-skip { color: #e65100; background: #fff; border-color: #fb8c00; }
     /* SKIP(3)·ERROR(4) 맵매칭 좌표(M) — 실패 표시 */
     .tip-fail { text-decoration: line-through; opacity: 0.88; }
+    /* GPS↔매칭 점선 마우스오버 INTERSECT_LEN(m) 툴팁 (2026-07-15 최정우 추가) */
+    .tip-intersect {
+      font-size: 11px; font-weight: 700; color: #0f172a; background: #fef9c3;
+      border: 1px solid #94a3b8; border-radius: 3px; padding: 2px 6px;
+    }
+    /* 마우스 커서를 손모양이 아닌 화살표(기본)로 (2026-07-15 최정우 추가) */
+    .leaflet-grab,
+    .leaflet-interactive,
+    .leaflet-container {
+      cursor: default !important;
+    }
+    .leaflet-dragging .leaflet-grab,
+    .leaflet-dragging .leaflet-interactive {
+      cursor: default !important;
+    }
   </style>
 </head>
 <body>
@@ -59,6 +74,6 @@
     <div><span class="line" style="background:#e53935;height:0;border-top:2px dashed #e53935;"></span>GPS 궤적(순서 연결)</div>
   </div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="/app.js?v=20260711prim"></script>
+  <script src="/app.js?v=20260715arrowdir"></script>
 </body>
 </html>

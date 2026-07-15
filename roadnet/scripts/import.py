@@ -17,9 +17,9 @@ import sys
 from pathlib import Path
 
 # 원본 Shapefile 좌표계: EPSG:5186 (신규 표준노드링크)
-# DB 저장: EPSG:5186 (link.psf·맵매칭과 동일)
+# DB 저장: EPSG:4326 (WGS84GEO). 원본 5186 → import 시 ST_Transform 변환 적재
 SRID_SRC = 5186
-SRID_DST = 5186
+SRID_DST = 4326
 COORD_GRID = 0.000001  # WGS84 변환 시 소수 6자리
 
 

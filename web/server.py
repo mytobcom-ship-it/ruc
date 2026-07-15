@@ -114,13 +114,32 @@ def api_trips():
 def api_trip_points(trip_id):
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # 엔진 저장 match_link_id 기준, 매칭 좌표를 매칭 링크 기하에 재-스냅해 도로선 위에 표출 (2026-07-15 최정우 복구)
+            #   · match_link_name : prim_link_info 조인 도로명(팝업용)
+            #   · match_lat/lon   : ST_ClosestPoint(매칭 링크 기하, 저장 매칭점) → 정확히 도로선 위
+            #       링크 없거나 좌표 없으면 원본 좌표 유지
             cur.execute(
                 """
-                SELECT gps_seq, gps_dt, trip_event, drive_status, match_status,
-                       gps_lat, gps_lon, match_lat, match_lon, intersect_len
-                FROM roadnet.prim_rawgps
-                WHERE trip_id = %s
-                ORDER BY gps_seq ASC
+                SELECT g.gps_seq, g.gps_dt, g.trip_event, g.drive_status, g.match_status,
+                       g.gps_lat, g.gps_lon, g.intersect_len,
+                       g.match_link_id,
+                       l.name AS match_link_name,
+                       CASE
+                         WHEN g.match_lat IS NOT NULL AND l.geom IS NOT NULL
+                         THEN ST_Y(ST_ClosestPoint(l.geom,
+                              ST_SetSRID(ST_MakePoint(g.match_lon::float8, g.match_lat::float8), 4326)))
+                         ELSE g.match_lat
+                       END AS match_lat,
+                       CASE
+                         WHEN g.match_lon IS NOT NULL AND l.geom IS NOT NULL
+                         THEN ST_X(ST_ClosestPoint(l.geom,
+                              ST_SetSRID(ST_MakePoint(g.match_lon::float8, g.match_lat::float8), 4326)))
+                         ELSE g.match_lon
+                       END AS match_lon
+                FROM roadnet.prim_rawgps g
+                LEFT JOIN roadnet.prim_link_info l ON l.link_id = g.match_link_id
+                WHERE g.trip_id = %s
+                ORDER BY g.gps_seq ASC
                 """,
                 (trip_id,),
             )
@@ -137,6 +156,8 @@ def api_trip_points(trip_id):
                     "match_lat": float(r["match_lat"]) if r["match_lat"] is not None else None,
                     "match_lon": float(r["match_lon"]) if r["match_lon"] is not None else None,
                     "intersect_len": int(r["intersect_len"]) if r["intersect_len"] is not None else None,
+                    "match_link_id": r["match_link_id"],
+                    "match_link_name": r["match_link_name"],
                 })
     return jsonify(rows)
 

@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS network.moct_node (
     remark      varchar(30),
     hist_type   varchar(8),
     histremark  varchar(30),
-    geom        geometry(Point, 5186),
+    geom        geometry(Point, 4326),
     CONSTRAINT pk_moct_node PRIMARY KEY (node_id)
 );
 
@@ -46,7 +46,7 @@ COMMENT ON COLUMN network.moct_node.updatedate IS '데이터 갱신일 (YYYYMMDD
 COMMENT ON COLUMN network.moct_node.remark     IS '비고';
 COMMENT ON COLUMN network.moct_node.hist_type  IS '이력 유형 (LINK0001:신규, LINK0003:변경, LINK1007:유지 등)';
 COMMENT ON COLUMN network.moct_node.histremark IS '이력 비고';
-COMMENT ON COLUMN network.moct_node.geom       IS '노드 좌표 (EPSG:5186, GRS80 TM Central Belt 2010)';
+COMMENT ON COLUMN network.moct_node.geom       IS '노드 좌표 (EPSG:4326, WGS84 경위도. 원본 5186 → import 시 ST_Transform 변환)';
 
 -- ---------------------------------------------------------------------------
 -- network.moct_link  (MOCT_LINK.shp / .dbf)
@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS network.moct_link (
     remark      varchar(30),
     hist_type   varchar(8),
     histremark  varchar(30),
-    geom        geometry(LineString, 5186),
+    geom        geometry(LineString, 4326),
     CONSTRAINT pk_moct_link PRIMARY KEY (link_id),
     CONSTRAINT fk_moct_link_f_node FOREIGN KEY (f_node)
         REFERENCES network.moct_node (node_id) DEFERRABLE INITIALLY DEFERRED,
@@ -103,7 +103,7 @@ COMMENT ON COLUMN network.moct_link.updatedate IS '데이터 갱신일 (YYYYMMDD
 COMMENT ON COLUMN network.moct_link.remark     IS '비고';
 COMMENT ON COLUMN network.moct_link.hist_type  IS '이력 유형 (LINK0001:신규, LINK0003:변경, LINK1007:유지 등)';
 COMMENT ON COLUMN network.moct_link.histremark IS '이력 비고';
-COMMENT ON COLUMN network.moct_link.geom       IS '링크 형상 (EPSG:5186, LineString)';
+COMMENT ON COLUMN network.moct_link.geom       IS '링크 형상 (EPSG:4326, WGS84 LineString. 원본 5186 → import 시 ST_Transform 변환)';
 
 -- ---------------------------------------------------------------------------
 -- network.multilink  (MULTILINK.dbf, geometry 없음)

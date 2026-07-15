@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file RawLogWorker.cpp
  * @brief 원시 GPS batch 맵매칭·DB 결과 갱신 워커 클래스 소스 파일
 */
@@ -568,7 +568,7 @@ void CRawLogWorker::run(int nThreadId, void *context)
 		else
 		{
 			// DB 반영 성공 후에만 세션 커밋 (bulk 실패·release 시 연속 맵매칭 맥락 보존)
-			// #9: bTripEnded 이면 MATCHED/ERROR/SKIP 무관 trip_id 세션 제거
+			// bTripEnded 이면 MATCHED/ERROR/SKIP 무관 trip_id 세션 제거
 			if (bTripEnded)
 				mapSessions.erase(strDeviceKey);					// (2026-07-08 최정우 수정) 키 = DEVICE_KEY
 			else
@@ -718,9 +718,28 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		{
 			int nNearLenM = CalcIntersectLenM(stRawLogInfo, stNear.dfMatchX, stNear.dfMatchY);
 			return AppendUpdateRow(pvtUpdates, stRawLogInfo, MATCH_STATUS_SKIP, nNearLenM,
-				&stNear.dfMatchY, &stNear.dfMatchX);
+				&stNear.dfMatchY, &stNear.dfMatchX, stNear.qwLinkID);
 		}
 		return AppendUpdateRow(pvtUpdates, stRawLogInfo, MATCH_STATUS_SKIP);
+	}
+
+	// (D) 장시간 공백 시 세션 앵커 폐기 → 연속성 끊고 초기(Begin) 재획득 (2026-07-15 최정우 추가)
+	//   직전 "매칭 성공" 이후 gap 이 MM_SESSION_RESET_GAP_SEC 초과면 위치 불확실 → 앵커·링크 리셋
+	if (stSession.bHasLastMatch && (stSession.dtLastMatchGps > 0))
+	{
+		double dfSessGapSec = difftime(stRawLogInfo.dtGPS, stSession.dtLastMatchGps);
+		if (dfSessGapSec > static_cast<double>(MM_SESSION_RESET_GAP_SEC))
+		{
+			LOGFMTD("[#%02d] session gap reset! device=[%s] trip_id=[%s] seq=[%u] gap=[%.0fs]",
+				nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID,
+				stRawLogInfo.dwSeqNo, dfSessGapSec);
+			stSession.qwLinkID = 0;
+			stSession.dfLastMatchX = 0.0;
+			stSession.dfLastMatchY = 0.0;
+			stSession.dtLastMatchGps = 0;
+			stSession.bHasLastMatch = false;
+			stSession.bHasPrevAlt = false;
+		}
 	}
 
 	sint16 nFinalStatus = MATCH_STATUS_MATCHED;
@@ -802,10 +821,11 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		nIntersectLenM = CalcIntersectLenM(stRawLogInfo,
 			stMatchLinkInfo.dfMatchX, stMatchLinkInfo.dfMatchY);
 
-	// DB 저장: MATCHED/SKIP 시 MATCH_LAT/LON·INTERSECT_LEN(GPS↔세그먼트 교차점 거리). ERROR 는 미저장
+	// DB 저장: MATCHED/SKIP 시 MATCH_LAT/LON·INTERSECT_LEN(GPS↔세그먼트 교차점 거리)·MATCH_LINK_ID. ERROR 는 미저장
 	if (!AppendUpdateRow(pvtUpdates, stRawLogInfo, nFinalStatus, nIntersectLenM,
 		bHasCoords ? &stMatchLinkInfo.dfMatchY : nullptr,
-		bHasCoords ? &stMatchLinkInfo.dfMatchX : nullptr))
+		bHasCoords ? &stMatchLinkInfo.dfMatchX : nullptr,
+		bHasCoords ? stMatchLinkInfo.qwLinkID : 0))
 		return false;
 
 	// END 이벤트면 MATCHED/ERROR/SKIP 무관 세션 종료 (bulk 성공 후 mapSessions.erase)
@@ -904,7 +924,10 @@ bool CRawLogWorker::RunMapMatch(int nThreadId, const sRawLogInfo& stRawLogInfo,
 			if (stAdjusted.fSpeed < 0.0f)
 				stAdjusted.fSpeed = static_cast<float>(dfMoveM / dfGapSec * 3.6);
 
-			if (stAdjusted.nAngle < 0 && dfMoveM >= MM_CALC_MIN_DIST_M)
+			// 방위각 계산: 하한(MM_CALC_MIN_DIST) ≤ 이동거리, 상한([mapmatch] distance) ≥ 이동거리 일 때만 (2026-07-15 최정우 수정)
+			//   상한 초과(예: 터널·수신두절 후 큰 점프)면 직선 이동방향이 실제 진행방향과 달라 heading 미사용
+			if (stAdjusted.nAngle < 0 && dfMoveM >= MM_CALC_MIN_DIST &&
+				((m_stConfig.nHeadingMaxDist <= 0) || (dfMoveM <= static_cast<double>(m_stConfig.nHeadingMaxDist))))
 				// 직전·현재 좌표로 방위각(degree) 보정 (2026-07-08 최정우 주석 추가)
 				stAdjusted.nAngle = m_cGISUtil.GetDirAngleDegree(stPrev, stCur);
 		}
@@ -1039,7 +1062,7 @@ string CRawLogWorker::BuildPgTextArray(const vector<string>& vtValues)
 */
 bool CRawLogWorker::AppendUpdateRow(vector<RAW_LOG_UPDATE_ROW> *pvtUpdates,
 		const sRawLogInfo& stRawLogInfo, sint16 nStatus, int nIntersectLenM,
-		const double *pdfMatchLat, const double *pdfMatchLon)
+		const double *pdfMatchLat, const double *pdfMatchLon, uint64 qwMatchLinkId)
 {
 	if (pvtUpdates == nullptr)
 		return false;
@@ -1056,6 +1079,7 @@ bool CRawLogWorker::AppendUpdateRow(vector<RAW_LOG_UPDATE_ROW> *pvtUpdates,
 	char szIntersectLen[16];
 	char szMatchLat[32];
 	char szMatchLon[32];
+	char szMatchLinkId[24];
 
 	snprintf(szSeqNo, sizeof(szSeqNo), "%u", stRawLogInfo.dwSeqNo);
 	snprintf(szStatus, sizeof(szStatus), "%d", static_cast<int>(nStatus));
@@ -1076,6 +1100,13 @@ bool CRawLogWorker::AppendUpdateRow(vector<RAW_LOG_UPDATE_ROW> *pvtUpdates,
 		szMatchLon[0] = '\0';
 	}
 
+	// 매칭 링크 ID (0=미제공 → 빈 문자열, SQL CASE 에서 상태별 처리) (2026-07-15 최정우 추가)
+	if (qwMatchLinkId != 0)
+		snprintf(szMatchLinkId, sizeof(szMatchLinkId), "%llu",
+			static_cast<unsigned long long>(qwMatchLinkId));
+	else
+		szMatchLinkId[0] = '\0';
+
 	RAW_LOG_UPDATE_ROW stRow;
 	stRow.strTripId = stRawLogInfo.szTripID;
 	stRow.strGpsSeq = szSeqNo;
@@ -1083,6 +1114,7 @@ bool CRawLogWorker::AppendUpdateRow(vector<RAW_LOG_UPDATE_ROW> *pvtUpdates,
 	stRow.strIntersectLen = szIntersectLen;
 	stRow.strMatchLat = szMatchLat;
 	stRow.strMatchLon = szMatchLon;
+	stRow.strMatchLinkId = szMatchLinkId;
 	pvtUpdates->push_back(stRow);
 	return true;
 }
@@ -1148,6 +1180,7 @@ bool CRawLogWorker::BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDAT
 	vector<string> vtIntersectLen;
 	vector<string> vtMatchLat;
 	vector<string> vtMatchLon;
+	vector<string> vtMatchLinkId;
 
 	vtTripId.reserve(vtUpdates.size());
 	vtGpsSeq.reserve(vtUpdates.size());
@@ -1155,6 +1188,7 @@ bool CRawLogWorker::BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDAT
 	vtIntersectLen.reserve(vtUpdates.size());
 	vtMatchLat.reserve(vtUpdates.size());
 	vtMatchLon.reserve(vtUpdates.size());
+	vtMatchLinkId.reserve(vtUpdates.size());
 
 	for (size_t i=0; i<vtUpdates.size(); ++i)
 	{
@@ -1165,6 +1199,7 @@ bool CRawLogWorker::BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDAT
 		vtIntersectLen.push_back(stRow.strIntersectLen);
 		vtMatchLat.push_back(stRow.strMatchLat);
 		vtMatchLon.push_back(stRow.strMatchLon);
+		vtMatchLinkId.push_back(stRow.strMatchLinkId);
 	}
 
 	// rawgps_update text[] 파라미터 리터럴 생성 (2026-07-08 최정우 주석 추가)
@@ -1174,31 +1209,36 @@ bool CRawLogWorker::BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDAT
 	string strIntersectLenArray = BuildPgTextArray(vtIntersectLen);
 	string strMatchLatArray = BuildPgTextArray(vtMatchLat);
 	string strMatchLonArray = BuildPgTextArray(vtMatchLon);
+	string strMatchLinkIdArray = BuildPgTextArray(vtMatchLinkId);
 
-	const char *pszParams[6] =
+	// 파라미터 순서 = PRIM_RAWGPS 컬럼 순서 ($1 TRIP_ID, $2 GPS_SEQ, $3 MATCH_LAT,
+	//   $4 MATCH_LON, $5 INTERSECT_LEN, $6 MATCH_LINK_ID, $7 MATCH_STATUS) (2026-07-15 최정우 재정렬)
+	const char *pszParams[7] =
 	{
 		strTripIdArray.c_str(),
 		strGpsSeqArray.c_str(),
-		strMatchStatusArray.c_str(),
-		strIntersectLenArray.c_str(),
 		strMatchLatArray.c_str(),
-		strMatchLonArray.c_str()
+		strMatchLonArray.c_str(),
+		strIntersectLenArray.c_str(),
+		strMatchLinkIdArray.c_str(),
+		strMatchStatusArray.c_str()
 	};
 
-	const int nParamLengths[6] =
+	const int nParamLengths[7] =
 	{
 		static_cast<int>(strTripIdArray.size()),
 		static_cast<int>(strGpsSeqArray.size()),
-		static_cast<int>(strMatchStatusArray.size()),
-		static_cast<int>(strIntersectLenArray.size()),
 		static_cast<int>(strMatchLatArray.size()),
-		static_cast<int>(strMatchLonArray.size())
+		static_cast<int>(strMatchLonArray.size()),
+		static_cast<int>(strIntersectLenArray.size()),
+		static_cast<int>(strMatchLinkIdArray.size()),
+		static_cast<int>(strMatchStatusArray.size())
 	};
-	const int nParamFormats[6] = { 0, 0, 0, 0, 0, 0 };
+	const int nParamFormats[7] = { 0, 0, 0, 0, 0, 0, 0 };
 
 	// rawgps_update bulk UPDATE 실행 (2026-07-08 최정우 주석 추가)
 	PGresult *pcResult = PQexecParams(pcConn, m_stConfig.strUpdateSQL.c_str(),
-		6, nullptr, pszParams, nParamLengths, nParamFormats, 0);
+		7, nullptr, pszParams, nParamLengths, nParamFormats, 0);
 
 	if (pcResult == nullptr)
 		return false;
@@ -1260,6 +1300,7 @@ bool CRawLogWorker::BulkReleaseRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDA
 		stRow.strIntersectLen.clear();
 		stRow.strMatchLat.clear();
 		stRow.strMatchLon.clear();
+		stRow.strMatchLinkId.clear();
 
 		const string strRetryKey = MakeReleaseRetryKey(stRow.strTripId, stRow.strGpsSeq);
 		const int nRetryMax = m_stConfig.nRetryMax;

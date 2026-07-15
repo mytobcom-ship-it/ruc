@@ -28,7 +28,8 @@ CBeginMapMatch::~CBeginMapMatch()
  * @return true(성공), false(실패)
 */
 bool CBeginMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& stSgmtMatchInput, 
-		uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry, PMATCH_TRACE_CTX pstTraceCtx)
+		uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry, PMATCH_TRACE_CTX pstTraceCtx,
+		uint64 qwBiasLinkID)
 {
 	m_pcDataLoader = pcDataLoader;
 
@@ -52,6 +53,13 @@ bool CBeginMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& 
 
 	list<MATCH_ENTRY> listMatchEntryList;
 	vector<uint32> vtNearGridIDList;
+
+	// 연속실패 Begin 재검색: 직전 성공 링크와 연결(회전 가능)된 링크 집합 구성 (2026-07-15 최정우 추가)
+	//   비어있지 않으면 GridSgmtMapMatch 에서 미연결 후보에 소프트 페널티 → 나란한 도로 오매칭 억제
+	set<uint64> setConnected;
+	if (qwBiasLinkID != 0)
+		BuildConnectedSet(qwBiasLinkID, setConnected);
+	const set<uint64>* psetConnected = setConnected.empty() ? nullptr : &setConnected;
 	
 	// 현재 소속된 GRID ID
 	vtNearGridIDList.push_back(dwGridID);
@@ -82,8 +90,8 @@ bool CBeginMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& 
 			dwEndSgmtOffset = dwStartSgmtOffset + pstGridInfo->wSgmtCount;
 
 			MATCH_ENTRY stMatchEntry;
-			// GRID 내 세그먼트 범위별 맵매칭 수행 (2026-07-08 최정우 주석 추가)
-			if (GridSgmtMapMatch(stSgmtMatchInput, dwStartSgmtOffset, dwEndSgmtOffset, pwErrorCode, &stMatchEntry))
+			// GRID 내 세그먼트 범위별 맵매칭 수행 (연결성 편향 집합 전달) (2026-07-08 최정우 주석 추가)
+			if (GridSgmtMapMatch(stSgmtMatchInput, dwStartSgmtOffset, dwEndSgmtOffset, pwErrorCode, &stMatchEntry, psetConnected))
 				listMatchEntryList.push_back(stMatchEntry);
 		}
 	}
@@ -115,7 +123,8 @@ bool CBeginMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& 
  * @return true(성공), false(실패)
 */
 bool CBeginMapMatch::GridSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, uint32 dwStartSgmtOffset, 
-		uint32 dwEndSgmtOffset, uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry)
+		uint32 dwEndSgmtOffset, uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry,
+		const std::set<uint64>* psetConnected)
 {
 	// 형상 데이터 로더 유효성·로드 상태 확인 (2026-07-08 최정우 주석 추가)
 	if ((m_pcDataLoader == nullptr) || (!m_pcDataLoader->IsLoad()))
@@ -169,6 +178,16 @@ bool CBeginMapMatch::GridSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, uint32
 		stMatchEntry.dfCost = stSgmtMatchRes.dfCost;		// 소프트 비용(INTERSECT_LEN+방위각) → sort 선택 기준 (2026-07-08 최정우 추가)
 		stMatchEntry.dfAngleCost = stSgmtMatchRes.dfCost - stSgmtMatchRes.dfIntersectLenSgmt;
 		stMatchEntry.dfAltAdj = 0.0;
+
+		// 연속실패 Begin 재검색: 직전 성공 링크와 미연결(회전 불가) 후보에 소프트 페널티 (2026-07-15 최정우 추가)
+		//   연결 집합에 없는 링크만 cost 가산 → 나란한 도로/역주행 링크로 튀는 오매칭 억제.
+		//   소프트 페널티라 페널티(m)보다 명백히 더 가까운 도로는 그대로 선택됨.
+		if ((psetConnected != nullptr) &&
+			(psetConnected->find(stSgmtMatchRes.qwLinkID) == psetConnected->end()))
+		{
+			stMatchEntry.dfCost += MM_CONNECT_PENALTY;
+		}
+
 		stMatchEntry.nDirAngleDiff = stSgmtMatchRes.nDirAngleDiff;
 		stMatchEntry.qwLinkID = stSgmtMatchRes.qwLinkID;
 		stMatchEntry.wLenFromLink = pstGridSgmtInfo->wLenFromLink;
@@ -276,7 +295,7 @@ bool CBeginMapMatch::GridSgmtGeomNearest(SGMT_MATCH_INPUT& stSgmtMatchInput, uin
 
 /**
  * @brief 소속·인접 GRID 에서 반경 무시 기하 최근접 세그먼트 1건 (2026-07-10 최정우 수정)
- * @remark 정식 매칭 실패·진단반경(MM_DIAG_RADIUS_M) 내 후보도 없을 때 호출.
+ * @remark 정식 매칭 실패·진단반경(MM_DIAG_RADIUS) 내 후보도 없을 때 호출.
  *         그리드에 링크가 있으나 거리만 먼 경우 SKIP용 MATCH_LAT/LON·INTERSECT_LEN 확보.
 */
 bool CBeginMapMatch::FindGeomNearest(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& stSgmtMatchInput,
@@ -293,7 +312,7 @@ bool CBeginMapMatch::FindGeomNearest(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT
 	uint32 dwGridID = m_cGISUtil.GetGridID(stSgmtMatchInput.stPoint.dfX, stSgmtMatchInput.stPoint.dfY);
 	vector<uint32> vtNearGridIDList;
 	vtNearGridIDList.push_back(dwGridID);
-	// 인접 GRID 탐색 반경은 MM_DIAG_RADIUS_M 과 동일(그리드 선정용) (2026-07-10 최정우 수정)
+	// 인접 GRID 탐색 반경은 MM_DIAG_RADIUS 과 동일(그리드 선정용) (2026-07-10 최정우 수정)
 	m_cGISUtil.GetNearGridID(dwGridID, stSgmtMatchInput, vtNearGridIDList);
 
 	stSgmtMatchInput.stPoint.dfX *= 360000.0;
@@ -324,4 +343,38 @@ bool CBeginMapMatch::FindGeomNearest(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT
 	*pwErrorCode = NO_ERROR;
 	*pstMatchEntry = stBest;
 	return true;
+}
+
+/**
+ * @brief 직전 성공 링크 기준 연결(회전 가능) 링크 집합 구성 (2026-07-15 최정우 추가)
+ * @param[in] qwBiasLinkID 직전 성공 링크 ID
+ * @param[out] setConnected {bias link} ∪ {bias link 의 진출(회전) 링크}
+ * @remark
+ *   TURN_INFO 는 진입 링크(qwInLinkID) 기준 진출 링크(qwOutLinkID)를 담고 있어
+ *   실제 주행 가능한 1-스텝 연속 링크를 그대로 사용. 노드만 공유하는(수렴) 링크는
+ *   회전 정보에 없으므로 제외 → 나란한 도로 오매칭 억제에 적합.
+*/
+void CBeginMapMatch::BuildConnectedSet(uint64 qwBiasLinkID, std::set<uint64>& setConnected)
+{
+	if ((m_pcDataLoader == nullptr) || (qwBiasLinkID == 0))
+		return;
+
+	// 직전 성공 링크 자체는 항상 연결 집합에 포함(같은 링크 재매칭 허용)
+	setConnected.insert(qwBiasLinkID);
+
+	PLINK_INFO pstLinkInfo = m_pcDataLoader->GetLinkInfo(qwBiasLinkID);
+	if (!pstLinkInfo)
+		return;
+
+	// 진출 링크(회전 가능) 수집
+	uint32 dwStartTurnOffset = pstLinkInfo->dwTurnOffset;
+	uint32 dwEndTurnOffset = dwStartTurnOffset + pstLinkInfo->nTurnCount;
+	for (uint32 i = dwStartTurnOffset; i < dwEndTurnOffset; ++i)
+	{
+		PTURN_INFO pstTurnInfo = m_pcDataLoader->GetTurnInfo(i);
+		if (!pstTurnInfo)
+			continue;
+
+		setConnected.insert(pstTurnInfo->qwOutLinkID);
+	}
 }

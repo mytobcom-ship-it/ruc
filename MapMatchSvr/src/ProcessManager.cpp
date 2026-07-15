@@ -246,7 +246,7 @@ bool CProcessManager::ProcessRawLog(const sRawLogInfo& stRawLogInfo, uint64& qwI
 
 	qwInOutLinkID = 0;
 
-	// 정식 매칭 실패 — ① 진단반경(MM_DIAG_RADIUS_M) 이내 최근접 (2026-07-10 최정우 수정)
+	// 정식 매칭 실패 — ① 진단반경(MM_DIAG_RADIUS) 이내 최근접 (2026-07-10 최정우 수정)
 	//   MATCHED 아님 → SKIP·세션 미갱신, DB에 MATCH_LAT/LON·INTERSECT_LEN(GPS↔세그먼트 교차점 거리) 저장
 	if (FindNearestSegment(stRawLogInfo, pstMatchLinkInfo))
 	{
@@ -264,7 +264,7 @@ bool CProcessManager::ProcessRawLog(const sRawLogInfo& stRawLogInfo, uint64& qwI
 		pstMatchLinkInfo->bOutOfRadius = true;
 		LOGFMTW("[#%02d] beyond-diag nearest captured!device=[%s] seq=[%u] intersect_len=[%.1fm] diag_max=[%dm]",
 			m_nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.dwSeqNo,
-			pstMatchLinkInfo->dfIntersectLenSgmt, MM_DIAG_RADIUS_M);
+			pstMatchLinkInfo->dfIntersectLenSgmt, MM_DIAG_RADIUS);
 		return false;
 	}
 
@@ -279,7 +279,7 @@ bool CProcessManager::ProcessRawLog(const sRawLogInfo& stRawLogInfo, uint64& qwI
  * @param[in] stRawLogInfo 원시 GPS
  * @param[out] pstMatchLinkInfo 최근접 세그먼트 결과(좌표·INTERSECT_LEN·링크정보)
  * @return true(최근접 후보 발견), false(진단 반경 내 후보 없음)
- * @remark 방위각 무시, 시작(연속 아님), 진단반경 MM_DIAG_RADIUS_M 이내.
+ * @remark 방위각 무시, 시작(연속 아님), 진단반경 MM_DIAG_RADIUS 이내.
  *         MATCHED 아님 — SKIP·세션 미갱신·DB 참고용만 (2026-07-10 최정우 수정)
 */
 bool CProcessManager::FindNearestSegment(const sRawLogInfo& stRawLogInfo,
@@ -293,7 +293,7 @@ bool CProcessManager::FindNearestSegment(const sRawLogInfo& stRawLogInfo,
 	BuildMapMatchInput(stRawLogInfo, &stDiagInput, 0, nullptr);
 	stDiagInput.qwLinkID = 0;
 	stDiagInput.nAngle = NO_ANGLE;					// 순수 기하 최근접(방위각 필터 미적용)
-	stDiagInput.nRadius = MM_DIAG_RADIUS_M;			// 반경 밖 후보까지 포함하도록 최대 반경
+	stDiagInput.nRadius = MM_DIAG_RADIUS;			// 반경 밖 후보까지 포함하도록 최대 반경
 
 	MATCH_TRACE_CTX stTraceCtx;
 	FillMatchTraceCtx(stTraceCtx, m_nThreadId, stRawLogInfo, stDiagInput, 0, false, nullptr);
@@ -315,7 +315,7 @@ bool CProcessManager::FindGeomNearestSegment(const sRawLogInfo& stRawLogInfo,
 	BuildMapMatchInput(stRawLogInfo, &stDiagInput, 0, nullptr);
 	stDiagInput.qwLinkID = 0;
 	stDiagInput.nAngle = NO_ANGLE;
-	stDiagInput.nRadius = MM_DIAG_RADIUS_M;
+	stDiagInput.nRadius = MM_DIAG_RADIUS;
 
 	return m_pcMapMatch->BeginGeomNearest(stDiagInput, pstMatchLinkInfo);
 }
@@ -357,6 +357,8 @@ bool CProcessManager::AttemptMatch(const sRawLogInfo& stRawLogInfo, MAP_MATCH_IN
 	}
 
 	// 연속 실패·초기 세션 — GRID 기반 Begin 맵매칭 (2026-07-08 최정우 주석 추가)
+	// 직전 성공 링크가 있으면 연결성 편향 전달 → 나란한 도로 오매칭 억제 (2026-07-15 최정우 추가)
+	stMapMatchInput.qwBiasLinkID = qwPrevLinkId;
 	FillMatchTraceCtx(stTraceCtx, m_nThreadId, stRawLogInfo, stMapMatchInput, qwPrevLinkId, false, pstAltCtx);
 	if (m_pcMapMatch->BeginMapMatch(stMapMatchInput, pstMatchLinkInfo, &stTraceCtx))
 	{

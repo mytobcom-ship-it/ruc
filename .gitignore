@@ -1,6 +1,21 @@
-﻿# Python virtualenv
+﻿#clangd
+.cache/
+.clanged/
+
+# Python virtualenv
 .venv-*/
+.venv/
+.venv*
 .vscode/
+__pycache__/
+*.pyc
+
+# pip packages
+.pydeps
+
+# backup
+*.bak5186
+*.bak
 
 # Build artifacts
 *.o
@@ -22,6 +37,7 @@ Simulator/bin/RawGpsSimSvr
 *.prj
 *.cpg
 CreateData/data/
+MapMatchSvr
 
 # Logs
 **/log/

@@ -144,11 +144,28 @@ typedef struct sAltitudeScoreConfig
 
 // HEADING/SPEED 가 DB NULL 일 때 직전 매칭좌표로 계산하기 위한 임계 (2026-07-08 최정우 추가)
 #define MM_CALC_MAX_GAP_SEC			10									// 직전 매칭점과의 시간간격(초) 초과 시 계산 불신 → 미적용
-#define MM_CALC_MIN_DIST_M			2.0									// 이동거리(m) 미만이면 방위각 노이즈 → 방위각 계산 미적용
+#define MM_CALC_MIN_DIST			2.0									// (단위: m) 이동거리 미만이면 방위각 노이즈 → 방위각 계산 미적용
 
 // 정식 매칭 실패(반경 밖)·정확도 SKIP 시 최근접 세그먼트 진단 탐색 반경(m) (2026-07-10 최정우 추가)
 //   좌표·INTERSECT_LEN(GPS↔세그먼트 교차점 거리)를 참고용으로 남기기 위한 최대 탐색 반경.
-#define MM_DIAG_RADIUS_M			250									// 반경 밖 최근접 후보 탐색 반경(진단용, 방위각 무시)
+#define MM_DIAG_RADIUS				250									// (단위: m) 반경 밖 최근접 후보 탐색 반경(진단용, 방위각 무시)
+
+// 연속 실패 후 Begin 재검색 시, 직전 성공 링크와 "연결(회전 가능)되지 않은" 후보에 주는 비용 페널티(m 상당) (2026-07-15 최정우 추가)
+//   목적: 회전·수렴 구간에서 나란한 도로로 튀는 오매칭 억제. 소프트 페널티라 명백히 더 가까운 도로는 그대로 선택됨.
+#define MM_CONNECT_PENALTY			30.0								// (단위: m) 직전 성공 링크와 미연결 후보 cost 가산
+
+// 연속 맵매칭 depth0 최적 후보가 링크 경계(시작/끝)에 스냅(클램프)됐는지 판정 허용오차(m) (2026-07-15 최정우 추가)
+//   경계 클램프면 차량이 링크 끝을 지난 것 → 연결 다음 링크에 더 나은 내부 수선발이 있을 수 있어 depth 확장
+#define MM_CLAMP_EPS				1.0									// (단위: m) 링크 경계 클램프 판정 허용오차
+
+// (D) 장시간 공백 시 세션 앵커 폐기 → 초기(Begin) 재획득 임계 (2026-07-15 최정우 추가)
+//   직전 "매칭 성공" 이후 경과 시간이 이 값을 넘으면 연속성 신뢰 불가 → 세션 리셋
+#define MM_SESSION_RESET_GAP_SEC	30									// 직전 매칭 후 gap(초) 초과 시 세션 리셋
+
+// (B) 연속 맵매칭 공백 적응: 직전 매칭점→현재 이동거리 클수록 탐색 depth(maxstep) 확대 (2026-07-15 최정우 추가)
+//   차량이 여러 링크 전진했을 수 있어, 이동거리 MM_STEP_EXTEND_DIST 마다 depth +1 (최대 +MM_STEP_EXTEND_MAX)
+#define MM_STEP_EXTEND_DIST			50.0								// (단위: m) depth +1 당 이동거리
+#define MM_STEP_EXTEND_MAX			3									// 공백 적응 depth 최대 추가량
 
 /**
  * @enum eCoordinateType

@@ -94,8 +94,8 @@ bool CMapMatch::BeginMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 	stSgmtMatchInput.nDirAng = nAngle;
 	stSgmtMatchInput.nSpeed = stMapMatchInput.nSpeed;		// 방위각 가중치 적응용(속도) (2026-07-08 최정우 추가)
 
-	// 초기(GRID 기반) 맵매칭 엔진 호출 (2026-07-08 최정우 주석 추가)
-	if (!m_cBeginMapMatch.StartMapMatch(m_pcDataLoader, stSgmtMatchInput, &wErrorCode, &stMatchEntry, pstTraceCtx))
+	// 초기(GRID 기반) 맵매칭 엔진 호출 — 연속실패 재검색 시 직전 성공 링크 연결성 편향 전달 (2026-07-15 최정우 수정)
+	if (!m_cBeginMapMatch.StartMapMatch(m_pcDataLoader, stSgmtMatchInput, &wErrorCode, &stMatchEntry, pstTraceCtx, stMapMatchInput.qwBiasLinkID))
 	{
 		pstMatchLinkInfo->wErrorCode = wErrorCode;
 		// 에러 코드에 대응하는 메시지 문자열 조회 (2026-07-08 최정우 주석 추가)
@@ -117,7 +117,7 @@ bool CMapMatch::BeginGeomNearest(MAP_MATCH_INPUT stMapMatchInput, PMATCH_LINK_IN
 {
 	uint16 wErrorCode = NO_ERROR;
 	enum eCoordinateType eCoordType = static_cast<enum eCoordinateType>(stMapMatchInput.nCoordinateType);
-	sint16 nRadius = static_cast<sint16>(MM_DIAG_RADIUS_M);
+	sint16 nRadius = static_cast<sint16>(MM_DIAG_RADIUS);
 	double dfX = stMapMatchInput.dfX;
 	double dfY = stMapMatchInput.dfY;
 	const sint16 nAngle = NO_ANGLE;
@@ -166,6 +166,16 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 	uint64 qwLinkID = stMapMatchInput.qwLinkID;
 	// config에서 연속 탐색 depth(검색 단계) 조회 (2026-07-08 최정우 주석 추가)
 	sint16 nSearchStep = m_pcDataLoader->GetSearchStep();
+
+	// (B) 공백 적응: 직전 매칭점→현재 이동거리 클수록 탐색 depth 확대 (2026-07-15 최정우 추가)
+	//   공백(SKIP 연속 등)으로 차량이 여러 링크 전진했을 수 있어, 이동거리 MM_STEP_EXTEND_DIST 마다 depth +1 (최대 +MM_STEP_EXTEND_MAX)
+	if (stMapMatchInput.dfHorizMoveM > 0.0)
+	{
+		int nExtraStep = static_cast<int>(stMapMatchInput.dfHorizMoveM / MM_STEP_EXTEND_DIST);
+		if (nExtraStep > MM_STEP_EXTEND_MAX)
+			nExtraStep = MM_STEP_EXTEND_MAX;
+		nSearchStep = static_cast<sint16>(nSearchStep + nExtraStep);
+	}
 
 	// 공통 맵 매칭 요청 입력 정보 유효성 검사
 	pstMatchLinkInfo->wErrorCode = wErrorCode;

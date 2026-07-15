@@ -82,7 +82,10 @@ bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPU
 	listDepthLinkInfoList.push_back(stDepthLinkInfoData);
 
 	// depth 이내의 맵 매칭 유효 거리 이내 링크 목록
-	list<MATCH_ENTRY> listMatchEntryList;
+	list<MATCH_ENTRY> listMatchEntryList;			// 현재 depth 후보
+	// 누적 후보 목록 — 최적 후보가 링크 경계 클램프면 다음 depth 를 확장해 함께 비교 (2026-07-15 최정우 추가)
+	list<MATCH_ENTRY> listAllEntryList;
+	sint16 nBestStep = 0;
 
 	// 요청 depth 이내에서 검색
 	for (uint16 i=0; i<=nSearchStep; ++i)
@@ -101,15 +104,29 @@ bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPU
 			setSearchHistoryLinkList.insert(it->qwLinkID);
 		}
 
-		// 같은 depth 의 링크를 모두 검색하고 매칭된 링크 목록이 있으면
+		// 이번 depth 후보를 누적 목록에 병합 (2026-07-15 최정우 수정)
 		if (!listMatchEntryList.empty())
 		{
-			*pwErrorCode = NO_ERROR;
-			// 동일 depth 후보 중 비용 최소 매칭 결과 선택 (2026-07-08 최정우 주석 추가)
-			if (pstTraceCtx != nullptr)
-				pstTraceCtx->nMatchedStep = static_cast<sint16>(i);
-			GetMatchEntry(&listMatchEntryList, pstMatchEntry, pstTraceCtx, stSgmtMatchInput);
-			return true;
+			listAllEntryList.insert(listAllEntryList.end(),
+				listMatchEntryList.begin(), listMatchEntryList.end());
+			nBestStep = static_cast<sint16>(i);
+		}
+
+		// 누적 후보가 있으면 최적 후보 판정
+		if (!listAllEntryList.empty())
+		{
+			listAllEntryList.sort();
+			// 최적 후보가 링크 경계 클램프가 아니거나(정상 내부 수선발), 더 깊이 갈 수 없으면 확정.
+			//   경계 클램프면 차량이 링크 끝을 지난 것 → 연결 다음 링크에 더 나은 후보가 있을 수 있어 depth 확장.
+			//   (클램프여도 다음 depth 후보가 더 나쁘면 sort 후 그대로 이 후보가 선택되므로 안전) (2026-07-15 최정우 추가)
+			if (!IsBoundaryClamped(listAllEntryList.front()) || (i == nSearchStep))
+			{
+				*pwErrorCode = NO_ERROR;
+				if (pstTraceCtx != nullptr)
+					pstTraceCtx->nMatchedStep = nBestStep;
+				GetMatchEntry(&listAllEntryList, pstMatchEntry, pstTraceCtx, stSgmtMatchInput);
+				return true;
+			}
 		}
 
 		// 현재 검색 단계가 최대 설정 검색 단계이면 다음 depth 링크 목록 정보를 가져오지 않음
@@ -118,13 +135,51 @@ bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPU
 		// 현재 depth 링크 목록이 맵 매칭에 실패시 다음 depth 링크 목록 정보
 		if (!GetLinkDepthInfo(&setSearchHistoryLinkList, &listDepthLinkInfoList))
 		{
+			// 더 확장할 연결 링크가 없으면, 지금까지 누적 후보가 있으면 그걸로 확정 (2026-07-15 최정우 수정)
+			if (!listAllEntryList.empty())
+			{
+				*pwErrorCode = NO_ERROR;
+				if (pstTraceCtx != nullptr)
+					pstTraceCtx->nMatchedStep = nBestStep;
+				GetMatchEntry(&listAllEntryList, pstMatchEntry, pstTraceCtx, stSgmtMatchInput);
+				return true;
+			}
 			*pwErrorCode = MAP_MATCH_FAIL;
 			return false;
 		}
 	}
 
+	// 루프 종료 후 누적 후보가 있으면 확정 (경계 클램프만 있었던 경우)
+	if (!listAllEntryList.empty())
+	{
+		*pwErrorCode = NO_ERROR;
+		if (pstTraceCtx != nullptr)
+			pstTraceCtx->nMatchedStep = nBestStep;
+		GetMatchEntry(&listAllEntryList, pstMatchEntry, pstTraceCtx, stSgmtMatchInput);
+		return true;
+	}
+
 	*pwErrorCode = MAP_MATCH_FAIL;
 	return false;
+}
+
+/**
+ * @brief 최적 후보가 링크 경계(시작/끝)에 스냅(클램프)됐는지 판정 (2026-07-15 최정우 추가)
+ * @param[in] stMatchEntry 판정 대상 후보
+ * @return true(경계 클램프 — 링크 끝/시작에 수선발 스냅), false(내부 수선발)
+ * @remark
+ *   링크 시작점→수선발 거리(m) = wLenFromLink(링크시작→세그먼트시작) + dfSgmtMatchLen(세그먼트내 거리).
+ *   이 값이 0 근처(시작) 또는 링크길이(dfLen) 근처(끝)이면 세그먼트 끝점에 스냅된 경계 클램프.
+ *   차량이 링크 끝을 지나 다음 링크로 넘어간 상황에서 발생 → 연결 링크 확장 판단에 사용.
+*/
+bool CContinueMapMatch::IsBoundaryClamped(const MATCH_ENTRY& stMatchEntry)
+{
+	if (stMatchEntry.dfLen <= 0.0)
+		return false;
+
+	double dfFootFromStart = static_cast<double>(stMatchEntry.wLenFromLink) + stMatchEntry.dfSgmtMatchLen;
+	return (dfFootFromStart <= MM_CLAMP_EPS) ||
+	       (dfFootFromStart >= (stMatchEntry.dfLen - MM_CLAMP_EPS));
 }
 
 /**

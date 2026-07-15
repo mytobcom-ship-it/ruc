@@ -68,6 +68,7 @@ typedef struct sRawLogUpdateRow
 	string							strIntersectLen;					// INTERSECT_LEN: GPS↔세그먼트 교차점 거리(m)
 	string							strMatchLat;
 	string							strMatchLon;
+	string							strMatchLinkId;						// 맵매칭 링크 ID (MATCH_LINK_ID) (2026-07-15 최정우 추가)
 } RAW_LOG_UPDATE_ROW, *PRAW_LOG_UPDATE_ROW;
 
 /**
@@ -87,6 +88,7 @@ typedef struct sRawLogWorkerConfig
 	int								nConnRetryMax;						// [database] conn_retry_max — 풀 연결 핸들 확보 재시도 최대 횟수 (회, 2026-07-10 최정우 추가)
 	int								nConnRetryWait;						// [database] conn_retry_wait — 재시도 사이 대기 (ms, 2026-07-10 최정우 추가)
 	int								nRadiusSkip;						// config radius_skip — ACCURACY_M 초과 시 SKIP (m). 0=비활성 (2026-07-08 최정우)
+	int								nHeadingMaxDist;					// (단위: m) 연속매칭 heading 계산 이동거리 상한. 초과 시 heading 미사용, 0=비활성 ([mapmatch] distance) (2026-07-15 최정우 추가)
 	// int								nRadiusSkipM;						// (구) config radius_skip_m (2026-07-08 최정우)
 	// int								nAccuracySkip;						// (구) config accuracy_skip (2026-07-08 최정우)
 } RAWLOG_WORKER_CONFIG, *PRAWLOG_WORKER_CONFIG;
@@ -119,7 +121,8 @@ private:
 		MATCH_LINK_INFO *pstMatchLinkInfo);
 	static bool AppendUpdateRow(vector<RAW_LOG_UPDATE_ROW> *pvtUpdates,
 		const sRawLogInfo& stRawLogInfo, sint16 nStatus, int nIntersectLenM = -1,
-		const double *pdfMatchLat = nullptr, const double *pdfMatchLon = nullptr);
+		const double *pdfMatchLat = nullptr, const double *pdfMatchLon = nullptr,
+		uint64 qwMatchLinkId = 0);
 	bool BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDATE_ROW>& vtUpdates);
 	// bulk update 실패 시 동일 rawgps_update 로 PROCESSING(2)→PENDING(0) 예약 해제
 	bool BulkReleaseRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDATE_ROW>& vtUpdates);

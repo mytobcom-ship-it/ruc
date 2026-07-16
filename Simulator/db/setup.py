@@ -87,7 +87,7 @@ def main() -> None:
     ap.add_argument("--host", default="", help="DB host (미지정 시 sudo peer 인증)")
     ap.add_argument("--port", type=int, default=5432, help="DB port")
     ap.add_argument("--app-user", default="mytobcom", help="시뮬레이터 접속 계정")
-    ap.add_argument("--app-password", default="my664761", help="시뮬레이터 접속 비밀번호")
+    ap.add_argument("--app-password", default=os.environ.get("RUC_APP_PASSWORD"), help="시뮬레이터 접속 비밀번호 (또는 RUC_APP_PASSWORD 환경변수)")
     ap.add_argument("--check", action="store_true", help="생성 후 mytobcom 접속/권한 점검")
     ap.add_argument("--check-only", action="store_true", help="생성 없이 점검만")
     args = ap.parse_args()
@@ -103,6 +103,8 @@ def main() -> None:
         print("[setup] 스키마/테이블 생성 완료.")
 
     if args.check or args.check_only:
+        if not args.app_password:
+            sys.exit("[check] --app-password 또는 RUC_APP_PASSWORD 환경변수가 필요합니다.")
         rc = check_as_mytobcom(args)
         if rc != 0:
             sys.exit(f"[check] 점검 실패 (psql rc={rc}).")

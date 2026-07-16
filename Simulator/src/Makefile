@@ -1,4 +1,4 @@
-CXX			= g++
+﻿CXX			= g++
 
 CFLAGS		= -m64 -Wall -g3 -O2 -std=c++11 -Wno-write-strings -I/usr/include -I/usr/pgsql-18/include
 LFLAGS		= -lm -lpthread -L/usr/lib64/ -L/usr/pgsql-18/lib -lpq -Wl,-rpath,/usr/pgsql-18/lib
@@ -38,4 +38,4 @@ install: all
 	$(CXX) -c $(CFLAGS) $<
 
 clean:
-	rm -rf *.o *.lis $(TARGET)
+	rm -rf *.o *.lis

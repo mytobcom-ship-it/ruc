@@ -50,8 +50,12 @@ typedef struct sConfig
 	int			nSeedCandidates;	// 시작 링크 후보 수
 
 	// [noise] 도로 이탈 노이즈
-	double		dfNoiseSigmaM;		// GPS 오차 표준편차 (m)
-	double		dfNoiseMaxM;		// GPS 오차 최대값 (m)
+	double		dfNoiseSigmaM;		// GPS 오차 표준편차 (m) — 현실적 스마트폰 GPS 수준
+	double		dfNoiseMaxM;		// 일반 오차 최대값 (m, 정규분포 cap)
+	// 예외: 큰 튀는 좌표(멀티패스·도심협곡) 주입 — 예외처리 검증용 (2026-07-16 최정우 추가)
+	double		dfOutlierProb;		// 튀는 좌표 발생 확률 (0~1)
+	double		dfOutlierMinM;		// 튀는 좌표 최소 오프셋 (m)
+	double		dfOutlierMaxM;		// 튀는 좌표 최대 오프셋 (m)
 
 	// [speed] 속도 모델
 	double		dfSpeedFactorMin;	// 제한속도 대비 최소 비율
@@ -64,7 +68,8 @@ typedef struct sConfig
 		dfOmitAllProb(0.005), dfOmitPartialProb(0.08),
 		dfMinLon(126.90), dfMinLat(37.48), dfMaxLon(127.10), dfMaxLat(37.62),
 		nRouteMinM(2000), nRouteMaxLinks(20), nSeedCandidates(20),
-		dfNoiseSigmaM(15.0), dfNoiseMaxM(60.0),
+		dfNoiseSigmaM(4.0), dfNoiseMaxM(20.0),
+		dfOutlierProb(0.03), dfOutlierMinM(25.0), dfOutlierMaxM(80.0),
 		dfSpeedFactorMin(0.5), dfSpeedFactorMax(1.0), dfDefaultMaxSpd(50.0)
 	{}
 } SIM_CONFIG, *PSIM_CONFIG;

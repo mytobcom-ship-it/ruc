@@ -357,9 +357,14 @@ bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtIn
 	bool bHasHeading = (stSgmtMatchInput.nDirAng != NO_ANGLE);
 	if (bHasHeading)
 	{
-		// 차량 방위각과 세그먼트 방위각 차이(−180~180) 계산 (2026-07-08 최정우 주석 추가)
-		nHeadingDiff = GetAngleDiff(stSgmtInfo.nDirAng, stSgmtMatchInput.nDirAng);
-		// 하드 상한: 역방향 등 크게 어긋난 후보만 배제 (그 안은 비용으로 경쟁)
+		// 양방향 단일 링크 대응: 세그먼트 F→T 방위각과 그 반대(T→F=+180°) 둘 다 비교해
+		//   더 가까운 쪽을 heading 차이로 채택 → 반대방향 주행도 정상 매칭(120° 오배제 방지) (2026-07-16 최정우 수정)
+		sint16 nSegDirFwd = stSgmtInfo.nDirAng;
+		sint16 nSegDirRev = static_cast<sint16>((stSgmtInfo.nDirAng + 180) % 360);
+		sint16 nDiffFwd = GetAngleDiff(nSegDirFwd, stSgmtMatchInput.nDirAng);
+		sint16 nDiffRev = GetAngleDiff(nSegDirRev, stSgmtMatchInput.nDirAng);
+		nHeadingDiff = (abs(nDiffFwd) <= abs(nDiffRev)) ? nDiffFwd : nDiffRev;
+		// 하드 상한: 정·역 어느 쪽으로도 크게 어긋난(≈수직 이상) 후보만 배제. 그 안은 소프트 비용으로 경쟁
 		if (abs(nHeadingDiff) > MM_DIR_MAX_DEG)
 			return false;
 	}

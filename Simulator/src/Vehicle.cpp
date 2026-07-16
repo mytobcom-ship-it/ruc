@@ -281,21 +281,28 @@ void CVehicle::Tick(const char *pszGpsDt, vector<GPS_SAMPLE>& vtOut)
 	Interpolate(m_dfPos, stTrue, dfBearing, nSegSpd);
 	if (m_dfSpeedMps >= 0.5) m_dfLastHeading = dfBearing;
 
-	// 도로 이탈 노이즈 (정규분포 거리 + 임의 방향)
-	// 도로 이탈 오프셋: 표준노드링크 좌표 기준 1~60m 랜덤 (2026-07-10 최정우 수정)
+	// 도로 이탈 노이즈 (정규분포 거리 + 임의 방향) — 현실적 GPS 수준(대부분 ≤10m) (2026-07-16 최정우 수정)
 	normal_distribution<double> distNoise(0.0, m_stConfig.dfNoiseSigmaM);
 	double dfOffset = fabs(distNoise(m_rng));
 	if (dfOffset > m_stConfig.dfNoiseMaxM) dfOffset = m_stConfig.dfNoiseMaxM;
+
+	// 예외: 낮은 확률로 큰 튀는 좌표(멀티패스·도심협곡·순간이상) 주입 → 예외처리(SKIP 등) 검증 (2026-07-16 최정우 추가)
+	if (dist01(m_rng) < m_stConfig.dfOutlierProb)
+	{
+		uniform_real_distribution<double> distOutlier(m_stConfig.dfOutlierMinM, m_stConfig.dfOutlierMaxM);
+		dfOffset = distOutlier(m_rng);
+	}
 	if (dfOffset < 1.0) dfOffset = 1.0;
+
 	uniform_real_distribution<double> distDir(0.0, 360.0);
 	// 도로 이탈 노이즈 좌표 오프셋 적용 (2026-07-08 최정우 주석 추가)
 	GEO_POINT stNoisy = CGeoUtil::OffsetMeters(stTrue, dfOffset, distDir(m_rng));
 
-	// 수평오차(ACCURACY_M): 실제 오프셋과 상관, 1~60m (정수 적재) (2026-07-10 최정우 수정)
-	normal_distribution<double> distAcc(0.0, 3.0);
+	// 수평오차(ACCURACY_M): 실제 오프셋과 상관 (정수 적재). 튀는 좌표는 큰 오차로 반영 (2026-07-16 최정우 수정)
+	normal_distribution<double> distAcc(0.0, 2.0);
 	double dfAcc = dfOffset + fabs(distAcc(m_rng));
 	if (dfAcc < 1.0) dfAcc = 1.0;
-	if (dfAcc > 60.0) dfAcc = 60.0;
+	if (dfAcc > 100.0) dfAcc = 100.0;
 
 	// 배터리 완만한 감소
 	m_dfBattery -= 0.01;

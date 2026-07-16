@@ -112,9 +112,15 @@ static bool LoadConfig(const string& strFile, SIM_CONFIG& stConfig, int& nLogLev
 	cIni.GetProfileInt("route", "max_links", 20, stConfig.nRouteMaxLinks);
 	cIni.GetProfileInt("route", "seed_candidates", 20, stConfig.nSeedCandidates);
 
-	// [noise]
-	stConfig.dfNoiseSigmaM = GetProfileDouble(cIni, "noise", "sigma_m", 10.0);
-	stConfig.dfNoiseMaxM = GetProfileDouble(cIni, "noise", "max_m", 30.0);
+	// [noise] — 현실적 스마트폰 GPS 수준(대부분 ≤10m) + 예외 튀는 좌표 주입 (2026-07-16 최정우 수정)
+	stConfig.dfNoiseSigmaM = GetProfileDouble(cIni, "noise", "sigma_m", 4.0);
+	stConfig.dfNoiseMaxM = GetProfileDouble(cIni, "noise", "max_m", 20.0);
+	stConfig.dfOutlierProb = GetProfileDouble(cIni, "noise", "outlier_prob", 0.03);
+	stConfig.dfOutlierMinM = GetProfileDouble(cIni, "noise", "outlier_min_m", 25.0);
+	stConfig.dfOutlierMaxM = GetProfileDouble(cIni, "noise", "outlier_max_m", 80.0);
+	if (stConfig.dfOutlierProb < 0.0) stConfig.dfOutlierProb = 0.0;
+	if (stConfig.dfOutlierProb > 1.0) stConfig.dfOutlierProb = 1.0;
+	if (stConfig.dfOutlierMaxM < stConfig.dfOutlierMinM) stConfig.dfOutlierMaxM = stConfig.dfOutlierMinM;
 
 	// [speed]
 	stConfig.dfSpeedFactorMin = GetProfileDouble(cIni, "speed", "factor_min", 0.5);

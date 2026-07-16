@@ -793,6 +793,35 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		}
 	}
 
+	// ── 단조 진행 가드: 나중 GPS가 진행방향상 "이전(뒤)"에 매칭되면 노이즈로 보고 SKIP·앵커 미갱신 (2026-07-16 최정우 추가) ──
+	//   판정: 이동방향(직전 매칭점→현재 GPS) 단위벡터에 "매칭 변위(직전 매칭점→현재 매칭점)"를 투영(m).
+	//         투영값이 −MM_BACKWARD_TOL_M 미만이면 진행 반대(역행) → 노이즈로 간주.
+	//   U턴/회차는 이동방향 자체가 반대로 바뀌므로 투영이 양수가 되어 자동 허용(오탐 없음).
+	//   과금(링크 단위) 순서 역전·중복 방지 목적.
+	if (bMatched && pstSession->bHasLastMatch)
+	{
+		const double dfPi = 3.14159265358979323846;
+		double dfMx = 111320.0 * cos(pstSession->dfLastMatchY * dfPi / 180.0);	// m/도(경도)
+		double dfMy = 111320.0;													// m/도(위도)
+		double dfMoveE = (stRawLogInfo.dfX - pstSession->dfLastMatchX) * dfMx;
+		double dfMoveN = (stRawLogInfo.dfY - pstSession->dfLastMatchY) * dfMy;
+		double dfMoveLen = sqrt(dfMoveE * dfMoveE + dfMoveN * dfMoveN);
+		if (dfMoveLen >= MM_BACKWARD_MIN_MOVE_M)
+		{
+			double dfMatchE = (stMatchLinkInfo.dfMatchX - pstSession->dfLastMatchX) * dfMx;
+			double dfMatchN = (stMatchLinkInfo.dfMatchY - pstSession->dfLastMatchY) * dfMy;
+			double dfProgress = (dfMatchE * dfMoveE + dfMatchN * dfMoveN) / dfMoveLen;	// 진행방향 투영(m)
+			if (dfProgress < -MM_BACKWARD_TOL_M)
+			{
+				LOGFMTW("[#%02d] backward-progress skip!device=[%s] trip_id=[%s] seq=[%u] progress=[%.1fm]",
+					nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID,
+					stRawLogInfo.dwSeqNo, dfProgress);
+				nFinalStatus = MATCH_STATUS_SKIP;
+				bMatched = false;					// 앵커 미갱신·MATCHED 아님(과금 역전 방지)
+			}
+		}
+	}
+
 	stSession.dwLastGpsSeq = stRawLogInfo.dwSeqNo;
 
 	// ── 매칭 성공(MATCHED) 시에만 세션 앵커 갱신 — SKIP/ERROR 는 직전 성공 앵커 유지 (2026-07-10 최정우 수정) ──

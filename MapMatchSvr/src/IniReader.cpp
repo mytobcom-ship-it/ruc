@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file IniReader.cpp
  * @brief ini 파일 읽기 클래스 소스 파일
  */

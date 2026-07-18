@@ -1,4 +1,4 @@
-﻿# roadnet PostgreSQL 스키마 문서
+# roadnet PostgreSQL 스키마 문서
 
 표준 노드·링크(MOCT) Shapefile을 PostgreSQL/PostGIS에 적재하기 위한 DB·스키마·테이블 설계 문서입니다.
 

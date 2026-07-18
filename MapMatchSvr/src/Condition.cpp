@@ -55,7 +55,7 @@ void CCondition::wait(CMutex& mutex)
  * @param[in] mutex 동기화용 Mutex (호출 전 잠금 상태)
  * @param[in] nWaitMs 최대 대기 시간 (ms)
  * @return true(시그널), false(timeout)
- */
+*/
 bool CCondition::waitTimed(CMutex& mutex, int nWaitMs)
 {
 	if (nWaitMs <= 0)

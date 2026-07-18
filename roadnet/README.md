@@ -1,4 +1,4 @@
-﻿# roadnet — PostgreSQL 도로 네트워크 DB
+# roadnet — PostgreSQL 도로 네트워크 DB
 
 표준 노드·링크(MOCT) Shapefile을 PostgreSQL/PostGIS에 적재하기 위한 스키마·스크립트·문서입니다.
 

@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Normalize C/C++ source files to UTF-8 (no BOM) and translate English comment text to Korean.
 

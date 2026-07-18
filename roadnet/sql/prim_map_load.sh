@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # PRIM_LINK_INFO 테이블 생성 + link.psf 적재
 # 사용 (프로젝트 루트):
 #   bash roadnet/sql/prim_map_load.sh

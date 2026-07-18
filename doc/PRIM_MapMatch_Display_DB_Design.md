@@ -1,4 +1,4 @@
-﻿# PRIM_ 맵매칭 지도 표시 DB 설계안
+# PRIM_ 맵매칭 지도 표시 DB 설계안
 
 `SGMT_INFO_GRID` · `LINK_INFO` 구조를 기준으로, **맵매칭 완료 후 지도에 오차 없이 결과를 표시**하기 위한 PostgreSQL/PostGIS 설계입니다.
 

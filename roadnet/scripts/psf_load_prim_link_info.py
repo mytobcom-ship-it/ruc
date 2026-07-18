@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 link.psf → ROADNET.PRIM_LINK_INFO 적재
 

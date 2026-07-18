@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file ConfigDefaults.h
  * @brief config.ini 파라미터 기본값 — AppMain / Server / RawLogFetcher 공용
  *

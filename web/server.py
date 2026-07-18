@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 RUC 맵매칭 GPS 시각화 API 서버 (2026-07-10 최정우)
   - 주변 도로: roadnet.prim_link_info (PSF WGS84, 임시) + prim_rawgps 점/매칭 결과

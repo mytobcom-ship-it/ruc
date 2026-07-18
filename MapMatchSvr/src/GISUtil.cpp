@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file GISUtil.cpp
  * @brief 맵매칭 GIS 유틸리티 클래스 소스 파일 (WGS84 경위도 용)
 */

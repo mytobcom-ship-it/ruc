@@ -1,4 +1,4 @@
-﻿# RUC 맵매칭 GPS 웹 뷰어
+# RUC 맵매칭 GPS 웹 뷰어
 
 `prim_rawgps` GPS·맵매칭 결과와 주변 `network.moct_link` 도로망을 지도에 표시합니다.
 

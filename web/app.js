@@ -1,4 +1,4 @@
-﻿/**
+/**
  * RUC 맵매칭 GPS 시각화 (2026-07-10 최정우)
  *  - 주변 도로: prim_link_info (PSF WGS84, trip bbox + road_buffer_m)
  *  - 도로 진행방향: LineString 꼭짓점 순서(f_node → t_node) 화살표

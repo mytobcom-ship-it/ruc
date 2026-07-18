@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file MessageType.h
  * @brief http 수신 메시지 정의 헤더 파일
 */

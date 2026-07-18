@@ -1,4 +1,4 @@
-﻿# RUC (Road Usage Charge)
+# RUC (Road Usage Charge)
 
 맵매칭 서버, 시뮬레이터, 도로망 바이너리 생성기, SQL 스키마.
 

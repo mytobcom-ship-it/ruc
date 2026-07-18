@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 roadnet 데이터 import (통합)
   - MOCT_NODE.shp / MOCT_LINK.shp → network.moct_node / moct_link

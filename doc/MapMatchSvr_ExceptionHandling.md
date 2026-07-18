@@ -1,4 +1,4 @@
-﻿# MapMatchSvr 예외 처리·경계 케이스 목록
+# MapMatchSvr 예외 처리·경계 케이스 목록
 
 > 기준: `MapMatchSvr` v1.3 파이프라인 (`rawgps_recover` / `rawgps_select` / `rawgps_update`)  
 > 최종 갱신: 2026-07-08

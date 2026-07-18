@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file RawLogWorker.cpp
  * @brief 원시 GPS batch 맵매칭·DB 결과 갱신 워커 클래스 소스 파일
 */

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file RawLogWorker.h
  * @brief 원시 GPS batch 맵매칭·DB 결과 갱신 워커
 */

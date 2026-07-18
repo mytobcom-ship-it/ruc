@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file Server.h
  * @brief 서버 클래스 헤더 파일
 */
@@ -78,6 +78,10 @@ private:
 	CRawLogWorker					*m_pcRawLogWorker;					// 원시 GPS batch 처리 워커
 
 private:
+	CMutex							m_cRunMutex;						// 서버 실행 플래그 mutex
+	CCondition						m_cRunCondition;					// 서버 실행 플래그 condition
+
+private:
 	bool							m_bRun;								// 서버 실행 여부
 	bool							m_bUninitialized;					// Uninitialize 중복 실행 가드 (2026-07-10 최정우 추가)
 	string							m_strLogPath;						// 로그 경로
@@ -124,8 +128,6 @@ private:
 	double							m_dfAltitudeWeight;					// config altitude_weight — 차이 초과 시 고도차 가중. 0=비활성
 	double							m_dfAltitudeSlope;					// altitude_slope
 
-	CMutex							m_cRunMutex;
-	CCondition						m_cRunCondition;					// 종료 시그널
 	time_t							m_dtLastMonitorLog;					// 마지막 모니터링 시각
 	int								m_nLastQueueCount;					// 이전 큐 적재량
 	bool							m_bQueueWarnActive;					// 큐 backlog WARN 상태

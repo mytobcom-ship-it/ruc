@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # roadnet DB import — 테이블 없으면 DDL 생성 후 데이터, 있으면 데이터만(TRUNCATE 후)
 #
 # manifest 기준 적재 (moct/multilink/turn_info 는 export 제외 — roadnet.sh import 로 사전 구축)

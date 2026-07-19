@@ -851,10 +851,12 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 			stMatchLinkInfo.dfMatchX, stMatchLinkInfo.dfMatchY);
 
 	// DB 저장: MATCHED/SKIP 시 MATCH_LAT/LON·INTERSECT_LEN(GPS↔세그먼트 교차점 거리)·MATCH_LINK_ID. ERROR 는 미저장
+	//   bReverseFit: MATCHED 시에만 유효(SKIP 최근접은 방위각 무시 탐색이라 의미 없음) (2026-07-18 최정우 추가)
 	if (!AppendUpdateRow(pvtUpdates, stRawLogInfo, nFinalStatus, nIntersectLenM,
 		bHasCoords ? &stMatchLinkInfo.dfMatchY : nullptr,
 		bHasCoords ? &stMatchLinkInfo.dfMatchX : nullptr,
-		bHasCoords ? stMatchLinkInfo.qwLinkID : 0))
+		bHasCoords ? stMatchLinkInfo.qwLinkID : 0,
+		bMatched ? &stMatchLinkInfo.bReverseFit : nullptr))
 		return false;
 
 	// END 이벤트면 MATCHED/ERROR/SKIP 무관 세션 종료 (bulk 성공 후 mapSessions.erase)
@@ -1091,7 +1093,8 @@ string CRawLogWorker::BuildPgTextArray(const vector<string>& vtValues)
 */
 bool CRawLogWorker::AppendUpdateRow(vector<RAW_LOG_UPDATE_ROW> *pvtUpdates,
 		const sRawLogInfo& stRawLogInfo, sint16 nStatus, int nIntersectLenM,
-		const double *pdfMatchLat, const double *pdfMatchLon, uint64 qwMatchLinkId)
+		const double *pdfMatchLat, const double *pdfMatchLon, uint64 qwMatchLinkId,
+		const bool *pbReverseFit)
 {
 	if (pvtUpdates == nullptr)
 		return false;
@@ -1109,6 +1112,7 @@ bool CRawLogWorker::AppendUpdateRow(vector<RAW_LOG_UPDATE_ROW> *pvtUpdates,
 	char szMatchLat[32];
 	char szMatchLon[32];
 	char szMatchLinkId[24];
+	char szReverseFit[4];
 
 	snprintf(szSeqNo, sizeof(szSeqNo), "%u", stRawLogInfo.dwSeqNo);
 	snprintf(szStatus, sizeof(szStatus), "%d", static_cast<int>(nStatus));
@@ -1136,6 +1140,12 @@ bool CRawLogWorker::AppendUpdateRow(vector<RAW_LOG_UPDATE_ROW> *pvtUpdates,
 	else
 		szMatchLinkId[0] = '\0';
 
+	// 역방향 핏 채택 여부 (nullptr=미제공 → 빈 문자열, 기존 값 유지) (2026-07-18 최정우 추가)
+	if (pbReverseFit != nullptr)
+		snprintf(szReverseFit, sizeof(szReverseFit), "%s", *pbReverseFit ? "t" : "f");
+	else
+		szReverseFit[0] = '\0';
+
 	RAW_LOG_UPDATE_ROW stRow;
 	stRow.strTripId = stRawLogInfo.szTripID;
 	stRow.strGpsSeq = szSeqNo;
@@ -1144,6 +1154,7 @@ bool CRawLogWorker::AppendUpdateRow(vector<RAW_LOG_UPDATE_ROW> *pvtUpdates,
 	stRow.strMatchLat = szMatchLat;
 	stRow.strMatchLon = szMatchLon;
 	stRow.strMatchLinkId = szMatchLinkId;
+	stRow.strReverseFit = szReverseFit;
 	pvtUpdates->push_back(stRow);
 	return true;
 }
@@ -1210,6 +1221,7 @@ bool CRawLogWorker::BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDAT
 	vector<string> vtMatchLat;
 	vector<string> vtMatchLon;
 	vector<string> vtMatchLinkId;
+	vector<string> vtReverseFit;
 
 	vtTripId.reserve(vtUpdates.size());
 	vtGpsSeq.reserve(vtUpdates.size());
@@ -1218,6 +1230,7 @@ bool CRawLogWorker::BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDAT
 	vtMatchLat.reserve(vtUpdates.size());
 	vtMatchLon.reserve(vtUpdates.size());
 	vtMatchLinkId.reserve(vtUpdates.size());
+	vtReverseFit.reserve(vtUpdates.size());
 
 	for (size_t i=0; i<vtUpdates.size(); ++i)
 	{
@@ -1229,6 +1242,7 @@ bool CRawLogWorker::BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDAT
 		vtMatchLat.push_back(stRow.strMatchLat);
 		vtMatchLon.push_back(stRow.strMatchLon);
 		vtMatchLinkId.push_back(stRow.strMatchLinkId);
+		vtReverseFit.push_back(stRow.strReverseFit);
 	}
 
 	// rawgps_update text[] 파라미터 리터럴 생성 (2026-07-08 최정우 주석 추가)
@@ -1239,10 +1253,12 @@ bool CRawLogWorker::BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDAT
 	string strMatchLatArray = BuildPgTextArray(vtMatchLat);
 	string strMatchLonArray = BuildPgTextArray(vtMatchLon);
 	string strMatchLinkIdArray = BuildPgTextArray(vtMatchLinkId);
+	string strReverseFitArray = BuildPgTextArray(vtReverseFit);
 
 	// 파라미터 순서 = PRIM_RAWGPS 컬럼 순서 ($1 TRIP_ID, $2 GPS_SEQ, $3 MATCH_LAT,
-	//   $4 MATCH_LON, $5 INTERSECT_LEN, $6 MATCH_LINK_ID, $7 MATCH_STATUS) (2026-07-15 최정우 재정렬)
-	const char *pszParams[7] =
+	//   $4 MATCH_LON, $5 INTERSECT_LEN, $6 MATCH_LINK_ID, $7 MATCH_STATUS,
+	//   $8 REVERSE_FIT) (2026-07-18 최정우 추가)
+	const char *pszParams[8] =
 	{
 		strTripIdArray.c_str(),
 		strGpsSeqArray.c_str(),
@@ -1250,10 +1266,11 @@ bool CRawLogWorker::BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDAT
 		strMatchLonArray.c_str(),
 		strIntersectLenArray.c_str(),
 		strMatchLinkIdArray.c_str(),
-		strMatchStatusArray.c_str()
+		strMatchStatusArray.c_str(),
+		strReverseFitArray.c_str()
 	};
 
-	const int nParamLengths[7] =
+	const int nParamLengths[8] =
 	{
 		static_cast<int>(strTripIdArray.size()),
 		static_cast<int>(strGpsSeqArray.size()),
@@ -1261,13 +1278,14 @@ bool CRawLogWorker::BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDAT
 		static_cast<int>(strMatchLonArray.size()),
 		static_cast<int>(strIntersectLenArray.size()),
 		static_cast<int>(strMatchLinkIdArray.size()),
-		static_cast<int>(strMatchStatusArray.size())
+		static_cast<int>(strMatchStatusArray.size()),
+		static_cast<int>(strReverseFitArray.size())
 	};
-	const int nParamFormats[7] = { 0, 0, 0, 0, 0, 0, 0 };
+	const int nParamFormats[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
 
 	// rawgps_update bulk UPDATE 실행 (2026-07-08 최정우 주석 추가)
 	PGresult *pcResult = PQexecParams(pcConn, m_stConfig.strUpdateSQL.c_str(),
-		7, nullptr, pszParams, nParamLengths, nParamFormats, 0);
+		8, nullptr, pszParams, nParamLengths, nParamFormats, 0);
 
 	if (pcResult == nullptr)
 		return false;
@@ -1330,6 +1348,7 @@ bool CRawLogWorker::BulkReleaseRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDA
 		stRow.strMatchLat.clear();
 		stRow.strMatchLon.clear();
 		stRow.strMatchLinkId.clear();
+		stRow.strReverseFit.clear();
 
 		const string strRetryKey = MakeReleaseRetryKey(stRow.strTripId, stRow.strGpsSeq);
 		const int nRetryMax = m_stConfig.nRetryMax;

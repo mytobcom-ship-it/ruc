@@ -67,6 +67,9 @@ private:
 		PMATCH_TRACE_CTX pstTraceCtx = nullptr, const SGMT_MATCH_INPUT& stSgmtMatchInput = SGMT_MATCH_INPUT());
 	// 최적 후보가 링크 경계(시작/끝)에 스냅(클램프)됐는지 — 클램프면 다음 depth 확장해 연결 링크와 비교 (2026-07-15 최정우 추가)
 	bool IsBoundaryClamped(const MATCH_ENTRY& stMatchEntry);
+	// 최적 후보의 방위각이 심하게 안 맞는지(방위각 비용이 상한 MM_DIR_MAX_PENALTY_M 도달) — 그래도
+	//   depth 확장해 연결 링크와 비교(회전·교차로에서 직전 링크에 계속 고정되는 것 방지) (2026-07-18 최정우 추가)
+	bool IsPoorAngleFit(const MATCH_ENTRY& stMatchEntry);
 
 private:
 	CGISUtil							m_cGISUtil;

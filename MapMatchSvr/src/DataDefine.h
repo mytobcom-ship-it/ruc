@@ -139,6 +139,12 @@ typedef struct sAltitudeScoreConfig
 // 맵매칭 소프트 비용(방위각 가중) 파라미터 — ±45° 하드컷 대체 (2026-07-08 최정우 추가)
 #define MM_DIR_WEIGHT				1.0									// 방위각 1도당 비용(m 환산) 가중치(w_a). 거리(m)+w_a·|방위각차|
 #define MM_DIR_MAX_DEG				120									// 방위각 차 하드 상한(초과 후보 배제, 역방향 오매칭 방지)
+
+// 방위각 비용의 최대 상쇄 한도(m) — 이보다 더 가까운 후보는 방위각이 아무리 잘 맞아도 역전 불가 (2026-07-18 최정우 추가)
+//   목적: dfCost=거리+w_a·|각도차| 합산 시, 각도차가 커도(하드컷 120° 이내) 비용이 무한정 커져 실거리가
+//   훨씬 먼 후보가 선택되는 것을 방지. 예) 5m/100°(cap 미적용 시 cost 105) vs 40m/5° 후보에서,
+//   cap=15 적용 시 5m 후보 cost=20 으로 40m 후보(cost 45)를 이김 → 근접 우위가 보존됨.
+#define MM_DIR_MAX_PENALTY_M		15.0								// (단위: m) 방위각 비용 상한
 #define MM_SPEED_LOW_KMH			5									// 이하: 저속 → 방위각 불신(w_a=0)
 #define MM_SPEED_HIGH_KMH			20									// 이상: 방위각 가중치 최대(w_a=MM_DIR_WEIGHT)
 
@@ -204,6 +210,7 @@ typedef struct sMatchEntry
 	double							dfAltAdj;							// 고도 보조 비용(m) — Continue 만, match trace formula용
 	sint16							nDirAngleDiff;						// 주행방향 각도 차이
 	uint64							qwLinkID;							// 링크 ID
+	bool							bReverseFit;						// 세그먼트 역방향이 정방향보다 더 잘 맞아 채택됨 — 역주행 의심 신호 (2026-07-18 최정우 추가)
 	uint16							wLenFromLink;						// 링크의 시작점에서 부터 매핑된 세그먼트 시작점까지 거리
 	uint8							nMaxSpeed;							// 제한 속도
 	double							dfLen;								// 링크 길이
@@ -229,9 +236,10 @@ typedef struct sMatchEntry
 		dfCost(-1.0), 
 		dfAngleCost(0.0), 
 		dfAltAdj(0.0), 
-		nDirAngleDiff(0), 
-		qwLinkID(0), 
-		wLenFromLink(0), 
+		nDirAngleDiff(0),
+		qwLinkID(0),
+		bReverseFit(false),
+		wLenFromLink(0),
 		nMaxSpeed(0), 
 		dfLen(0.0), 
 		nRoadRank(LINK_ROAD_RANK_NONE), 

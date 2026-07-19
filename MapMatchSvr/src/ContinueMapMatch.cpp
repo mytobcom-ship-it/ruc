@@ -116,10 +116,13 @@ bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPU
 		if (!listAllEntryList.empty())
 		{
 			listAllEntryList.sort();
-			// 최적 후보가 링크 경계 클램프가 아니거나(정상 내부 수선발), 더 깊이 갈 수 없으면 확정.
+			// 최적 후보가 링크 경계 클램프가 아니고(정상 내부 수선발) 방위각도 잘 맞으면, 더 깊이 갈 수 없으면 확정.
 			//   경계 클램프면 차량이 링크 끝을 지난 것 → 연결 다음 링크에 더 나은 후보가 있을 수 있어 depth 확장.
-			//   (클램프여도 다음 depth 후보가 더 나쁘면 sort 후 그대로 이 후보가 선택되므로 안전) (2026-07-15 최정우 추가)
-			if (!IsBoundaryClamped(listAllEntryList.front()) || (i == nSearchStep))
+			//   방위각 부적합(비용이 상한 도달)이면 직전 링크 위 내부 수선발이어도 회전·교차로일 수 있어
+			//   depth 확장해 연결 링크와 비교(2026-07-18 최정우 추가) — 직전 링크에 계속 고정되는 것 방지.
+			//   (두 경우 모두, 확장해도 다음 depth 후보가 더 나쁘면 sort 후 그대로 이 후보가 선택되므로 안전) (2026-07-15 최정우 추가)
+			if ((!IsBoundaryClamped(listAllEntryList.front())
+					&& !IsPoorAngleFit(listAllEntryList.front())) || (i == nSearchStep))
 			{
 				*pwErrorCode = NO_ERROR;
 				if (pstTraceCtx != nullptr)
@@ -180,6 +183,22 @@ bool CContinueMapMatch::IsBoundaryClamped(const MATCH_ENTRY& stMatchEntry)
 	double dfFootFromStart = static_cast<double>(stMatchEntry.wLenFromLink) + stMatchEntry.dfSgmtMatchLen;
 	return (dfFootFromStart <= MM_CLAMP_EPS) ||
 	       (dfFootFromStart >= (stMatchEntry.dfLen - MM_CLAMP_EPS));
+}
+
+/**
+ * @brief 최적 후보의 방위각이 심하게 안 맞는지 판정 (2026-07-18 최정우 추가)
+ * @param[in] stMatchEntry 판정 대상 후보
+ * @return true(방위각 비용이 상한(MM_DIR_MAX_PENALTY_M)에 도달 — 방향이 거의 안 맞음), false(정상)
+ * @remark
+ *   dfAngleCost = dfCost - dfIntersectLenSgmt (방위각 비용만 분리, GISUtil::SgmtMatch 참고).
+ *   상한 도달 = 방향이 심하게 어긋남에도 직전 링크 위에 내부 수선발이 잡혀 depth 확장이
+ *   안 되던 경우(회전·교차로 구간에서 직전 링크에 계속 고정되는 현상) 방지용.
+*/
+bool CContinueMapMatch::IsPoorAngleFit(const MATCH_ENTRY& stMatchEntry)
+{
+	// dfAngleCost = (dfIntersectLenSgmt+cap) - dfIntersectLenSgmt 형태로 역산되어 부동소수점
+	//   반올림 오차로 정확히 cap 값이 아닐 수 있어 허용오차(0.01m) 적용 (2026-07-18 최정우 수정)
+	return stMatchEntry.dfAngleCost >= (MM_DIR_MAX_PENALTY_M - 0.01);
 }
 
 /**
@@ -248,6 +267,7 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
 		stMatchEntry.dfCost = stSgmtMatchRes.dfCost + stMatchEntry.dfAltAdj;
 		stMatchEntry.nDirAngleDiff = stSgmtMatchRes.nDirAngleDiff;
 		stMatchEntry.qwLinkID = stSgmtMatchRes.qwLinkID;
+		stMatchEntry.bReverseFit = stSgmtMatchRes.bReverseFit;
 		stMatchEntry.wLenFromLink = pstLinkSgmtInfo->wLenFromLink;
 		stMatchEntry.nMaxSpeed = pstLinkInfo->nMaxSpeed;
 		stMatchEntry.dfLen = pstLinkInfo->dfLen;

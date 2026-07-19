@@ -4,6 +4,7 @@
 */
 #include "GISUtil.h"
 #include "MessageType.h"
+#include <algorithm>
 
 namespace {
 
@@ -354,6 +355,7 @@ bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtIn
 	// 차량 방위각 vs 세그먼트 방위각 차이 (heading 있을 때만).
 	// ±45 하드컷 대신 소프트 비용 사용 (2026-07-08 최정우 수정)
 	sint16 nHeadingDiff = 0;
+	bool bReverseFit = false;
 	bool bHasHeading = (stSgmtMatchInput.nDirAng != NO_ANGLE);
 	if (bHasHeading)
 	{
@@ -363,7 +365,10 @@ bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtIn
 		sint16 nSegDirRev = static_cast<sint16>((stSgmtInfo.nDirAng + 180) % 360);
 		sint16 nDiffFwd = GetAngleDiff(nSegDirFwd, stSgmtMatchInput.nDirAng);
 		sint16 nDiffRev = GetAngleDiff(nSegDirRev, stSgmtMatchInput.nDirAng);
-		nHeadingDiff = (abs(nDiffFwd) <= abs(nDiffRev)) ? nDiffFwd : nDiffRev;
+		// 역방향이 더 잘 맞아서 채택되는지 표시 — 링크 방향성 정보가 없는 상태에서
+		//   역주행 의심을 사후에 걸러내기 위한 신호(단정 아님) (2026-07-18 최정우 추가)
+		bReverseFit = (abs(nDiffRev) < abs(nDiffFwd));
+		nHeadingDiff = bReverseFit ? nDiffRev : nDiffFwd;
 		// 하드 상한: 정·역 어느 쪽으로도 크게 어긋난(≈수직 이상) 후보만 배제. 그 안은 소프트 비용으로 경쟁
 		if (abs(nHeadingDiff) > MM_DIR_MAX_DEG)
 			return false;
@@ -433,8 +438,11 @@ bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtIn
 	//     · 예) 거리 10m·각도차 40° → 10 + 1.0×40 = 50
 	//            거리 30m·각도차  5° → 30 + 1.0×5 = 35  ⇒ 더 작은 35(방향 맞는 도로) 선택
 	//   ※ 방위각 차이가 120°를 넘는 후보는 아예 제외(역방향 오매칭 방지)
+	//   ※ 방위각 비용은 MM_DIR_MAX_PENALTY_M(15m)로 상한 — 근접 후보가 방위각 때문에 훨씬 먼
+	//     후보에게 역전당하지 않도록 함(2026-07-18 최정우 추가). 예) 거리 5m·각도차 100° →
+	//     5 + min(100, 15) = 20 vs 거리 40m·각도차 5° → 40 + 5 = 45 ⇒ 더 가까운 20(5m) 선택
 	//
-	//   [변수 매핑] dfCost = dfIntersectLenSgmt + dfDirWeight*|nHeadingDiff|,
+	//   [변수 매핑] dfCost = dfIntersectLenSgmt + min(dfDirWeight*|nHeadingDiff|, MM_DIR_MAX_PENALTY_M),
 	//              nHeadingDiff = GetAngleDiff(세그먼트 방위각, 차량 방위각),
 	//              dfDirWeight  = 속도(nSpeed)로 0~MM_DIR_WEIGHT 사이 결정
 	// ────────────────────────────────────────────────────────────────────────────
@@ -448,7 +456,9 @@ bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtIn
 				* static_cast<double>(stSgmtMatchInput.nSpeed - MM_SPEED_LOW_KMH)
 				/ static_cast<double>(MM_SPEED_HIGH_KMH - MM_SPEED_LOW_KMH);
 	}
-	double dfAnglePenalty = bHasHeading ? (dfDirWeight * fabs(static_cast<double>(nHeadingDiff))) : 0.0;
+	double dfAnglePenalty = bHasHeading
+		? std::min(dfDirWeight * fabs(static_cast<double>(nHeadingDiff)), MM_DIR_MAX_PENALTY_M)
+		: 0.0;																// 방위각 비용 상한 캡 — 근접 후보 역전 방지 (2026-07-18 최정우 추가)
 
 	pstSgmtMatchRes->stMatchPoint.dfX = stIntersect.dfX;
 	pstSgmtMatchRes->stMatchPoint.dfY = stIntersect.dfY;
@@ -457,6 +467,7 @@ bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtIn
 	pstSgmtMatchRes->dfCost = dfIntersectLenSgmt + dfAnglePenalty;		// 링크 선택 기준 (2026-07-08 최정우 추가)
 	pstSgmtMatchRes->nDirAngleDiff = nDirAngleDiff;
 	pstSgmtMatchRes->qwLinkID = stSgmtInfo.qwLinkID;
+	pstSgmtMatchRes->bReverseFit = bReverseFit;
 
 	return true;
 }

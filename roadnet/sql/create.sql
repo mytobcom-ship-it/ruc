@@ -1,177 +1,177 @@
-﻿-- roadnet DB 생성 + 스키마 + 테이블 + 권한 (통합)
--- 사용법 (postgres 슈퍼유저, postgres DB 접속 상태):
---   psql -U postgres -f roadnet/sql/create.sql
---   sudo -u postgres psql -f roadnet/sql/create.sql
+﻿-- ROADNET DB 생성 + 스키마 + 테이블 + 권한 (통합)
+-- 사용법 (POSTGRES 슈퍼유저, POSTGRES DB 접속 상태):
+--   PSQL -U POSTGRES -F ROADNET/SQL/CREATE.SQL
+--   SUDO -U POSTGRES PSQL -F ROADNET/SQL/CREATE.SQL
 
 -- ---------------------------------------------------------------------------
 -- [1] 데이터베이스 생성
 -- ---------------------------------------------------------------------------
-SELECT 'CREATE DATABASE roadnet'
-WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'roadnet')\gexec
+SELECT 'CREATE DATABASE ROADNET'
+WHERE NOT EXISTS (SELECT FROM PG_DATABASE WHERE DATNAME = 'ROADNET')\GEXEC
 
-\c roadnet
-
--- ---------------------------------------------------------------------------
--- [2] PostGIS + 스키마
--- ---------------------------------------------------------------------------
-CREATE EXTENSION IF NOT EXISTS postgis;
-
-CREATE SCHEMA IF NOT EXISTS network;
-COMMENT ON SCHEMA network IS '표준 노드·링크 도로 네트워크 (MOCT Shapefile)';
-
-SET search_path TO network, public;
+\C ROADNET
 
 -- ---------------------------------------------------------------------------
--- network.moct_node  (MOCT_NODE.shp / .dbf)
+-- [2] POSTGIS + 스키마
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS network.moct_node (
-    node_id     varchar(10)  NOT NULL,
-    node_type   varchar(3),
-    node_name   varchar(50),
-    turn_p      varchar(1),
-    updatedate  varchar(8),
-    remark      varchar(30),
-    hist_type   varchar(8),
-    histremark  varchar(30),
-    geom        geometry(Point, 4326),
-    CONSTRAINT pk_moct_node PRIMARY KEY (node_id)
+CREATE EXTENSION IF NOT EXISTS POSTGIS;
+
+CREATE SCHEMA IF NOT EXISTS NETWORK;
+COMMENT ON SCHEMA NETWORK IS '표준 노드·링크 도로 네트워크 (MOCT SHAPEFILE)';
+
+SET SEARCH_PATH TO NETWORK, PUBLIC;
+
+-- ---------------------------------------------------------------------------
+-- NETWORK.MOCT_NODE  (MOCT_NODE.SHP / .DBF)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS NETWORK.MOCT_NODE (
+    NODE_ID     VARCHAR(10)  NOT NULL,
+    NODE_TYPE   VARCHAR(3),
+    NODE_NAME   VARCHAR(50),
+    TURN_P      VARCHAR(1),
+    UPDATEDATE  VARCHAR(8),
+    REMARK      VARCHAR(30),
+    HIST_TYPE   VARCHAR(8),
+    HISTREMARK  VARCHAR(30),
+    GEOM        GEOMETRY(POINT, 4326),
+    CONSTRAINT PK_MOCT_NODE PRIMARY KEY (NODE_ID)
 );
 
-COMMENT ON TABLE network.moct_node IS '표준 노드 (교차점·분기점 등)';
-COMMENT ON COLUMN network.moct_node.node_id    IS '노드 ID (10자리, PK)';
-COMMENT ON COLUMN network.moct_node.node_type  IS '노드 유형 코드 (101:교차로, 102:JC, 104:IC 등)';
-COMMENT ON COLUMN network.moct_node.node_name  IS '노드 명칭';
-COMMENT ON COLUMN network.moct_node.turn_p     IS '회전 가능 여부 (0/1)';
-COMMENT ON COLUMN network.moct_node.updatedate IS '데이터 갱신일 (YYYYMMDD)';
-COMMENT ON COLUMN network.moct_node.remark     IS '비고';
-COMMENT ON COLUMN network.moct_node.hist_type  IS '이력 유형 (LINK0001:신규, LINK0003:변경, LINK1007:유지 등)';
-COMMENT ON COLUMN network.moct_node.histremark IS '이력 비고';
-COMMENT ON COLUMN network.moct_node.geom       IS '노드 좌표 (EPSG:4326, WGS84 경위도. 원본 5186 → import 시 ST_Transform 변환)';
+COMMENT ON TABLE NETWORK.MOCT_NODE IS '표준 노드 (교차점·분기점 등)';
+COMMENT ON COLUMN NETWORK.MOCT_NODE.NODE_ID    IS '노드 ID (10자리, PK)';
+COMMENT ON COLUMN NETWORK.MOCT_NODE.NODE_TYPE  IS '노드 유형 코드 (101:교차로, 102:JC, 104:IC 등)';
+COMMENT ON COLUMN NETWORK.MOCT_NODE.NODE_NAME  IS '노드 명칭';
+COMMENT ON COLUMN NETWORK.MOCT_NODE.TURN_P     IS '회전 가능 여부 (0/1)';
+COMMENT ON COLUMN NETWORK.MOCT_NODE.UPDATEDATE IS '데이터 갱신일 (YYYYMMDD)';
+COMMENT ON COLUMN NETWORK.MOCT_NODE.REMARK     IS '비고';
+COMMENT ON COLUMN NETWORK.MOCT_NODE.HIST_TYPE  IS '이력 유형 (LINK0001:신규, LINK0003:변경, LINK1007:유지 등)';
+COMMENT ON COLUMN NETWORK.MOCT_NODE.HISTREMARK IS '이력 비고';
+COMMENT ON COLUMN NETWORK.MOCT_NODE.GEOM       IS '노드 좌표 (EPSG:4326, WGS84 경위도. 원본 5186 → IMPORT 시 ST_TRANSFORM 변환)';
 
 -- ---------------------------------------------------------------------------
--- network.moct_link  (MOCT_LINK.shp / .dbf)
+-- NETWORK.MOCT_LINK  (MOCT_LINK.SHP / .DBF)
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS network.moct_link (
-    link_id     varchar(10)  NOT NULL,
-    f_node      varchar(10),
-    t_node      varchar(10),
-    lanes       integer,
-    road_rank   varchar(3),
-    road_type   varchar(3),
-    road_no     varchar(5),
-    road_name   varchar(30),
-    road_use    varchar(1),
-    multi_link  varchar(1),
-    connect     varchar(3),
-    max_spd     integer,
-    rest_veh    varchar(3),
-    rest_w      integer,
-    rest_h      integer,
-    c_its       varchar(1),
-    length      numeric(18, 12),
-    updatedate  varchar(8),
-    remark      varchar(30),
-    hist_type   varchar(8),
-    histremark  varchar(30),
-    geom        geometry(LineString, 4326),
-    CONSTRAINT pk_moct_link PRIMARY KEY (link_id),
-    CONSTRAINT fk_moct_link_f_node FOREIGN KEY (f_node)
-        REFERENCES network.moct_node (node_id) DEFERRABLE INITIALLY DEFERRED,
-    CONSTRAINT fk_moct_link_t_node FOREIGN KEY (t_node)
-        REFERENCES network.moct_node (node_id) DEFERRABLE INITIALLY DEFERRED
+CREATE TABLE IF NOT EXISTS NETWORK.MOCT_LINK (
+    LINK_ID     VARCHAR(10)  NOT NULL,
+    F_NODE      VARCHAR(10),
+    T_NODE      VARCHAR(10),
+    LANES       INTEGER,
+    ROAD_RANK   VARCHAR(3),
+    ROAD_TYPE   VARCHAR(3),
+    ROAD_NO     VARCHAR(5),
+    ROAD_NAME   VARCHAR(30),
+    ROAD_USE    VARCHAR(1),
+    MULTI_LINK  VARCHAR(1),
+    CONNECT     VARCHAR(3),
+    MAX_SPD     INTEGER,
+    REST_VEH    VARCHAR(3),
+    REST_W      INTEGER,
+    REST_H      INTEGER,
+    C_ITS       VARCHAR(1),
+    LENGTH      NUMERIC(18, 12),
+    UPDATEDATE  VARCHAR(8),
+    REMARK      VARCHAR(30),
+    HIST_TYPE   VARCHAR(8),
+    HISTREMARK  VARCHAR(30),
+    GEOM        GEOMETRY(LINESTRING, 4326),
+    CONSTRAINT PK_MOCT_LINK PRIMARY KEY (LINK_ID),
+    CONSTRAINT FK_MOCT_LINK_F_NODE FOREIGN KEY (F_NODE)
+        REFERENCES NETWORK.MOCT_NODE (NODE_ID) DEFERRABLE INITIALLY DEFERRED,
+    CONSTRAINT FK_MOCT_LINK_T_NODE FOREIGN KEY (T_NODE)
+        REFERENCES NETWORK.MOCT_NODE (NODE_ID) DEFERRABLE INITIALLY DEFERRED
 );
 
-COMMENT ON TABLE network.moct_link IS '표준 링크 (도로 구간)';
-COMMENT ON COLUMN network.moct_link.link_id    IS '링크 ID (10자리, PK)';
-COMMENT ON COLUMN network.moct_link.f_node     IS '시작 노드 ID → moct_node.node_id';
-COMMENT ON COLUMN network.moct_link.t_node     IS '종료 노드 ID → moct_node.node_id';
-COMMENT ON COLUMN network.moct_link.lanes      IS '차로 수';
-COMMENT ON COLUMN network.moct_link.road_rank  IS '도로 등급 (101:고속, 103:국도, 106:지방도, 107:시군도 등)';
-COMMENT ON COLUMN network.moct_link.road_type  IS '도로 유형 (000:일반, 001~004:터널·교량 등)';
-COMMENT ON COLUMN network.moct_link.road_no    IS '대표 노선번호';
-COMMENT ON COLUMN network.moct_link.road_name  IS '도로명';
-COMMENT ON COLUMN network.moct_link.road_use   IS '도로 사용 구분 (0:일반, 1:전용)';
-COMMENT ON COLUMN network.moct_link.multi_link IS '다중 노선 여부 (0:단일, 1:복수 노선 → multilink 참조)';
-COMMENT ON COLUMN network.moct_link.connect    IS '연결로 여부 (0:아님, 1:연결로)';
-COMMENT ON COLUMN network.moct_link.max_spd    IS '최고 제한속도 (km/h)';
-COMMENT ON COLUMN network.moct_link.rest_veh   IS '통행 제한 차량 코드';
-COMMENT ON COLUMN network.moct_link.rest_w     IS '요일별 통행 제한';
-COMMENT ON COLUMN network.moct_link.rest_h     IS '시간대별 통행 제한';
-COMMENT ON COLUMN network.moct_link.c_its      IS 'C-ITS 구간 여부';
-COMMENT ON COLUMN network.moct_link.length     IS '링크 길이 (m)';
-COMMENT ON COLUMN network.moct_link.updatedate IS '데이터 갱신일 (YYYYMMDD)';
-COMMENT ON COLUMN network.moct_link.remark     IS '비고';
-COMMENT ON COLUMN network.moct_link.hist_type  IS '이력 유형 (LINK0001:신규, LINK0003:변경, LINK1007:유지 등)';
-COMMENT ON COLUMN network.moct_link.histremark IS '이력 비고';
-COMMENT ON COLUMN network.moct_link.geom       IS '링크 형상 (EPSG:4326, WGS84 LineString. 원본 5186 → import 시 ST_Transform 변환)';
+COMMENT ON TABLE NETWORK.MOCT_LINK IS '표준 링크 (도로 구간)';
+COMMENT ON COLUMN NETWORK.MOCT_LINK.LINK_ID    IS '링크 ID (10자리, PK)';
+COMMENT ON COLUMN NETWORK.MOCT_LINK.F_NODE     IS '시작 노드 ID → MOCT_NODE.NODE_ID';
+COMMENT ON COLUMN NETWORK.MOCT_LINK.T_NODE     IS '종료 노드 ID → MOCT_NODE.NODE_ID';
+COMMENT ON COLUMN NETWORK.MOCT_LINK.LANES      IS '차로 수';
+COMMENT ON COLUMN NETWORK.MOCT_LINK.ROAD_RANK  IS '도로 등급 (101:고속, 103:국도, 106:지방도, 107:시군도 등)';
+COMMENT ON COLUMN NETWORK.MOCT_LINK.ROAD_TYPE  IS '도로 유형 (000:일반, 001~004:터널·교량 등)';
+COMMENT ON COLUMN NETWORK.MOCT_LINK.ROAD_NO    IS '대표 노선번호';
+COMMENT ON COLUMN NETWORK.MOCT_LINK.ROAD_NAME  IS '도로명';
+COMMENT ON COLUMN NETWORK.MOCT_LINK.ROAD_USE   IS '도로 사용 구분 (0:일반, 1:전용)';
+COMMENT ON COLUMN NETWORK.MOCT_LINK.MULTI_LINK IS '다중 노선 여부 (0:단일, 1:복수 노선 → MULTILINK 참조)';
+COMMENT ON COLUMN NETWORK.MOCT_LINK.CONNECT    IS '연결로 여부 (0:아님, 1:연결로)';
+COMMENT ON COLUMN NETWORK.MOCT_LINK.MAX_SPD    IS '최고 제한속도 (KM/H)';
+COMMENT ON COLUMN NETWORK.MOCT_LINK.REST_VEH   IS '통행 제한 차량 코드';
+COMMENT ON COLUMN NETWORK.MOCT_LINK.REST_W     IS '요일별 통행 제한';
+COMMENT ON COLUMN NETWORK.MOCT_LINK.REST_H     IS '시간대별 통행 제한';
+COMMENT ON COLUMN NETWORK.MOCT_LINK.C_ITS      IS 'C-ITS 구간 여부';
+COMMENT ON COLUMN NETWORK.MOCT_LINK.LENGTH     IS '링크 길이 (M)';
+COMMENT ON COLUMN NETWORK.MOCT_LINK.UPDATEDATE IS '데이터 갱신일 (YYYYMMDD)';
+COMMENT ON COLUMN NETWORK.MOCT_LINK.REMARK     IS '비고';
+COMMENT ON COLUMN NETWORK.MOCT_LINK.HIST_TYPE  IS '이력 유형 (LINK0001:신규, LINK0003:변경, LINK1007:유지 등)';
+COMMENT ON COLUMN NETWORK.MOCT_LINK.HISTREMARK IS '이력 비고';
+COMMENT ON COLUMN NETWORK.MOCT_LINK.GEOM       IS '링크 형상 (EPSG:4326, WGS84 LINESTRING. 원본 5186 → IMPORT 시 ST_TRANSFORM 변환)';
 
 -- ---------------------------------------------------------------------------
--- network.multilink  (MULTILINK.dbf, geometry 없음)
+-- NETWORK.MULTILINK  (MULTILINK.DBF, GEOMETRY 없음)
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS network.multilink (
-    link_id     varchar(10)  NOT NULL,
-    multi_id    smallint     NOT NULL,
-    road_rank   varchar(3),
-    road_type   varchar(3),
-    road_no     varchar(5),
-    road_name   varchar(30),
-    remark      varchar(30),
-    CONSTRAINT pk_multilink PRIMARY KEY (link_id, multi_id),
-    CONSTRAINT fk_multilink_link FOREIGN KEY (link_id)
-        REFERENCES network.moct_link (link_id) DEFERRABLE INITIALLY DEFERRED
+CREATE TABLE IF NOT EXISTS NETWORK.MULTILINK (
+    LINK_ID     VARCHAR(10)  NOT NULL,
+    MULTI_ID    SMALLINT     NOT NULL,
+    ROAD_RANK   VARCHAR(3),
+    ROAD_TYPE   VARCHAR(3),
+    ROAD_NO     VARCHAR(5),
+    ROAD_NAME   VARCHAR(30),
+    REMARK      VARCHAR(30),
+    CONSTRAINT PK_MULTILINK PRIMARY KEY (LINK_ID, MULTI_ID),
+    CONSTRAINT FK_MULTILINK_LINK FOREIGN KEY (LINK_ID)
+        REFERENCES NETWORK.MOCT_LINK (LINK_ID) DEFERRABLE INITIALLY DEFERRED
 );
 
-COMMENT ON TABLE network.multilink IS '다중 노선 링크 부가 속성 (한 구간에 노선번호 2개 이상)';
-COMMENT ON COLUMN network.multilink.link_id   IS '링크 ID → moct_link.link_id';
-COMMENT ON COLUMN network.multilink.multi_id  IS '다중 노선 순번 (1, 2, 3 …)';
-COMMENT ON COLUMN network.multilink.road_rank IS '도로 등급';
-COMMENT ON COLUMN network.multilink.road_type IS '도로 유형';
-COMMENT ON COLUMN network.multilink.road_no   IS '추가 노선번호';
-COMMENT ON COLUMN network.multilink.road_name IS '도로명';
-COMMENT ON COLUMN network.multilink.remark    IS '비고';
+COMMENT ON TABLE NETWORK.MULTILINK IS '다중 노선 링크 부가 속성 (한 구간에 노선번호 2개 이상)';
+COMMENT ON COLUMN NETWORK.MULTILINK.LINK_ID   IS '링크 ID → MOCT_LINK.LINK_ID';
+COMMENT ON COLUMN NETWORK.MULTILINK.MULTI_ID  IS '다중 노선 순번 (1, 2, 3 …)';
+COMMENT ON COLUMN NETWORK.MULTILINK.ROAD_RANK IS '도로 등급';
+COMMENT ON COLUMN NETWORK.MULTILINK.ROAD_TYPE IS '도로 유형';
+COMMENT ON COLUMN NETWORK.MULTILINK.ROAD_NO   IS '추가 노선번호';
+COMMENT ON COLUMN NETWORK.MULTILINK.ROAD_NAME IS '도로명';
+COMMENT ON COLUMN NETWORK.MULTILINK.REMARK    IS '비고';
 
 -- ---------------------------------------------------------------------------
--- network.turn_info  (TURNINFO.dbf, geometry 없음)
+-- NETWORK.TURN_INFO  (TURNINFO.DBF, GEOMETRY 없음)
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS network.turn_info (
-    node_id     varchar(10)  NOT NULL,
-    turn_id     smallint     NOT NULL,
-    st_link     varchar(10)  NOT NULL,
-    ed_link     varchar(10)  NOT NULL,
-    turn_type   varchar(3),
-    turn_oper   varchar(1),
-    remark      varchar(30),
-    CONSTRAINT pk_turn_info PRIMARY KEY (node_id, turn_id)
+CREATE TABLE IF NOT EXISTS NETWORK.TURN_INFO (
+    NODE_ID     VARCHAR(10)  NOT NULL,
+    TURN_ID     SMALLINT     NOT NULL,
+    ST_LINK     VARCHAR(10)  NOT NULL,
+    ED_LINK     VARCHAR(10)  NOT NULL,
+    TURN_TYPE   VARCHAR(3),
+    TURN_OPER   VARCHAR(1),
+    REMARK      VARCHAR(30),
+    CONSTRAINT PK_TURN_INFO PRIMARY KEY (NODE_ID, TURN_ID)
 );
 
-COMMENT ON TABLE network.turn_info IS '노드 회전 정보 (진입링크→진출링크 회전 제한/허용)';
-COMMENT ON COLUMN network.turn_info.node_id   IS '노드 ID (→ moct_node.node_id)';
-COMMENT ON COLUMN network.turn_info.turn_id   IS '노드 내 회전 정보 순번';
-COMMENT ON COLUMN network.turn_info.st_link   IS '진입(시작) 링크 ID (→ moct_link.link_id)';
-COMMENT ON COLUMN network.turn_info.ed_link   IS '진출(종료) 링크 ID (→ moct_link.link_id)';
-COMMENT ON COLUMN network.turn_info.turn_type IS '회전 유형 코드 (011:직진, 101:좌회전, 102:우회전, 103:유턴 등)';
-COMMENT ON COLUMN network.turn_info.turn_oper IS '회전 허용 여부 (0:허용, 1:제한)';
-COMMENT ON COLUMN network.turn_info.remark    IS '비고';
+COMMENT ON TABLE NETWORK.TURN_INFO IS '노드 회전 정보 (진입링크→진출링크 회전 제한/허용)';
+COMMENT ON COLUMN NETWORK.TURN_INFO.NODE_ID   IS '노드 ID (→ MOCT_NODE.NODE_ID)';
+COMMENT ON COLUMN NETWORK.TURN_INFO.TURN_ID   IS '노드 내 회전 정보 순번';
+COMMENT ON COLUMN NETWORK.TURN_INFO.ST_LINK   IS '진입(시작) 링크 ID (→ MOCT_LINK.LINK_ID)';
+COMMENT ON COLUMN NETWORK.TURN_INFO.ED_LINK   IS '진출(종료) 링크 ID (→ MOCT_LINK.LINK_ID)';
+COMMENT ON COLUMN NETWORK.TURN_INFO.TURN_TYPE IS '회전 유형 코드 (011:직진, 101:좌회전, 102:우회전, 103:유턴 등)';
+COMMENT ON COLUMN NETWORK.TURN_INFO.TURN_OPER IS '회전 허용 여부 (0:허용, 1:제한)';
+COMMENT ON COLUMN NETWORK.TURN_INFO.REMARK    IS '비고';
 
 -- ---------------------------------------------------------------------------
 -- [3] 인덱스
 -- ---------------------------------------------------------------------------
-CREATE INDEX IF NOT EXISTS idx_moct_link_f_node ON network.moct_link (f_node);
-CREATE INDEX IF NOT EXISTS idx_moct_link_t_node ON network.moct_link (t_node);
-CREATE INDEX IF NOT EXISTS idx_moct_link_road_rank ON network.moct_link (road_rank);
-CREATE INDEX IF NOT EXISTS idx_moct_link_multi_link ON network.moct_link (multi_link);
-CREATE INDEX IF NOT EXISTS idx_moct_link_geom ON network.moct_link USING GIST (geom);
-CREATE INDEX IF NOT EXISTS idx_moct_node_geom ON network.moct_node USING GIST (geom);
-CREATE INDEX IF NOT EXISTS idx_multilink_link_id ON network.multilink (link_id);
-CREATE INDEX IF NOT EXISTS idx_turn_info_node_id ON network.turn_info (node_id);
-CREATE INDEX IF NOT EXISTS idx_turn_info_st_link ON network.turn_info (st_link);
-CREATE INDEX IF NOT EXISTS idx_turn_info_ed_link ON network.turn_info (ed_link);
-CREATE INDEX IF NOT EXISTS idx_turn_info_st_ed ON network.turn_info (st_link, ed_link);
+CREATE INDEX IF NOT EXISTS IDX_MOCT_LINK_F_NODE ON NETWORK.MOCT_LINK (F_NODE);
+CREATE INDEX IF NOT EXISTS IDX_MOCT_LINK_T_NODE ON NETWORK.MOCT_LINK (T_NODE);
+CREATE INDEX IF NOT EXISTS IDX_MOCT_LINK_ROAD_RANK ON NETWORK.MOCT_LINK (ROAD_RANK);
+CREATE INDEX IF NOT EXISTS IDX_MOCT_LINK_MULTI_LINK ON NETWORK.MOCT_LINK (MULTI_LINK);
+CREATE INDEX IF NOT EXISTS IDX_MOCT_LINK_GEOM ON NETWORK.MOCT_LINK USING GIST (GEOM);
+CREATE INDEX IF NOT EXISTS IDX_MOCT_NODE_GEOM ON NETWORK.MOCT_NODE USING GIST (GEOM);
+CREATE INDEX IF NOT EXISTS IDX_MULTILINK_LINK_ID ON NETWORK.MULTILINK (LINK_ID);
+CREATE INDEX IF NOT EXISTS IDX_TURN_INFO_NODE_ID ON NETWORK.TURN_INFO (NODE_ID);
+CREATE INDEX IF NOT EXISTS IDX_TURN_INFO_ST_LINK ON NETWORK.TURN_INFO (ST_LINK);
+CREATE INDEX IF NOT EXISTS IDX_TURN_INFO_ED_LINK ON NETWORK.TURN_INFO (ED_LINK);
+CREATE INDEX IF NOT EXISTS IDX_TURN_INFO_ST_ED ON NETWORK.TURN_INFO (ST_LINK, ED_LINK);
 
 -- ---------------------------------------------------------------------------
--- [4] mytobcom 사용자 권한
+-- [4] MYTOBCOM 사용자 권한
 -- ---------------------------------------------------------------------------
-GRANT CONNECT ON DATABASE roadnet TO mytobcom;
-GRANT USAGE ON SCHEMA network TO mytobcom;
-GRANT SELECT ON ALL TABLES IN SCHEMA network TO mytobcom;
-ALTER DEFAULT PRIVILEGES IN SCHEMA network GRANT SELECT ON TABLES TO mytobcom;
+GRANT CONNECT ON DATABASE ROADNET TO MYTOBCOM;
+GRANT USAGE ON SCHEMA NETWORK TO MYTOBCOM;
+GRANT SELECT ON ALL TABLES IN SCHEMA NETWORK TO MYTOBCOM;
+ALTER DEFAULT PRIVILEGES IN SCHEMA NETWORK GRANT SELECT ON TABLES TO MYTOBCOM;

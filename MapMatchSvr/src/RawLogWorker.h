@@ -69,6 +69,7 @@ typedef struct sRawLogUpdateRow
 	string							strMatchLat;
 	string							strMatchLon;
 	string							strMatchLinkId;						// 맵매칭 링크 ID (MATCH_LINK_ID) (2026-07-15 최정우 추가)
+	string							strReverseFit;						// 역방향 핏 채택 여부 (REVERSE_FIT) — 역주행 의심 신호 (2026-07-18 최정우 추가)
 } RAW_LOG_UPDATE_ROW, *PRAW_LOG_UPDATE_ROW;
 
 /**
@@ -122,7 +123,7 @@ private:
 	static bool AppendUpdateRow(vector<RAW_LOG_UPDATE_ROW> *pvtUpdates,
 		const sRawLogInfo& stRawLogInfo, sint16 nStatus, int nIntersectLenM = -1,
 		const double *pdfMatchLat = nullptr, const double *pdfMatchLon = nullptr,
-		uint64 qwMatchLinkId = 0);
+		uint64 qwMatchLinkId = 0, const bool *pbReverseFit = nullptr);
 	bool BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDATE_ROW>& vtUpdates);
 	// bulk update 실패 시 동일 rawgps_update 로 PROCESSING(2)→PENDING(0) 예약 해제
 	bool BulkReleaseRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDATE_ROW>& vtUpdates);

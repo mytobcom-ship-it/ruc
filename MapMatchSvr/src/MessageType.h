@@ -171,6 +171,7 @@ typedef struct sMatchLinkInfo
 	double                          dfIntersectLenSgmt;					// GPS 좌표와 세그먼트 교차점까지 거리(m) — DB INTERSECT_LEN
 	sint16							nDirAngleDiff;						// 매핑 각도 차이
 	uint64							qwLinkID;							// 링크 ID
+	bool							bReverseFit;						// 세그먼트 역방향이 정방향보다 더 잘 맞아 채택됨 — 역주행 의심 신호 (2026-07-18 최정우 추가)
 	uint16							wLenFromLink;						// 링크의 시작점부터 세그먼트 시작점까지 거리 (m)
 	uint8							nMaxSpeed;							// 제한 속도 (km/h)
 	double							dfLen;								// 링크 길이 (m)

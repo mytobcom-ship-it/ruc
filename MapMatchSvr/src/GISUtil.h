@@ -118,13 +118,15 @@ typedef struct sSgmtMatchRes
 	double							dfCost;								// 소프트 비용 = INTERSECT_LEN(m) + w_a·|방위각차| (2026-07-08 최정우 추가)
 	sint16							nDirAngleDiff;						// 주행방향 각도 차이
 	uint64							qwLinkID;							// 링크 ID
+	bool							bReverseFit;						// 세그먼트 역방향(T→F+180°)이 정방향보다 더 잘 맞아 채택됨 — 역주행 의심 신호 (2026-07-18 최정우 추가)
 
 	sSgmtMatchRes() :
-		dfSgmtMatchLen(0.0), 
-		dfIntersectLenSgmt(0.0), 
-		dfCost(0.0), 
-		nDirAngleDiff(0), 
-		qwLinkID(0)
+		dfSgmtMatchLen(0.0),
+		dfIntersectLenSgmt(0.0),
+		dfCost(0.0),
+		nDirAngleDiff(0),
+		qwLinkID(0),
+		bReverseFit(false)
 	{}
 } SGMT_MATCH_RES, *PSGMT_MATCH_RES;
 

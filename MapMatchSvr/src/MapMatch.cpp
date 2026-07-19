@@ -214,6 +214,34 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 		return false;
 	}
 
+	// Continue 결과 품질이 나쁘면(방위각 비용이 상한 도달) Begin도 병행 실행해 더 나은 쪽 채택 (2026-07-18 최정우 추가)
+	//   갈림길(직전 링크와 같은 시작 노드에서 갈라지는 형제 링크)은 depth 그래프가 직전 링크의
+	//   끝(t_node) 이후로만 확장돼 구조적으로 도달 불가 — Begin은 반경 기반이라 그래프 제약이 없어 보완됨.
+	//   연결성 편향(qwBiasLinkID)은 일부러 안 줌: 그 편향 자체가 forward-only 그래프와 같은 가정이라
+	//   갈림길 형제 링크에 다시 페널티(MM_CONNECT_PENALTY)를 물려 이 보완 목적을 무력화하기 때문.
+	//   120° 방위각 하드컷(MM_DIR_MAX_DEG)이 나란한/반대방향 도로 오매칭은 이미 차단.
+	//   dfAngleCost는 (거리+cap)-거리 형태로 역산되어 부동소수점 반올림 오차가 있을 수 있어
+	//   허용오차(0.01m) 적용 (2026-07-18 최정우 수정)
+	if (stMatchEntry.dfAngleCost >= (MM_DIR_MAX_PENALTY_M - 0.01))
+	{
+		SGMT_MATCH_INPUT stBeginSgmtMatchInput;
+		MATCH_ENTRY stBeginMatchEntry;
+		uint16 wBeginErrorCode = NO_ERROR;
+
+		stBeginSgmtMatchInput.stPoint.dfX = dfX;
+		stBeginSgmtMatchInput.stPoint.dfY = dfY;
+		stBeginSgmtMatchInput.nRadius = nRadius;
+		stBeginSgmtMatchInput.nDirAng = nAngle;
+		stBeginSgmtMatchInput.nSpeed = stMapMatchInput.nSpeed;
+
+		if (m_cBeginMapMatch.StartMapMatch(m_pcDataLoader, stBeginSgmtMatchInput, &wBeginErrorCode,
+				&stBeginMatchEntry, pstTraceCtx, 0)
+			&& (stBeginMatchEntry.dfCost < stMatchEntry.dfCost))
+		{
+			stMatchEntry = stBeginMatchEntry;
+		}
+	}
+
 	// 매칭 결과를 응답 구조체로 변환·좌표 역스케일 (2026-07-08 최정우 주석 추가)
 	return SetResponseValue(wErrorCode, stMatchEntry, pstMatchLinkInfo);
 }
@@ -323,6 +351,7 @@ bool CMapMatch::SetResponseValue(uint16 wErrorCode, MATCH_ENTRY stMatchEntry,
 		pstMatchLinkInfo->dfIntersectLenSgmt = stMatchEntry.dfIntersectLenSgmt;
 		pstMatchLinkInfo->nDirAngleDiff		= stMatchEntry.nDirAngleDiff;
 		pstMatchLinkInfo->qwLinkID			= stMatchEntry.qwLinkID;
+		pstMatchLinkInfo->bReverseFit		= stMatchEntry.bReverseFit;
 		pstMatchLinkInfo->wLenFromLink		= stMatchEntry.wLenFromLink;
 		pstMatchLinkInfo->nMaxSpeed			= stMatchEntry.nMaxSpeed;
 		pstMatchLinkInfo->dfLen				= stMatchEntry.dfLen;

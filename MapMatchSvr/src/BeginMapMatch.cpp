@@ -190,6 +190,7 @@ bool CBeginMapMatch::GridSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, uint32
 
 		stMatchEntry.nDirAngleDiff = stSgmtMatchRes.nDirAngleDiff;
 		stMatchEntry.qwLinkID = stSgmtMatchRes.qwLinkID;
+		stMatchEntry.bReverseFit = stSgmtMatchRes.bReverseFit;
 		stMatchEntry.wLenFromLink = pstGridSgmtInfo->wLenFromLink;
 		stMatchEntry.nMaxSpeed = pstLinkInfo->nMaxSpeed;
 		stMatchEntry.dfLen = pstLinkInfo->dfLen;
@@ -268,6 +269,7 @@ bool CBeginMapMatch::GridSgmtGeomNearest(SGMT_MATCH_INPUT& stSgmtMatchInput, uin
 		stMatchEntry.dfAltAdj = 0.0;
 		stMatchEntry.nDirAngleDiff = stSgmtMatchRes.nDirAngleDiff;
 		stMatchEntry.qwLinkID = stSgmtMatchRes.qwLinkID;
+		stMatchEntry.bReverseFit = stSgmtMatchRes.bReverseFit;
 		stMatchEntry.wLenFromLink = pstGridSgmtInfo->wLenFromLink;
 		stMatchEntry.nMaxSpeed = pstLinkInfo->nMaxSpeed;
 		stMatchEntry.dfLen = pstLinkInfo->dfLen;

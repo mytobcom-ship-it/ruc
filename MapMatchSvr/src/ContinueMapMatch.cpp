@@ -7,8 +7,11 @@
 /**
  * @brief 생성자
 */
-CContinueMapMatch::CContinueMapMatch() : 
-	m_pcDataLoader(nullptr)
+CContinueMapMatch::CContinueMapMatch() :
+	m_pcDataLoader(nullptr),
+	m_dfReversePenaltyWeight(1.0),
+	m_dfReverseSpeedGateKmh(0.0),
+	m_dfReverseDeadZoneM(0.0)
 {
 }
 
@@ -27,6 +30,26 @@ CContinueMapMatch::~CContinueMapMatch()
 void CContinueMapMatch::SetAltitudeConfig(const ALTITUDE_SCORE_CONFIG& stAltConfig)
 {
 	m_stAltitudeConfig = stAltConfig;
+}
+
+/**
+ * @brief 연속 맵매칭 역행 페널티 설정 (config reverse_penalty_weight/reverse_speed_gate_kmh/reverse_dead_zone_m)
+ * @param[in] dfWeight 역행 1m당 비용 가중치 (음수 입력 시 무시, 기존값 유지)
+ * @param[in] dfSpeedGateKmh 저속 데드존 적용 속도 상한(km/h) — SPEED_KMH 가 이 미만일 때만 데드존 적용 (2026-07-20 최정우 추가)
+ * @param[in] dfDeadZoneM 저속 시 페널티 없이 허용하는 역행 거리(m) — 그 이상 초과분만 페널티 (2026-07-20 최정우 추가)
+ * @return void
+ * @remark 저속(정차 직전 등)에서는 실제 이동거리가 GPS 노이즈와 비슷해져 짧은 역행과 노이즈를 구분할 수
+ *   없다 — 데드존 이하는 페널티 없이 허용해, 불필요하게 더 나쁜(예: INTERSECT_LEN 큰) 후보를 강제로
+ *   선택하지 않도록 한다. 고속에서는 역행이 실제 오매칭일 가능성이 높아 데드존을 적용하지 않는다.
+*/
+void CContinueMapMatch::SetReversePenaltyWeight(double dfWeight, double dfSpeedGateKmh, double dfDeadZoneM)
+{
+	if (dfWeight >= 0.0)
+		m_dfReversePenaltyWeight = dfWeight;
+	if (dfSpeedGateKmh >= 0.0)
+		m_dfReverseSpeedGateKmh = dfSpeedGateKmh;
+	if (dfDeadZoneM >= 0.0)
+		m_dfReverseDeadZoneM = dfDeadZoneM;
 }
 
 /**
@@ -68,6 +91,8 @@ bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPU
 
 	stSgmtMatchInput.stPoint.dfX *= 360000.0;
 	stSgmtMatchInput.stPoint.dfY *= 360000.0;
+	// 역행 페널티 판정용 직전 링크 ID — 이 링크 위 후보만 dfPrevLinkPos 와 비교 (2026-07-20 최정우 추가)
+	stSgmtMatchInput.qwPrevLinkID = qwLinkID;
 
 	// 0 depth 세팅 
 	// 링크 세그먼트 정보
@@ -284,6 +309,29 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
 		stMatchEntry.dfEdNodeX = static_cast<double>(pstLinkInfo->dwEdNodeX);
 		stMatchEntry.dfEdNodeY = static_cast<double>(pstLinkInfo->dwEdNodeY);
 		stMatchEntry.nEdNodeType = pstLinkInfo->nEdNodeType;
+
+		// 직전 매칭 위치보다 뒤로 가는 후보에 역행 거리(m)만큼 비용 페널티 가산 — 같은 링크 위 GPS
+		//   노이즈로 인한 역행 스냅(오락가락) 억제. 링크가 바뀌면(정상 전진) 비교 대상 아님 (2026-07-20 최정우 추가)
+		//   저속(정차 직전 등, SPEED_KMH < reverse_speed_gate_kmh)에서는 실제 이동거리가 GPS 노이즈와
+		//   비슷해져 구분이 어려우므로, reverse_dead_zone_m 이하 역행은 페널티 없이 허용한다 (2026-07-20 최정우 추가)
+		//   dfReversePenalty 는 match trace formula 표시 전용 — dfCost 에는 이미 가산됨 (2026-07-20 최정우 추가)
+		if (stSgmtMatchInput.bHasPrevLinkPos && (stMatchEntry.qwLinkID == stSgmtMatchInput.qwPrevLinkID))
+		{
+			double dfCurPos = static_cast<double>(stMatchEntry.wLenFromLink) + stMatchEntry.dfSgmtMatchLen;
+			if (dfCurPos < stSgmtMatchInput.dfPrevLinkPos)
+			{
+				double dfBackwardM = stSgmtMatchInput.dfPrevLinkPos - dfCurPos;
+				double dfDeadZoneM = 0.0;
+				if ((stSgmtMatchInput.nSpeed >= 0) && (stSgmtMatchInput.nSpeed < m_dfReverseSpeedGateKmh))
+					dfDeadZoneM = m_dfReverseDeadZoneM;
+				double dfPenalizedM = dfBackwardM - dfDeadZoneM;
+				if (dfPenalizedM > 0.0)
+				{
+					stMatchEntry.dfReversePenalty = dfPenalizedM * m_dfReversePenaltyWeight;
+					stMatchEntry.dfCost += stMatchEntry.dfReversePenalty;
+				}
+			}
+		}
 
 		plistMatchEntryList->push_back(stMatchEntry);
 	}

@@ -19,7 +19,8 @@ SELECT
 	link_id,
 	COALESCE(t_node, '') AS t_node,
 	COALESCE(max_spd, 0) AS max_spd,
-	ST_AsText(ST_Transform(geom, 4326)) AS wkt
+	ST_AsText(ST_Transform(geom, 4326)) AS wkt,
+	COALESCE(road_type, '000') AS road_type
 FROM network.moct_link
 WHERE geom && ST_Transform(
 		ST_MakeEnvelope($1::float8, $2::float8, $3::float8, $4::float8, 4326), $5::int)
@@ -35,7 +36,8 @@ SELECT
 	link_id,
 	COALESCE(t_node, '') AS t_node,
 	COALESCE(max_spd, 0) AS max_spd,
-	ST_AsText(ST_Transform(geom, 4326)) AS wkt
+	ST_AsText(ST_Transform(geom, 4326)) AS wkt,
+	COALESCE(road_type, '000') AS road_type
 FROM network.moct_link
 WHERE f_node = $1
 	AND link_id <> $2

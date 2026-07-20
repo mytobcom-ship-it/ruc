@@ -108,6 +108,7 @@ cd bin
 | `database` | host/port/name/userid/password | DB 접속 (기본 `roadnet` / `mytobcom`) |
 | `sim` | `vehicles` | 동시 운행 차량 수 |
 | `sim` | `flush_sec` | DB INSERT 주기(초) — 1초 tick 으로 모아 N초마다 적재 |
+| `sim` | `max_samples` | 총 GPS 생성 상한 (0=무제한). 도달 시 flush 후 자동 종료 |
 | `sim` | `idle_prob` | tick 당 정차(IDLE) 확률 |
 | `area` | min/max lon·lat | 주행 영역(WGS-84 bbox). 기본: 서울 일부 |
 | `route` | min_m / max_links | 1회 운행 경로 길이·링크 수 |

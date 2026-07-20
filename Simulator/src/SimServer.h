@@ -50,6 +50,7 @@ private:
 
 	unsigned long long		m_ullTotalInsert;	// 누적 INSERT 건수
 	unsigned long long		m_ullTotalFail;		// 누적 실패 건수
+	unsigned long long		m_ullTotalGenerated;	// 누적 생성(tick) 건수 — max_samples 도달 판정용
 };
 
 #endif // __SIM_SERVER_H__

@@ -33,9 +33,10 @@ typedef struct sLinkGeom
 	string				strLinkID;		// 링크 ID
 	string				strToNode;		// 종료 노드 ID (다음 링크 탐색 키)
 	int					nMaxSpd;		// 제한속도 (km/h, 0=미지정)
+	int					nRoadType;		// MOCT_LINK.ROAD_TYPE (0:일반 1:교량 2:터널 3:고가 4:지하) (2026-07-20 최정우 추가)
 	vector<GEO_POINT>	vtPoints;		// 형상 점열 (f_node → t_node, WGS-84)
 
-	sLinkGeom() : nMaxSpd(0) {}
+	sLinkGeom() : nMaxSpd(0), nRoadType(0) {}
 } LINK_GEOM;
 
 #define SIM_TRIP_EVENT_START			0

@@ -80,10 +80,13 @@ CProcessManager::~CProcessManager()
  * @param[in] stAltitudeConfig config altitude_* — 연속 맵매칭 고도 보조 점수
  * @return true(성공), false(실패)
 */
-bool CProcessManager::Initialize(const int nThreadId, CDataLoader *pcDataLoader, 
+bool CProcessManager::Initialize(const int nThreadId, CDataLoader *pcDataLoader,
 		const uint8& nCoordinateType, const sint16& nRadius, const uint32& dwMaxDistance,
 		const double& dfRadiusScale, const sint16& nRadiusMin, const sint16& nRadiusMax,
-		const ALTITUDE_SCORE_CONFIG& stAltitudeConfig)
+		const ALTITUDE_SCORE_CONFIG& stAltitudeConfig,
+		const double& dfReversePenaltyWeight,
+		const double& dfReverseSpeedGateKmh,
+		const double& dfReverseDeadZoneM)
 {
 	m_nThreadId = nThreadId;					// 쓰레드 ID
 
@@ -126,6 +129,11 @@ bool CProcessManager::Initialize(const int nThreadId, CDataLoader *pcDataLoader,
 
 	// 연속 맵매칭 고도 보조 점수 config 적용 (2026-07-08 최정우 주석 추가)
 	m_pcMapMatch->SetAltitudeConfig(m_stAltitudeConfig);
+
+	// 연속 맵매칭 역행 페널티 가중치 config 적용 (2026-07-20 최정우 추가)
+	m_pcMapMatch->SetReversePenaltyWeight((dfReversePenaltyWeight >= 0.0) ? dfReversePenaltyWeight : 1.0,
+		(dfReverseSpeedGateKmh >= 0.0) ? dfReverseSpeedGateKmh : 0.0,
+		(dfReverseDeadZoneM >= 0.0) ? dfReverseDeadZoneM : 0.0);
 
 	return true;
 }
@@ -199,6 +207,13 @@ void CProcessManager::BuildMapMatchInput(const sRawLogInfo& stRawLogInfo,
 		pstMapMatchInput->nPrevAltitudeM = pstAltCtx->nPrevAltitudeM;
 		pstMapMatchInput->nPrevRoadType = pstAltCtx->nPrevRoadType;
 		pstMapMatchInput->dfHorizMoveM = pstAltCtx->dfHorizMoveM;
+	}
+
+	// 연속 맵매칭 + 직전 매칭 위치 보유 시 역행 페널티용 위치 전달 (2026-07-20 최정우 추가)
+	if (qwLinkID != 0 && pstAltCtx != nullptr && pstAltCtx->bHasPrevLinkPos)
+	{
+		pstMapMatchInput->dfPrevLinkPos = pstAltCtx->dfPrevLinkPos;
+		pstMapMatchInput->bHasPrevLinkPos = true;
 	}
 }
 

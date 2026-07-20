@@ -118,10 +118,13 @@ public:
 	CProcessManager();
 	virtual ~CProcessManager();
 
-	bool Initialize(const int nThreadId, CDataLoader *pcDataLoader, 
+	bool Initialize(const int nThreadId, CDataLoader *pcDataLoader,
 		const uint8& nCoordinateType, const sint16& nRadius, const uint32& dwMaxDistance,
 		const double& dfRadiusScale, const sint16& nRadiusMin, const sint16& nRadiusMax,
-		const ALTITUDE_SCORE_CONFIG& stAltitudeConfig);
+		const ALTITUDE_SCORE_CONFIG& stAltitudeConfig,
+		const double& dfReversePenaltyWeight = 1.0,
+		const double& dfReverseSpeedGateKmh = 0.0,
+		const double& dfReverseDeadZoneM = 0.0);
 	bool StartProcess(const char *pszStartDate, const char *pszDriveID, const char *pszOperID);
 	bool ProcessRawLog(const sRawLogInfo& stRawLogInfo, uint64& qwInOutLinkID,
 		MATCH_LINK_INFO *pstMatchLinkInfo, const ALT_MATCH_CTX *pstAltCtx = nullptr);

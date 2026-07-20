@@ -131,6 +131,11 @@ CServer::CServer() :
 	m_nAltitudePenalty(CFG_DEF_ALT_PENALTY),
 	m_dfAltitudeWeight(CFG_DEF_ALT_WEIGHT),
 	m_dfAltitudeSlope(CFG_DEF_ALT_SLOPE),
+	m_dfReversePenaltyWeight(CFG_DEF_REVERSE_PENALTY_WEIGHT),
+	m_dfReverseSpeedGateKmh(CFG_DEF_REVERSE_SPEED_GATE),
+	m_dfReverseDeadZoneM(CFG_DEF_REVERSE_DEAD_ZONE),
+	m_dfSpeedDiffFactor(CFG_DEF_SPEED_DIFF_FACTOR),
+	m_nSpeedDiffMargin(CFG_DEF_SPEED_DIFF_MARGIN),
 	m_dtLastMonitorLog(0),
 	m_nLastQueueCount(0),
 	m_bQueueWarnActive(false),
@@ -182,6 +187,11 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	m_nAltitudePenalty = stConfig.nAltitudePenalty;
 	m_dfAltitudeWeight = stConfig.dfAltitudeWeight;
 	m_dfAltitudeSlope = stConfig.dfAltitudeSlope;
+	m_dfReversePenaltyWeight = stConfig.dfReversePenaltyWeight;
+	m_dfReverseSpeedGateKmh = stConfig.dfReverseSpeedGateKmh;
+	m_dfReverseDeadZoneM = stConfig.dfReverseDeadZoneM;
+	m_dfSpeedDiffFactor = stConfig.dfSpeedDiffFactor;
+	m_nSpeedDiffMargin = stConfig.nSpeedDiffMargin;
 	m_nFetchLimit = stConfig.nFetchLimit;
 	m_nFetchInterval = stConfig.nFetchInterval;
 	m_nQueuePauseCount = stConfig.nQueuePauseCount;
@@ -285,6 +295,19 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	{
 		LOGFMTW("charge_insert session not configured — charge disabled");
 	}
+
+	// 역행(dip) 실시간 판정 재정정 UPDATE SQL (선택: 세션 미지정·SQL 없으면 비활성) (2026-07-20 최정우 추가)
+	if (!stConfig.strRawLogSkipSession.empty())
+	{
+		m_strRawLogSkipSQL = m_pcSQLAccessor->GetSQL(stConfig.strRawLogSkipSession);
+		if (m_strRawLogSkipSQL.empty())
+			LOGFMTW("rawlog_skip session=[%s] sql is empty — reversal dip retro-skip disabled",
+				stConfig.strRawLogSkipSession.c_str());
+	}
+	else
+	{
+		LOGFMTW("rawlog_skip session not configured — reversal dip retro-skip disabled");
+	}
 	LOGFMTI("sql accessor initialize success!");
 
 	if (m_pcSQLAccessor != nullptr)
@@ -356,7 +379,8 @@ bool CServer::Initialize(const CONFIG& stConfig)
 		if (!m_pcProcessManager[i].Initialize(i, m_pcDataLoader,
 				m_nCoordinateType, m_nRadius, m_dwMaxDistance,
 				m_dfRadiusScale, static_cast<sint16>(m_nRadiusMin),
-				static_cast<sint16>(m_nRadiusMax), stAltitudeConfig))
+				static_cast<sint16>(m_nRadiusMax), stAltitudeConfig,
+				m_dfReversePenaltyWeight, m_dfReverseSpeedGateKmh, m_dfReverseDeadZoneM))
 		{
 			LOGFMTE("process manager[%d] initialize failed!", i);
 			Uninitialize();
@@ -378,6 +402,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	stWorkerConfig.pcProcessManager = m_pcProcessManager;
 	stWorkerConfig.strUpdateSQL = m_strRawLogUpdateSQL;
 	stWorkerConfig.strChargeInsertSQL = m_strChargeInsertSQL;
+	stWorkerConfig.strSkipSQL = m_strRawLogSkipSQL;					// (2026-07-20 최정우 추가)
 	stWorkerConfig.nWorkerThreads = m_nWorkerThread;
 	stWorkerConfig.nTtlSec = m_nTtlSec;
 	stWorkerConfig.nMatchTimeoutMs = m_nMatchTimeout;
@@ -385,6 +410,11 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	stWorkerConfig.nConnRetryMax = stConfig.nConnRetryMax;
 	stWorkerConfig.nConnRetryWait = stConfig.nConnRetryWait;
 	stWorkerConfig.nRadiusSkip = m_nRadiusSkip;
+	stWorkerConfig.dfSpeedDiffFactor = m_dfSpeedDiffFactor;			// (2026-07-20 최정우 추가)
+	stWorkerConfig.nSpeedDiffMargin = m_nSpeedDiffMargin;				// (2026-07-20 최정우 추가)
+	// 배치 후처리 역행(dip) 판정 — ContinueMapMatch 역행 페널티와 동일 config 재사용 (2026-07-20 최정우 추가)
+	stWorkerConfig.dfReverseDeadZoneM = m_dfReverseDeadZoneM;
+	stWorkerConfig.dfReverseSpeedGateKmh = m_dfReverseSpeedGateKmh;
 	stWorkerConfig.nHeadingMaxDist = static_cast<int>(m_dwMaxDistance);	// [mapmatch] distance → live heading 거리 상한 (2026-07-15 최정우 추가)
 	// 워커에 DB pool·ProcessManager·SQL·TTL·conn_retry 등 공유 설정 전달 (2026-07-10 최정우 추가)
 	m_pcRawLogWorker->SetConfig(stWorkerConfig);

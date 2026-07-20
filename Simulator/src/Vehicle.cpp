@@ -16,6 +16,28 @@ static const double TICK_SEC = 1.0;		// tick 간격 (초)
 static const double ACCEL_MPS = 2.0;	// 가속 한계 (m/s per tick)
 static const double DECEL_MPS = 3.5;	// 감속 한계 (m/s per tick)
 
+// ROAD_TYPE 연동 고도 오프셋 — MapMatchSvr altitude_gap(8m) 대비 뚜렷이 구분되도록 설정 (2026-07-20 최정우 추가)
+static const double ALT_RAMP_MPS = 3.0;		// 초당 고도 변화 한계(m) — 고가 진입/지하 진입 램프
+static const double ALT_OFFSET_BRIDGE = 12.0;		// 001 교량
+static const double ALT_OFFSET_TUNNEL = -5.0;		// 002 터널
+static const double ALT_OFFSET_ELEVATED = 12.0;	// 003 고가
+static const double ALT_OFFSET_UNDERGROUND = -10.0;	// 004 지하
+
+/**
+ * @brief ROAD_TYPE(MOCT_LINK 기준) → 고도 오프셋(m)
+*/
+static double RoadTypeAltOffset(int nRoadType)
+{
+	switch (nRoadType)
+	{
+	case 1: return ALT_OFFSET_BRIDGE;
+	case 2: return ALT_OFFSET_TUNNEL;
+	case 3: return ALT_OFFSET_ELEVATED;
+	case 4: return ALT_OFFSET_UNDERGROUND;
+	default: return 0.0;		// 000 일반
+	}
+}
+
 /**
  * @brief 보조 GPS 필드(속도·방위각·고도·수평오차·배터리) 간헐적 누락 시뮬레이션
  * @remark 좌표(GPS_LAT/LON)는 유지. MapMatchSvr 은 NULL → NO_SPEED/NO_ANGLE/NO_ACCURACY 등으로 처리
@@ -56,7 +78,7 @@ static void ApplySensorFieldOmit(GPS_SAMPLE& stSample, mt19937& rng, const SIM_C
 
 CVehicle::CVehicle()
 	: m_pcRoute(nullptr), m_dfPos(0.0), m_dfSpeedMps(0.0),
-	m_dfLastHeading(0.0), m_dfAltitude(40.0), m_dfBattery(100.0),
+	m_dfLastHeading(0.0), m_dfAltitude(40.0), m_dfAltRoadOffset(0.0), m_dfBattery(100.0),
 	m_bTripActive(false), m_bStartPending(false), m_qwGpsSeq(0)
 {
 }
@@ -93,6 +115,7 @@ void CVehicle::AppendLink(const LINK_GEOM& stLink, bool bFirst)
 	}
 
 	int nSpd = stLink.nMaxSpd;
+	int nRoadType = stLink.nRoadType;
 	for (size_t i = nStart; i < stLink.vtPoints.size(); ++i)
 	{
 		if (!m_vtRoute.empty())
@@ -101,6 +124,7 @@ void CVehicle::AppendLink(const LINK_GEOM& stLink, bool bFirst)
 			double dfSeg = CGeoUtil::DistanceM(m_vtRoute.back(), stLink.vtPoints[i]);
 			if (dfSeg < 0.01) continue;		// 동일점 스킵
 			m_vtSegSpd.push_back(nSpd);
+			m_vtSegRoadType.push_back(nRoadType);		// (2026-07-20 최정우 추가)
 		}
 		m_vtRoute.push_back(stLink.vtPoints[i]);
 	}
@@ -114,6 +138,7 @@ bool CVehicle::BuildRoute()
 	m_vtRoute.clear();
 	m_vtCum.clear();
 	m_vtSegSpd.clear();
+	m_vtSegRoadType.clear();
 
 	LINK_GEOM stLink;
 	// bbox 내 임의 시작 링크 조회 (2026-07-08 최정우 주석 추가)
@@ -167,7 +192,7 @@ bool CVehicle::BuildRoute()
 /**
  * @brief 경로상 거리 dfPos 위치의 좌표/방위/구간속도
 */
-bool CVehicle::Interpolate(double dfPos, GEO_POINT& stPt, double& dfBearing, int& nSegSpd)
+bool CVehicle::Interpolate(double dfPos, GEO_POINT& stPt, double& dfBearing, int& nSegSpd, int& nSegRoadType)
 {
 	if (m_vtRoute.size() < 2) return false;
 	double dfTotal = m_vtCum.back();
@@ -177,6 +202,7 @@ bool CVehicle::Interpolate(double dfPos, GEO_POINT& stPt, double& dfBearing, int
 		// 경로 시작 구간 방위각 계산 (2026-07-08 최정우 주석 추가)
 		dfBearing = CGeoUtil::BearingDeg(m_vtRoute[0], m_vtRoute[1]);
 		nSegSpd = m_vtSegSpd.empty() ? 0 : m_vtSegSpd.front();
+		nSegRoadType = m_vtSegRoadType.empty() ? 0 : m_vtSegRoadType.front();
 		return true;
 	}
 	if (dfPos >= dfTotal)
@@ -186,6 +212,7 @@ bool CVehicle::Interpolate(double dfPos, GEO_POINT& stPt, double& dfBearing, int
 		// 경로 종료 구간 방위각 계산 (2026-07-08 최정우 주석 추가)
 		dfBearing = CGeoUtil::BearingDeg(m_vtRoute[n - 2], m_vtRoute[n - 1]);
 		nSegSpd = m_vtSegSpd.empty() ? 0 : m_vtSegSpd.back();
+		nSegRoadType = m_vtSegRoadType.empty() ? 0 : m_vtSegRoadType.back();
 		return true;
 	}
 
@@ -200,6 +227,7 @@ bool CVehicle::Interpolate(double dfPos, GEO_POINT& stPt, double& dfBearing, int
 			// 구간 방위각 계산 (2026-07-08 최정우 주석 추가)
 			dfBearing = CGeoUtil::BearingDeg(m_vtRoute[i - 1], m_vtRoute[i]);
 			nSegSpd = m_vtSegSpd[i - 1];
+			nSegRoadType = m_vtSegRoadType[i - 1];
 			return true;
 		}
 	}
@@ -227,8 +255,9 @@ void CVehicle::Tick(const char *pszGpsDt, vector<GPS_SAMPLE>& vtOut)
 	GEO_POINT stTrue;
 	double dfBearing = m_dfLastHeading;
 	int nSegSpd = 0;
-	// 경로상 현재 위치 좌표·방위·구간속도 보간 (2026-07-08 최정우 주석 추가)
-	Interpolate(m_dfPos, stTrue, dfBearing, nSegSpd);
+	int nSegRoadType = 0;
+	// 경로상 현재 위치 좌표·방위·구간속도·ROAD_TYPE 보간 (2026-07-08 최정우 주석 추가, 2026-07-20 최정우 수정)
+	Interpolate(m_dfPos, stTrue, dfBearing, nSegSpd, nSegRoadType);
 
 	// 속도 결정
 	uniform_real_distribution<double> dist01(0.0, 1.0);
@@ -277,9 +306,17 @@ void CVehicle::Tick(const char *pszGpsDt, vector<GPS_SAMPLE>& vtOut)
 		++m_qwGpsSeq;
 
 	// 현재 위치 재계산 (진행 반영)
-	// 진행 반영 후 위치·방위 재보간 (2026-07-08 최정우 주석 추가)
-	Interpolate(m_dfPos, stTrue, dfBearing, nSegSpd);
+	// 진행 반영 후 위치·방위·ROAD_TYPE 재보간 (2026-07-08 최정우 주석 추가, 2026-07-20 최정우 수정)
+	Interpolate(m_dfPos, stTrue, dfBearing, nSegSpd, nSegRoadType);
 	if (m_dfSpeedMps >= 0.5) m_dfLastHeading = dfBearing;
+
+	// ROAD_TYPE 고도 오프셋 — 목표치로 초당 ALT_RAMP_MPS 한도 내 점진 수렴(고가/지하 진입 램프 표현) (2026-07-20 최정우 추가)
+	double dfTargetAltOffset = RoadTypeAltOffset(nSegRoadType);
+	double dfAltOffsetDiff = dfTargetAltOffset - m_dfAltRoadOffset;
+	double dfMaxAltStep = ALT_RAMP_MPS * TICK_SEC;
+	if (dfAltOffsetDiff > dfMaxAltStep) dfAltOffsetDiff = dfMaxAltStep;
+	if (dfAltOffsetDiff < -dfMaxAltStep) dfAltOffsetDiff = -dfMaxAltStep;
+	m_dfAltRoadOffset += dfAltOffsetDiff;
 
 	// 도로 이탈 노이즈 (정규분포 거리 + 임의 방향) — 현실적 GPS 수준(대부분 ≤10m) (2026-07-16 최정우 수정)
 	normal_distribution<double> distNoise(0.0, m_stConfig.dfNoiseSigmaM);
@@ -321,7 +358,7 @@ void CVehicle::Tick(const char *pszGpsDt, vector<GPS_SAMPLE>& vtOut)
 	stSample.dfLon = stNoisy.lon;
 	stSample.dfSpeedKmh = m_dfSpeedMps * 3.6;
 	stSample.dfHeading = m_dfLastHeading;
-	stSample.dfAltitude = m_dfAltitude + distAlt(m_rng);
+	stSample.dfAltitude = m_dfAltitude + m_dfAltRoadOffset + distAlt(m_rng);		// (2026-07-20 최정우 수정) ROAD_TYPE 오프셋 반영
 	stSample.dfAccuracy = dfAcc;
 	stSample.nBattery = (int)(m_dfBattery + 0.5);
 	// 시뮬은 도로 기준 유효 좌표를 생성 → RAW_VLD=TRUE(유효). 무효 케이스는 미생성 (2026-07-10 최정우 추가)

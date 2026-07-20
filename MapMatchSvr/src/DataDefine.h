@@ -173,11 +173,6 @@ typedef struct sAltitudeScoreConfig
 #define MM_STEP_EXTEND_DIST			50.0								// (단위: m) depth +1 당 이동거리
 #define MM_STEP_EXTEND_MAX			3									// 공백 적응 depth 최대 추가량
 
-// 단조 진행 가드: 나중 GPS가 진행방향상 이전(뒤)에 매칭되면 노이즈로 보고 SKIP·앵커 미갱신 (2026-07-16 최정우 추가)
-//   이동방향(직전 매칭점→현재 GPS)에 매칭 변위를 투영해 판정 → U턴은 이동방향이 바뀌어 자동 허용
-#define MM_BACKWARD_TOL_M			10.0								// (단위: m) 진행방향 역행 허용치(초과 시 노이즈 SKIP)
-#define MM_BACKWARD_MIN_MOVE_M		5.0									// (단위: m) 이 이상 이동했을 때만 역행 판정(정차 지터 제외)
-
 /**
  * @enum eCoordinateType
  * @brief 측지계 코드
@@ -208,6 +203,7 @@ typedef struct sMatchEntry
 	double							dfCost;								// 소프트 비용 = INTERSECT_LEN(m) + w_a·|방위각차| (링크 선택 기준) (2026-07-08 최정우 추가)
 	double							dfAngleCost;						// 방위각 비용(m) — match trace formula용
 	double							dfAltAdj;							// 고도 보조 비용(m) — Continue 만, match trace formula용
+	double							dfReversePenalty;					// 역행 페널티(m) — match trace formula용 (2026-07-20 최정우 추가)
 	sint16							nDirAngleDiff;						// 주행방향 각도 차이
 	uint64							qwLinkID;							// 링크 ID
 	bool							bReverseFit;						// 세그먼트 역방향이 정방향보다 더 잘 맞아 채택됨 — 역주행 의심 신호 (2026-07-18 최정우 추가)
@@ -235,7 +231,8 @@ typedef struct sMatchEntry
 		dfIntersectLenSgmt(-1.0), 
 		dfCost(-1.0), 
 		dfAngleCost(0.0), 
-		dfAltAdj(0.0), 
+		dfAltAdj(0.0),
+		dfReversePenalty(0.0),
 		nDirAngleDiff(0),
 		qwLinkID(0),
 		bReverseFit(false),

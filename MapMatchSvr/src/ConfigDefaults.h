@@ -42,6 +42,11 @@
 #define CFG_DEF_ALT_PENALTY			10									// [mapmatch] altitude_penalty (단위: m) (2026-07-11 최정우 주석 추가)
 #define CFG_DEF_ALT_WEIGHT			0.5									// [mapmatch] altitude_weight (2026-07-11 최정우 수정)
 #define CFG_DEF_ALT_SLOPE			0.12								// [mapmatch] altitude_slope (2026-07-11 최정우 수정)
+#define CFG_DEF_REVERSE_PENALTY_WEIGHT	3.0								// [mapmatch] reverse_penalty_weight — 역행 1m당 비용 가중 (2026-07-20 최정우 추가)
+#define CFG_DEF_REVERSE_SPEED_GATE	10.0								// [mapmatch] reverse_speed_gate_kmh — 저속 데드존 적용 속도 상한 (2026-07-20 최정우 추가)
+#define CFG_DEF_REVERSE_DEAD_ZONE	2.0									// [mapmatch] reverse_dead_zone_m — 저속 시 역행 허용거리(m) (2026-07-20 최정우 추가)
+#define CFG_DEF_SPEED_DIFF_FACTOR	2.0									// [mapmatch] speed_diff_factor — 이동거리 환산속도/SPEED_KMH 배율 상한 (2026-07-20 최정우 추가)
+#define CFG_DEF_SPEED_DIFF_MARGIN	25									// [mapmatch] speed_diff_margin (단위: km/h) — 노이즈 허용 여유분 (2026-07-20 최정우 추가)
 #define CFG_DEF_DISTANCE			500									// [mapmatch] distance (단위: m) (2026-07-11 최정우 주석 추가)
 #define CFG_DEF_TIMEOUT				200									// [mapmatch] timeout (단위: ms) (2026-07-11 최정우 주석 추가)
 // ── [server] ─────────────────────────────────────────────────────────────────────

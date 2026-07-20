@@ -36,6 +36,8 @@ public:
 
 	bool Initialize(CDataLoader *pcDataLoader);
 	void SetAltitudeConfig(const ALTITUDE_SCORE_CONFIG& stAltConfig);
+	// config reverse_penalty_weight/reverse_speed_gate_kmh/reverse_dead_zone_m (2026-07-20 최정우 추가)
+	void SetReversePenaltyWeight(double dfWeight, double dfSpeedGateKmh = 0.0, double dfDeadZoneM = 0.0);
 	bool BeginMapMatch(MAP_MATCH_INPUT stMapMatchInput, 
 		PMATCH_LINK_INFO pstMatchLinkInfo, PMATCH_TRACE_CTX pstTraceCtx = nullptr);
 	// 반경 무시 기하 최근접 Begin (진단반경 초과 SKIP 참고용) (2026-07-10 최정우 수정)

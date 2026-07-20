@@ -15,7 +15,7 @@ using namespace zsummer::log4z;
 
 CSimServer::CSimServer()
 	: m_pcPool(nullptr), m_pcSQL(nullptr), m_pcRoute(nullptr),
-	m_ullTotalInsert(0), m_ullTotalFail(0)
+	m_ullTotalInsert(0), m_ullTotalFail(0), m_ullTotalGenerated(0)
 {
 }
 
@@ -126,9 +126,19 @@ void CSimServer::Run()
 		// 현재 KST 시각을 GPS 일시 문자열로 생성 (2026-07-08 최정우 주석 추가)
 		MakeNowKst(szDt, sizeof(szDt));
 
+		size_t nBufBefore = m_vtBuffer.size();
 		for (size_t i = 0; i < m_vtVehicles.size(); ++i)
 			// 차량 1초 tick — GPS 샘플 버퍼 적재 (2026-07-08 최정우 주석 추가)
 			m_vtVehicles[i]->Tick(szDt, m_vtBuffer);
+		m_ullTotalGenerated += (m_vtBuffer.size() - nBufBefore);
+
+		// max_samples 도달 시 이번 tick까지만 반영하고 종료 (2026-07-20 최정우 추가)
+		if (m_stConfig.nMaxSamples > 0 && m_ullTotalGenerated >= (unsigned long long)m_stConfig.nMaxSamples)
+		{
+			LOGFMTI("max_samples[%d] reached (generated=[%llu]). stopping.",
+				m_stConfig.nMaxSamples, m_ullTotalGenerated);
+			g_nSimStop = 1;
+		}
 
 		++nTick;
 		if (m_stConfig.nFlushSec > 0 && (nTick % m_stConfig.nFlushSec) == 0)

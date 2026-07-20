@@ -64,6 +64,18 @@ void CMapMatch::SetAltitudeConfig(const ALTITUDE_SCORE_CONFIG& stAltConfig)
 }
 
 /**
+ * @brief 연속 맵매칭 역행 페널티 설정 (config reverse_penalty_weight/reverse_speed_gate_kmh/reverse_dead_zone_m)
+ * @param[in] dfWeight 역행 1m당 비용 가중치
+ * @param[in] dfSpeedGateKmh 저속 데드존 적용 속도 상한(km/h) (2026-07-20 최정우 추가)
+ * @param[in] dfDeadZoneM 저속 시 페널티 없이 허용하는 역행 거리(m) (2026-07-20 최정우 추가)
+ * @return void
+*/
+void CMapMatch::SetReversePenaltyWeight(double dfWeight, double dfSpeedGateKmh, double dfDeadZoneM)
+{
+	m_cContinueMapMatch.SetReversePenaltyWeight(dfWeight, dfSpeedGateKmh, dfDeadZoneM);
+}
+
+/**
  * @brief 초기 맵매칭
  * @param[in] stMapMatchInput 초기 맵매칭 입력 정보
  * @param[out] pstMatchLinkInfo 초기 맵매칭 응답 정보
@@ -202,6 +214,9 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 	stSgmtMatchInput.nDriveStatus = stMapMatchInput.nDriveStatus;
 	stSgmtMatchInput.dfHorizMoveM = stMapMatchInput.dfHorizMoveM;
 	stSgmtMatchInput.bUseAltScore = stMapMatchInput.bUseAltScore;
+	// 역행 페널티 컨텍스트 — qwPrevLinkID 는 ContinueMapMatch::StartMapMatch 내부에서 세팅 (2026-07-20 최정우 추가)
+	stSgmtMatchInput.dfPrevLinkPos = stMapMatchInput.dfPrevLinkPos;
+	stSgmtMatchInput.bHasPrevLinkPos = stMapMatchInput.bHasPrevLinkPos;
 
 	// 연속(링크 그래프) 맵매칭 엔진 호출 (2026-07-08 최정우 주석 추가)
 	if (!m_cContinueMapMatch.StartMapMatch(m_pcDataLoader, stSgmtMatchInput, qwLinkID, nSearchStep, &wErrorCode, &stMatchEntry, pstTraceCtx))

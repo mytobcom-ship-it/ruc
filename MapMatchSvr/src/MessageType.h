@@ -101,12 +101,16 @@ typedef struct sAltMatchCtx
 	uint8							nPrevRoadType;						// 직전 성공 링크 ROAD_TYPE
 	bool							bHasPrevAlt;						// 직전 고도·도로유형 보유 여부
 	double							dfHorizMoveM;						// 직전 매칭점→현재 GPS 수평거리(m)
+	double							dfPrevLinkPos;						// 직전 매칭 위치 — 링크 시작점부터 거리(m), 역행 페널티용 (2026-07-20 최정우 추가)
+	bool							bHasPrevLinkPos;					// dfPrevLinkPos 보유 여부 (2026-07-20 최정우 추가)
 
 	sAltMatchCtx() :
 		nPrevAltitudeM(NO_ALTITUDE),
 		nPrevRoadType(ROAD_TYPE_NORMAL),
 		bHasPrevAlt(false),
-		dfHorizMoveM(0.0)
+		dfHorizMoveM(0.0),
+		dfPrevLinkPos(0.0),
+		bHasPrevLinkPos(false)
 	{}
 } ALT_MATCH_CTX, *PALT_MATCH_CTX;
 
@@ -132,16 +136,18 @@ typedef struct sMapMatchInput
 	double							dfHorizMoveM;						// 직전 매칭점→현재 GPS 수평거리(m)
 	bool							bUseAltScore;						// 연속 맵매칭 고도 보조 점수 적용 여부
 	uint64							qwBiasLinkID;						// 연속실패 Begin 재검색용: 직전 성공 링크(연결성 편향, 0=미적용) (2026-07-15 최정우 추가)
+	double							dfPrevLinkPos;						// 직전 매칭 위치 — 링크 시작점부터 거리(m), 역행 페널티용 (2026-07-20 최정우 추가)
+	bool							bHasPrevLinkPos;					// dfPrevLinkPos 보유 여부 (2026-07-20 최정우 추가)
 
 	sMapMatchInput() :
-		nCoordinateType(WGS84GEO), 
-		nRadius(NO_RADIUS), 
-		dfX(0.0), 
-		dfY(0.0), 
-		nAngle(NO_ANGLE), 
-		nSpeed(NO_SPEED), 
-		qwLinkID(0), 
-		nRoadRank(0), 
+		nCoordinateType(WGS84GEO),
+		nRadius(NO_RADIUS),
+		dfX(0.0),
+		dfY(0.0),
+		nAngle(NO_ANGLE),
+		nSpeed(NO_SPEED),
+		qwLinkID(0),
+		nRoadRank(0),
 		nSearchStep(2),
 		nAltitudeM(NO_ALTITUDE),
 		nPrevAltitudeM(NO_ALTITUDE),
@@ -149,7 +155,9 @@ typedef struct sMapMatchInput
 		nDriveStatus(DRIVE_STATUS_ON_ROAD),
 		dfHorizMoveM(0.0),
 		bUseAltScore(false),
-		qwBiasLinkID(0)
+		qwBiasLinkID(0),
+		dfPrevLinkPos(0.0),
+		bHasPrevLinkPos(false)
 	{}
 } MAP_MATCH_INPUT, *PMAP_MATCH_INPUT;
 

@@ -35,20 +35,27 @@ void AltValue(char *pszBuf, size_t nBufLen, sint16 nAlt)
  * @return void
  * @remark
  *   · dist = INTERSECT_LEN (GPS↔세그먼트 교차점 거리, m)
- *   · bHasAltAdj=true  → dist+angle_cost+alt_adj=cost
- *   · bHasAltAdj=false → dist+angle_cost=cost
+ *   · dfReversePenalty > 0 인 후보만 "+reverse" 항을 덧붙인다 — 대다수(역행 아님) 후보의 로그를
+ *     불필요하게 늘리지 않기 위함 (2026-07-20 최정우 추가)
+ *   · bHasAltAdj=true  → dist+angle_cost+alt_adj[+reverse]=cost
+ *   · bHasAltAdj=false → dist+angle_cost[+reverse]=cost
 */
 void FormatCostFormula(char *pszBuf, size_t nBufLen, const MATCH_ENTRY& stEntry, bool bHasAltAdj)
 {
+	char szReverse[24];
+	szReverse[0] = '\0';
+	if (stEntry.dfReversePenalty > 0.0)
+		snprintf(szReverse, sizeof(szReverse), "+%.1frev", stEntry.dfReversePenalty);
+
 	if (bHasAltAdj)
 	{
-		snprintf(pszBuf, nBufLen, "%.1f+%.1f%+.1f=%.1f",
-			stEntry.dfIntersectLenSgmt, stEntry.dfAngleCost, stEntry.dfAltAdj, stEntry.dfCost);
+		snprintf(pszBuf, nBufLen, "%.1f+%.1f%+.1f%s=%.1f",
+			stEntry.dfIntersectLenSgmt, stEntry.dfAngleCost, stEntry.dfAltAdj, szReverse, stEntry.dfCost);
 	}
 	else
 	{
-		snprintf(pszBuf, nBufLen, "%.1f+%.1f=%.1f",
-			stEntry.dfIntersectLenSgmt, stEntry.dfAngleCost, stEntry.dfCost);
+		snprintf(pszBuf, nBufLen, "%.1f+%.1f%s=%.1f",
+			stEntry.dfIntersectLenSgmt, stEntry.dfAngleCost, szReverse, stEntry.dfCost);
 	}
 }
 

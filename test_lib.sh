@@ -5,6 +5,7 @@
 TEST_LIB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MM_BIN="$TEST_LIB_ROOT/MapMatchSvr/bin/MapMatchSvr"
 SIM_BIN="$TEST_LIB_ROOT/Simulator/bin/RawGpsSimSvr"
+SIM_CONFIG="$TEST_LIB_ROOT/Simulator/bin/config.ini"
 WEB_DIR="$TEST_LIB_ROOT/web"
 WEB_RUN="$WEB_DIR/run.sh"
 WEB_PIDFILE="$WEB_DIR/web_viewer.pid"
@@ -343,6 +344,31 @@ test_require_bins() {
 	return 0
 }
 
+# PRIM_RAWGPS 기존 데이터 삭제 — 매 테스트 시작 시 이전 실행 데이터와 섞이지 않도록 (2026-07-20 최정우 추가)
+#   Simulator/bin/config.ini [database] 접속정보 사용 (MapMatchSvr/web 과 동일 DB)
+clear_rawgps_data() {
+	local host port dbname user pass
+	host="$(sed -n '/^\[database\]/,/^\[/{/^host=/s/^host=//p}' "$SIM_CONFIG")"
+	port="$(sed -n '/^\[database\]/,/^\[/{/^port=/s/^port=//p}' "$SIM_CONFIG")"
+	dbname="$(sed -n '/^\[database\]/,/^\[/{/^name=/s/^name=//p}' "$SIM_CONFIG")"
+	user="$(sed -n '/^\[database\]/,/^\[/{/^userid=/s/^userid=//p}' "$SIM_CONFIG")"
+	pass="$(sed -n '/^\[database\]/,/^\[/{/^password=/s/^password=//p}' "$SIM_CONFIG")"
+
+	if [ -z "$host" ] || [ -z "$dbname" ] || [ -z "$user" ]; then
+		echo "경고: $SIM_CONFIG 에서 DB 접속정보를 읽지 못해 PRIM_RAWGPS 삭제를 건너뜁니다."
+		return 1
+	fi
+
+	echo "PRIM_RAWGPS 기존 데이터 삭제 중..."
+	if PGPASSWORD="$pass" psql -h "$host" -p "${port:-5432}" -U "$user" -d "$dbname" \
+			-c "TRUNCATE TABLE roadnet.prim_rawgps;" >/dev/null 2>&1; then
+		echo "PRIM_RAWGPS 삭제 완료."
+		return 0
+	fi
+	echo "경고: PRIM_RAWGPS 삭제 실패 — DB 접속 확인 필요."
+	return 1
+}
+
 test_ps_all() {
 	echo "--- MapMatchSvr ---"
 	engine_ps_line "$MM_BIN" || true
@@ -378,6 +404,7 @@ test_start_all() {
 	local rc=0
 	test_require_bins || return 1
 	echo "=== RUC 테스트 시작 ==="
+	clear_rawgps_data || true
 	echo "[1/3] MapMatchSvr"
 	engine_start "$MM_BIN" || rc=1
 	if [ "$rc" -eq 0 ]; then

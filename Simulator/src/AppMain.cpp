@@ -91,6 +91,7 @@ static bool LoadConfig(const string& strFile, SIM_CONFIG& stConfig, int& nLogLev
 	cIni.GetProfileInt("sim", "vehicles", 10, stConfig.nVehicles);
 	cIni.GetProfileInt("sim", "flush_sec", 3, stConfig.nFlushSec);
 	cIni.GetProfileInt("sim", "report_sec", 30, stConfig.nReportSec);
+	cIni.GetProfileInt("sim", "max_samples", 0, stConfig.nMaxSamples);
 	stConfig.dfIdleProb = GetProfileDouble(cIni, "sim", "idle_prob", 0.05);
 	stConfig.dfOmitAllProb = GetProfileDouble(cIni, "sim", "omit_all_prob", 0.005);
 	stConfig.dfOmitPartialProb = GetProfileDouble(cIni, "sim", "omit_partial_prob", 0.08);
@@ -100,6 +101,7 @@ static bool LoadConfig(const string& strFile, SIM_CONFIG& stConfig, int& nLogLev
 	if (stConfig.dfOmitPartialProb > 1.0) stConfig.dfOmitPartialProb = 1.0;
 	if (stConfig.nVehicles <= 0) stConfig.nVehicles = 1;
 	if (stConfig.nFlushSec <= 0) stConfig.nFlushSec = 3;
+	if (stConfig.nMaxSamples < 0) stConfig.nMaxSamples = 0;
 
 	// [area]
 	stConfig.dfMinLon = GetProfileDouble(cIni, "area", "min_lon", 126.90);

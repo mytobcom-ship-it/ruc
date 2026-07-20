@@ -108,7 +108,7 @@ bool CRouteProvider::NextLink(const string& strFromNode, const string& strExclud
 }
 
 /**
- * @brief 링크 조회 공통 실행 (결과: link_id, t_node, max_spd, wkt)
+ * @brief 링크 조회 공통 실행 (결과: link_id, t_node, max_spd, wkt, road_type)
 */
 bool CRouteProvider::RunLinkQuery(const string& strSQL, const char * const *paszParams,
 	int nParams, LINK_GEOM& stOut)
@@ -128,6 +128,8 @@ bool CRouteProvider::RunLinkQuery(const string& strSQL, const char * const *pasz
 		stOut.strToNode = PQgetvalue(res, 0, 1);
 		stOut.nMaxSpd = atoi(PQgetvalue(res, 0, 2));
 		string strWkt = PQgetvalue(res, 0, 3);
+		// ROAD_TYPE 문자열('000'~'004') → 정수 (2026-07-20 최정우 추가)
+		stOut.nRoadType = atoi(PQgetvalue(res, 0, 4));
 
 		// WKT LineString → 좌표 배열 파싱 (2026-07-08 최정우 주석 추가)
 		if (CGeoUtil::ParseLineString(strWkt, stOut.vtPoints))

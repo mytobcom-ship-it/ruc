@@ -35,7 +35,7 @@ public:
 private:
 	bool BuildRoute();
 	void AppendLink(const LINK_GEOM& stLink, bool bFirst);
-	bool Interpolate(double dfPos, GEO_POINT& stPt, double& dfBearing, int& nSegSpd);
+	bool Interpolate(double dfPos, GEO_POINT& stPt, double& dfBearing, int& nSegSpd, int& nSegRoadType);
 
 private:
 	string					m_strDeviceKey;
@@ -46,11 +46,13 @@ private:
 	vector<GEO_POINT>		m_vtRoute;		// 누적 경로 점열
 	vector<double>			m_vtCum;		// 누적 거리 (m), size == 점 수
 	vector<int>				m_vtSegSpd;		// 구간별 제한속도, size == 점 수 - 1
+	vector<int>				m_vtSegRoadType;// 구간별 ROAD_TYPE, size == 점 수 - 1 (2026-07-20 최정우 추가)
 
 	double					m_dfPos;		// 경로상 진행 거리 (m)
 	double					m_dfSpeedMps;	// 현재 속도 (m/s)
 	double					m_dfLastHeading;// 직전 방위각
 	double					m_dfAltitude;	// 고도 기준값
+	double					m_dfAltRoadOffset;	// ROAD_TYPE 고도 오프셋 — 램프로 점진 수렴 (2026-07-20 최정우 추가)
 	double					m_dfBattery;	// 배터리 (%, 실수 누적)
 	bool					m_bTripActive;	// 운행 중 여부
 	bool					m_bStartPending;// START 이벤트 대기

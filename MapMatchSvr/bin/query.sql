@@ -141,3 +141,15 @@ SELECT 1 WHERE FALSE;
 # CHARGE_TARGET 설계 미완 — Worker 미호출, INSERT 비활성 (2026-07-10 최정우 수정)
 # DRIVE_STATUS=4(OFF_ROAD) 과금 판별·적재 생략은 Worker 에서 처리 예정
 # 설계 확정 후 INSERT INTO ROADNET.CHARGE_TARGET (...) VALUES (...); 복원
+
+-- ── 역행(dip) 실시간 판정 재정정 — 이미 MATCHED 로 적재된 N-1 행 1건을 SKIP 으로 전환 (2026-07-20 최정우 추가) ──
+-- $1=TRIP_ID $2=GPS_SEQ
+-- WHERE MATCH_STATUS=1 가드: 그 사이 다른 로직으로 상태가 바뀐 행은 덮어쓰지 않음
+[rawgps_skip]
+UPDATE ROADNET.PRIM_RAWGPS
+SET
+	MATCH_STATUS = 3
+WHERE
+	TRIP_ID = $1
+	AND GPS_SEQ = $2::bigint
+	AND MATCH_STATUS = 1;

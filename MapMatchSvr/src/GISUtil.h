@@ -46,18 +46,26 @@ typedef struct sSgmtMatchInput
 	sint16							nDriveStatus;						// DRIVE_STATUS (터널 시 고도 무시)
 	double							dfHorizMoveM;						// 직전 매칭점→현재 GPS 수평거리(m)
 	bool							bUseAltScore;						// 연속 맵매칭 고도 보조 점수 적용 여부
+	// 직전 매칭 위치(같은 링크 내 역행 억제) — ContinueMapMatch::StartMapMatch 가 qwPrevLinkID 세팅,
+	//   dfPrevLinkPos/bHasPrevLinkPos 는 호출측(MapMatch)이 세션에서 전달 (2026-07-20 최정우 추가)
+	uint64							qwPrevLinkID;						// 직전 매칭 성공 링크 ID (0=없음)
+	double							dfPrevLinkPos;						// 직전 매칭 위치 — 링크 시작점부터 거리(m)
+	bool							bHasPrevLinkPos;					// dfPrevLinkPos 유효 여부
 
 	sSgmtMatchInput() :
-		nRadius(0), 
-		nDirAng(NO_ANGLE),  
-		nRoadRank(0), 
+		nRadius(0),
+		nDirAng(NO_ANGLE),
+		nRoadRank(0),
 		nSpeed(NO_SPEED),
 		nAltitudeM(NO_ALTITUDE),
 		nPrevAltitudeM(NO_ALTITUDE),
 		nPrevRoadType(ROAD_TYPE_NORMAL),
 		nDriveStatus(0),
 		dfHorizMoveM(0.0),
-		bUseAltScore(false)
+		bUseAltScore(false),
+		qwPrevLinkID(0),
+		dfPrevLinkPos(0.0),
+		bHasPrevLinkPos(false)
 	{}
 } SGMT_MATCH_INPUT, *PSGMT_MATCH_INPUT;
 

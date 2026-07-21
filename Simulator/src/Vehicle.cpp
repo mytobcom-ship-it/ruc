@@ -157,6 +157,10 @@ bool CVehicle::BuildRoute()
 	AppendLink(stLink, true);
 	string strNode = stLink.strToNode;
 	string strLast = stLink.strLinkID;
+	// 직전 링크의 시작 노드 — 다음 링크 탐색 시 이 노드로 돌아가는(=방금 지나온 도로의
+	//   반대방향/맞은편 차로) 링크를 제외해, 차량이 곧바로 왔던 길을 되돌아가지 않게 한다
+	//   (2026-07-22 최정우 추가 — 시작 지점 건너편 도로로만 돌아오는 경로가 생성되던 원인)
+	string strPrevNode = stLink.strFromNode;
 
 	double dfLen = 0.0;
 	for (size_t i = 1; i < m_vtRoute.size(); ++i)
@@ -168,7 +172,7 @@ bool CVehicle::BuildRoute()
 	{
 		LINK_GEOM stNext;
 		// 종료 노드에서 다음 연결 링크 조회 (2026-07-08 최정우 주석 추가)
-		if (!m_pcRoute->NextLink(strNode, strLast, stNext)) break;
+		if (!m_pcRoute->NextLink(strNode, strLast, strPrevNode, stNext)) break;
 		if (stNext.vtPoints.size() < 2) break;
 
 		size_t nBefore = m_vtRoute.size();
@@ -180,6 +184,7 @@ bool CVehicle::BuildRoute()
 			// 신규 구간 누적 거리 합산 (2026-07-08 최정우 주석 추가)
 			dfLen += CGeoUtil::DistanceM(m_vtRoute[i - 1], m_vtRoute[i]);
 
+		strPrevNode = strNode;
 		strNode = stNext.strToNode;
 		strLast = stNext.strLinkID;
 		++nLinks;

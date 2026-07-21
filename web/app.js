@@ -5,9 +5,21 @@
  *  - GPS 빨강 / MATCHED 파랑 / SKIP 주황
  */
 (function () {
+  const MATCH_STATUS_PENDING = 0;
   const MATCH_STATUS_MATCHED = 1;
   const MATCH_STATUS_SKIP = 3;
   const MATCH_STATUS_ERROR = 4;
+  // Simulator/src/SimTypes.h SIM_TRIP_EVENT_END — 운행의 마지막 샘플에만 붙는 이벤트.
+  //   신규테스트 진행률 판정에서 "지금까지 들어온 행이 전부 매칭됨" 만으로 완료를 판단하면,
+  //   Simulator 가 아직 나머지 데이터를 생성 중인데도(2초 간격 분할 삽입) 초반 몇 건만
+  //   빠르게 매칭돼 조기에 "완료"로 오판하는 문제가 있었다 — END 이벤트가 실제로 들어와
+  //   있는지까지 같이 확인해야 진짜 끝을 알 수 있다 (2026-07-22 최정우 추가)
+  const TRIP_EVENT_END = 2;
+  const RETEST_POLL_MS = 1500;
+  const RETEST_TIMEOUT_MS = 60000;
+  // 신규테스트: Simulator 가 GPS 를 생성(최대 수십 초)한 뒤 MapMatchSvr 가 매칭하므로
+  //   재테스트보다 완료까지 여유를 더 둔다 (2026-07-22 최정우 추가)
+  const NEWTEST_TIMEOUT_MS = 90000;
   // ROAD_TYPE(prim_link_info) — 시설 유형. 잠수교 등 특정 교량명은 별도 코드 없이 교량(1)에 포함, name 으로 구분 (2026-07-21 최정우 추가)
   const ROAD_TYPE_LABELS = { 0: "일반도로", 1: "교량", 2: "터널", 3: "고가도로", 4: "지하차도" };
   const ARROW_ZOOM_MIN = 14;
@@ -26,8 +38,10 @@
   //   변경분만 갱신해 깜빡임·포커스 흔들림을 줄인다 (2026-07-21 최정우 추가)
   let pointLayerBySeq = new Map();
   let gpsTrailLine = null;
+  let lastGpsTrailSig = "";
   let showLabelState = null;
   let arrowsVisibleState = null;
+  let lastTripsSig = "";
 
   const statusEl = document.getElementById("status");
   const tripSelect = document.getElementById("tripSelect");
@@ -35,6 +49,37 @@
   const chkFollow = document.getElementById("chkFollow");
   const ctxMenu = document.getElementById("ctxMenu");
   const ctxCopy = document.getElementById("ctxCopy");
+  const progressWrap = document.getElementById("progressBarWrap");
+  const progressFill = document.getElementById("progressBarFill");
+
+  // 버튼 클릭 진행률 바 — 완료 시점을 알 수 있으면(재테스트) 실제 %, 모르면(신규테스트·삭제·
+  //   새로고침) 좌우로 흐르는 불확정 애니메이션으로 표시 (2026-07-22 최정우 추가)
+  function showProgressIndeterminate() {
+    if (!progressWrap) return;
+    progressWrap.classList.add("active", "indeterminate");
+  }
+  function showProgressPercent(pct) {
+    if (!progressWrap) return;
+    progressWrap.classList.add("active");
+    progressWrap.classList.remove("indeterminate");
+    progressFill.style.width = Math.max(0, Math.min(100, pct)) + "%";
+  }
+  function hideProgress() {
+    if (!progressWrap) return;
+    progressWrap.classList.remove("active", "indeterminate");
+    progressFill.style.width = "0%";
+  }
+  // 작업이 "성공적으로" 끝났을 때만 호출 — 진행률 바를 100%(끝)까지 채운 채 잠깐 멈춰
+  //   눈으로 완료를 확인할 수 있게 한 다음 hideProgress() 로 넘어간다. 실패·중단 시에는
+  //   호출하지 않아 (완료 아님을 암시하지 않도록) 바로 hideProgress() 로 사라진다
+  //   (2026-07-22 최정우 추가)
+  function finishProgress() {
+    if (!progressWrap) return Promise.resolve();
+    progressWrap.classList.add("active");
+    progressWrap.classList.remove("indeterminate");
+    progressFill.style.width = "100%";
+    return new Promise(function (resolve) { setTimeout(resolve, 400); });
+  }
 
   function setStatus(msg, isError) {
     statusEl.textContent = msg;
@@ -62,7 +107,12 @@
   }
 
   function initMap() {
-    map = L.map("map");
+    // 도로선(halo+본선 500+개)·점 마커(최대 120개, tooltip 포함)를 개별 SVG DOM 대신
+    //   캔버스 한 장에 그림 — 확대 직후 수백 개 DOM 을 재배치하며 몇 프레임에 걸쳐
+    //   "따라잡던" 것이 미세한 지도 드리프트로 보이던 원인. 점·연결선은 전용 pane
+    //   (panePoints) 을 쓰기 때문에 { renderer: L.canvas() } 만으로는
+    //   적용 안 되고 preferCanvas 를 켜야 pane 별 렌더러도 캔버스로 생성됨 (2026-07-21 최정우 수정)
+    map = L.map("map", { preferCanvas: true });
     // 밝은 무료 베이스맵 — 도로 오버레이 가독성 (2026-07-10 최정우)
     L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
       attribution: "&copy; OpenStreetMap &copy; CARTO",
@@ -73,10 +123,15 @@
     }).addTo(map);
     map.setView([37.55, 126.98], 14);
 
-    // 마커가 항상 연결선(INTERSECT 히트선) 위에 오도록 전용 pane 생성 (2026-07-15 최정우 추가)
-    //   기존엔 넓은 투명 히트선(weight 12)이 마커보다 나중에 그려져 마커 중앙 마우스오버를 가로챔
-    map.createPane("paneConnectors");
-    map.getPane("paneConnectors").style.zIndex = 420;
+    // 마커·연결선(점선+히트선)을 같은 pane 에 둔다 — 서로 다른 pane 을 쓰면 각 pane 이
+    //   전체 지도 크기의 투명 캔버스 하나로 렌더링되어(Leaflet canvas 렌더러 특성), z-index 가
+    //   더 높은 pane 의 캔버스가 지도 전체 영역에서 마우스오버 이벤트 자체를 가로채 버려
+    //   아래 pane(연결선)은 좌표가 실제로 겹치지 않는 곳에서도 mousemove 를 절대 못 받는다
+    //   (DOM 상 "그 지점에서 가장 위에 있는 엘리먼트"가 항상 위 pane 의 캔버스이기 때문).
+    //   → INTERSECT_LEN 점선에 마우스오버해도 툴팁이 전혀 안 뜨던 원인.
+    //   같은 pane(캔버스)을 쓰면 Leaflet 이 도형 추가 순서대로 히트테스트 우선순위를 매기므로,
+    //   연결선을 먼저 그리고 마커를 나중에 그리면 마커 위에서는 마커가, 연결선 위에서는
+    //   연결선이 정상적으로 우선한다 (2026-07-22 최정우 수정)
     map.createPane("panePoints");
     map.getPane("panePoints").style.zIndex = 450;
 
@@ -96,6 +151,7 @@
     layerSkip.clearLayers();
     pointLayerBySeq = new Map();
     gpsTrailLine = null;
+    lastGpsTrailSig = "";
   }
 
   function clearRoadLayers() {
@@ -222,6 +278,12 @@
     }).addTo(layerRoadsHalo);
     L.geoJSON(fc, {
       style: styleRoad,
+      // 점 마커·연결선과 같은 pane(panePoints) 에 둔다 — Leaflet canvas 렌더러는 pane 마다
+      // 지도 전체 크기의 캔버스 하나를 만드는데, 다른 pane(overlayPane 등)에 두면 z-index
+      // 가 더 높은 panePoints 캔버스가 지도 전체 영역의 마우스오버 이벤트를 가로채 버려
+      // 도로선은 마우스가 도로 위에 있어도 이벤트를 전혀 못 받는다 (2026-07-15 GPS↔연결선에서
+      // 같은 문제를 겪었던 것과 동일 원인) (2026-07-22 최정우 수정)
+      pane: "panePoints",
       onEachFeature: function (feat, layer) {
         const p = feat.properties || {};
         const lid = p.link_id || "";
@@ -241,6 +303,10 @@
         // 마우스오버 시 현재 정보(시설물 포함) 즉시 팝업 표시 — 점 마커와 동일 UX (2026-07-21 최정우 추가)
         layer.on("mouseover", function () { this.openPopup(); });
         layer.on("mouseout", function () { this.closePopup(); });
+        // 같은 pane 안에서는 나중에 그린 도형이 마우스오버를 우선 차지한다 — 도로가 갱신될
+        // 때마다(trip 이 바뀔 때마다) 새로 추가되므로, 이미 떠있는 마커·연결선보다 뒤로
+        // 보내둬야 마커 위에서는 항상 마커가 우선한다 (2026-07-22 최정우 추가)
+        layer.bringToBack();
       },
     }).addTo(layerRoads);
     rebuildRoadArrows();
@@ -254,6 +320,9 @@
       (p.match_link_id ? "<br><b>match link</b> " + p.match_link_id +
         (p.match_link_name ? " (" + p.match_link_name + ")" : "") : "") +
       (p.intersect_len != null ? "<br><b>intersect_len</b> " + p.intersect_len + "m (GPS↔세그먼트)" : "") +
+      // SKIP·ERROR 원인 추정 — MATCH_REASON 컬럼이 없어 기존 값(link_id·intersect_len·accuracy_m)만으로
+      // server.py 가 추정한 값. 엔진이 실제 기록한 사유가 아니므로 항상 "추정" 문구 포함 (2026-07-21 최정우 추가)
+      (p.match_reason ? "<br><b>원인(추정)</b> " + p.match_reason : "") +
       "<br><b>gps_dt</b> " + p.gps_dt
     );
   }
@@ -306,9 +375,54 @@
   function buildPointEntry(p, showLabel) {
     const matchFailed = isMatchFailed(p.match_status);
     const entry = { sig: pointSig(p), isSkip: p.match_status === MATCH_STATUS_SKIP };
-    let gpsLl = null;
-    if (p.gps_lat != null && p.gps_lon != null) {
-      gpsLl = [p.gps_lat, p.gps_lon];
+    const gpsLl = (p.gps_lat != null && p.gps_lon != null) ? [p.gps_lat, p.gps_lon] : null;
+    const trueMatchLl = (p.match_lat != null && p.match_lon != null) ? [p.match_lat, p.match_lon] : null;
+
+    // INTERSECT_LEN: GPS(G) ↔ 세그먼트 교차점(MATCH_LAT/LON) 거리 시각화 + 마우스오버 툴팁(m).
+    // 마커보다 먼저 그린다 — 같은 pane(캔버스) 안에서는 나중에 그린 도형이 마우스오버 우선순위를
+    // 가져가므로, 연결선을 먼저·마커를 나중에 그려야 마커 위에서는 마커가, 연결선 위(마커가 없는
+    // 구간)에서는 연결선이 정상적으로 히트테스트를 잡는다 (2026-07-15 원설계, 2026-07-22 최정우 수정)
+    if (gpsLl && trueMatchLl && map.distance(gpsLl, trueMatchLl) > 0.8) {
+      // INTERSECT_LEN(DB, m) 우선, 없으면 화면상 거리로 계산
+      const distM = (p.intersect_len != null)
+        ? p.intersect_len
+        : Math.round(map.distance(gpsLl, trueMatchLl));
+      // SKIP·ERROR(신뢰 못 하는 매칭)는 교차선도 그 사실이 보이게 주황 계열로 구분 — 지금까지는
+      // MATCHED 와 같은 회색선으로 그려서, 좁은 구역에 여러 점이 몰리면(예: 클램프로 SKIP된 점)
+      // 정상 매칭 교차선과 뒤섞여 어떤 선이 신뢰 가능한 매칭인지 구분이 안 됐다 (2026-07-21 최정우 수정)
+      const tipText = "seq " + p.gps_seq + " · INTERSECT_LEN " + distM + " m (GPS↔매칭)"
+        + (matchFailed ? " · SKIP·저신뢰" : "");
+      // 표시용 점선
+      entry.connDash = L.polyline([gpsLl, trueMatchLl], {
+        pane: "panePoints",
+        color: matchFailed ? "#c2410c" : "#334155",
+        weight: matchFailed ? 4 : 3,
+        opacity: matchFailed ? 0.98 : 0.92,
+        dashArray: "4,4",
+      })
+        .bindTooltip(tipText, {
+          sticky: true,
+          direction: "top",
+          className: matchFailed ? "tip-intersect tip-fail" : "tip-intersect",
+          opacity: 0.98,
+        })
+        .addTo(layerGpsLine);
+      // 마우스오버 히트영역(투명) — 툴팁 트리거 인식률 보강
+      entry.connHit = L.polyline([gpsLl, trueMatchLl], {
+        pane: "panePoints", color: "#000000", weight: 12, opacity: 0,
+      })
+        .bindTooltip(tipText, {
+          sticky: true,
+          direction: "top",
+          className: matchFailed ? "tip-intersect tip-fail" : "tip-intersect",
+          opacity: 0.98,
+        })
+        .addTo(layerGpsLine);
+    }
+
+    // 마커는 연결선 다음에 그린다 — 같은 pane 안에서 나중에 그린 도형이 마우스오버를 우선
+    // 차지하므로, 마커 중앙에서는 항상 마커(팝업)가 연결선 히트영역보다 우선하게 된다.
+    if (gpsLl) {
       entry.gpsMarker = addPointMarker(
         gpsLl,
         { radius: 6, color: "#b71c1c", fillColor: "#e53935", fillOpacity: 0.95, weight: 2 },
@@ -321,49 +435,30 @@
       );
     }
 
-    if (p.match_lat == null || p.match_lon == null) return entry;
-
-    const trueMatchLl = [p.match_lat, p.match_lon];
-    const layer = entry.isSkip ? layerSkip : layerMatched;
-    entry.matchMarker = addPointMarker(
-      trueMatchLl,
-      {
-        radius: 7,
-        color: entry.isSkip ? "#e65100" : "#0d47a1",
-        fillColor: entry.isSkip ? "#fb8c00" : "#1e88e5",
-        fillOpacity: 0.95,
-        weight: 2,
-      },
-      "M" + p.gps_seq,
-      tipClassName(entry.isSkip ? "tip-skip" : "tip-match", matchFailed),
-      TIP_DIRS_MATCH[p.gps_seq % TIP_DIRS_MATCH.length],
-      popupHtml(p),
-      layer,
-      showLabel
-    );
-
-    // INTERSECT_LEN: GPS(G) ↔ 세그먼트 교차점(MATCH_LAT/LON) 거리 시각화 + 마우스오버 툴팁(m) (2026-07-15 최정우 수정)
-    if (gpsLl && map.distance(gpsLl, trueMatchLl) > 0.8) {
-      // INTERSECT_LEN(DB, m) 우선, 없으면 화면상 거리로 계산
-      const distM = (p.intersect_len != null)
-        ? p.intersect_len
-        : Math.round(map.distance(gpsLl, trueMatchLl));
-      const tipText = "seq " + p.gps_seq + " · INTERSECT_LEN " + distM + " m (GPS↔매칭)";
-      // 표시용 점선 (연결선 pane → 마커 아래)
-      entry.connDash = L.polyline([gpsLl, trueMatchLl], {
-        pane: "paneConnectors", color: "#94a3b8", weight: 1, opacity: 0.55, dashArray: "2,4",
-      }).addTo(layerGpsLine);
-      // 마우스오버 히트영역(투명) — sticky 툴팁으로 거리(m) 표시 (마커 아래 pane, 폭 축소)
-      entry.connHit = L.polyline([gpsLl, trueMatchLl], {
-        pane: "paneConnectors", color: "#000000", weight: 8, opacity: 0,
-      })
-        .bindTooltip(tipText, { sticky: true, direction: "top", className: "tip-intersect", opacity: 0.95 })
-        .addTo(layerGpsLine);
+    if (trueMatchLl) {
+      const layer = entry.isSkip ? layerSkip : layerMatched;
+      entry.matchMarker = addPointMarker(
+        trueMatchLl,
+        {
+          radius: 7,
+          color: entry.isSkip ? "#e65100" : "#0d47a1",
+          fillColor: entry.isSkip ? "#fb8c00" : "#1e88e5",
+          fillOpacity: 0.95,
+          weight: 2,
+        },
+        "M" + p.gps_seq,
+        tipClassName(entry.isSkip ? "tip-skip" : "tip-match", matchFailed),
+        TIP_DIRS_MATCH[p.gps_seq % TIP_DIRS_MATCH.length],
+        popupHtml(p),
+        layer,
+        showLabel
+      );
     }
     return entry;
   }
 
-  // GPS 궤적 점선 — 매번 새로 만들지 않고 좌표만 갱신 (2026-07-21 최정우 수정)
+  // GPS 궤적 점선 — 매번 새로 만들지 않고 좌표만 갱신, 좌표가 실제로 안 바뀌면
+  //   setLatLngs 조차 호출하지 않음(불필요한 SVG path 재작성 방지) (2026-07-21 최정우 수정)
   function rebuildGpsTrail(points) {
     const gpsLatLngs = [];
     points.forEach(function (p) {
@@ -374,13 +469,21 @@
         layerGpsLine.removeLayer(gpsTrailLine);
         gpsTrailLine = null;
       }
+      lastGpsTrailSig = "";
       return;
     }
+    const sig = gpsLatLngs.join(";");
+    if (sig === lastGpsTrailSig && gpsTrailLine) return;
+    lastGpsTrailSig = sig;
     if (gpsTrailLine) {
       gpsTrailLine.setLatLngs(gpsLatLngs);
     } else {
+      // interactive:false — 각 GPS점 정중앙을 지나가므로, 상호작용 가능하면(기본값 true)
+      //   같은 pane 안에서 가장 나중에 그려져 그 지점의 마커·연결선 히트테스트를 가로챈다.
+      //   이 선 자체는 툴팁이 없어 상호작용이 필요 없음 (2026-07-22 최정우 수정)
       gpsTrailLine = L.polyline(gpsLatLngs, {
-        pane: "paneConnectors", color: "#e53935", weight: 2, opacity: 0.55, dashArray: "4,6",
+        pane: "panePoints", color: "#e53935", weight: 2, opacity: 0.55, dashArray: "4,6",
+        interactive: false,
       }).addTo(layerGpsLine);
     }
   }
@@ -434,32 +537,32 @@
     if (bounds.isValid()) map.fitBounds(bounds.pad(0.12), { maxZoom: 19 });
   }
 
-  function viewportHasPoints(points) {
-    if (!points || points.length === 0) return false;
-    const bounds = map.getBounds();
-    return points.some(function (p) {
-      if (p.gps_lat != null && p.gps_lon != null && bounds.contains([p.gps_lat, p.gps_lon])) return true;
-      if (p.match_lat != null && p.match_lon != null && bounds.contains([p.match_lat, p.match_lon])) return true;
-      return false;
-    });
+  function shouldAutoFit(forceFit) {
+    // 배경 폴링 중에는 trip 이 바뀌어도 자동 fit 하지 않음 — "최신 Trip" 상태에서
+    //   새 trip 이 뜰 때마다 지도가 다른 위치로 튀던 원인. 수동 새로고침/trip 선택/
+    //   최초 로딩 등 forceFit 이 명시적으로 요청된 경우에만 이동 (2026-07-21 최정우 수정)
+    return !!forceFit;
   }
 
-  function shouldAutoFit(points, tripChanged, forceFit) {
-    if (forceFit || tripChanged) return true;
-    // "최신 Trip" 체크 해제 시(수동 탐색 중)는 폴링으로 뷰를 강제 이동시키지 않음
-    //   — 확대해서 보는 도중 포커스가 튀는 문제 방지 (2026-07-21 최정우 수정)
-    return isFollowLatest() && !viewportHasPoints(points);
+  // trip 목록(순번·pts 카운트)이 이전과 동일하면 <select> 를 다시 그리지 않음 — 값이 안 바뀌어도
+  //   매 폴링마다 옵션을 전부 지웠다 새로 만들던 것이 콤보박스 깜빡임의 원인이었음 (2026-07-21 최정우 수정)
+  function tripsSignature(trips) {
+    return trips.map(function (t) { return t.trip_id + ":" + t.count; }).join(",");
   }
 
   function fillTripSelect(trips, selectedId, followLatest) {
     const prev = followLatest ? "" : (selectedId || tripSelect.value || currentTripId);
-    tripSelect.innerHTML = "";
-    trips.forEach(function (t) {
-      const opt = document.createElement("option");
-      opt.value = t.trip_id;
-      opt.textContent = t.trip_id + " (" + t.count + "pts)";
-      tripSelect.appendChild(opt);
-    });
+    const sig = tripsSignature(trips);
+    if (sig !== lastTripsSig) {
+      lastTripsSig = sig;
+      tripSelect.innerHTML = "";
+      trips.forEach(function (t) {
+        const opt = document.createElement("option");
+        opt.value = t.trip_id;
+        opt.textContent = t.trip_id + " (" + t.count + "pts)";
+        tripSelect.appendChild(opt);
+      });
+    }
     if (trips.length === 0) return "";
     if (followLatest) {
       tripSelect.value = trips[0].trip_id;
@@ -477,6 +580,7 @@
     currentTripId = "";
     lastRoadFc = null;
     lastRoadSig = "";
+    lastTripsSig = "";
     clearPointLayers();
     clearRoadLayers();
     tripSelect.innerHTML = '<option value="">(trip 없음)</option>';
@@ -511,8 +615,10 @@
       const prevTripId = currentTripId;
       const followLatest = isFollowLatest();
       const tripId = fillTripSelect(trips, currentTripId, followLatest);
-      const tripChanged = !!tripId && tripId !== prevTripId;
-      await loadTrip(tripId, false, forceFit || tripChanged);
+      // trip 이 바뀌었다는 이유만으로는 화면을 이동하지 않음 — "최신 Trip" 체크 상태에서
+      //   배경 폴링 중 새 trip 이 뜰 때마다 지도 위치가 튀던 원인. 화면에 아직 아무것도
+      //   없던 최초 상태에서만 자동 fit (2026-07-21 최정우 수정)
+      await loadTrip(tripId, false, forceFit || !prevTripId);
     } catch (err) {
       setStatus("API 오류: " + err.message + " (웹/DB 기동 확인)", true);
     }
@@ -526,7 +632,10 @@
     if (!tripId) return;
     const prevTripId = currentTripId;
     currentTripId = tripId;
-    setStatus("로딩… " + tripId);
+    // 백그라운드 폴링(자동 갱신)에서는 "로딩…" 문구를 표시하지 않음 — 변경사항 없이도
+    //   매 폴링마다 상태 텍스트가 깜빡이던 원인 (2026-07-21 최정우 수정)
+    const isBackgroundPoll = !manualFit && !forceFit;
+    if (!isBackgroundPoll) setStatus("로딩… " + tripId);
     try {
       const [roads, points, primInfo] = await Promise.all([
         fetchJson("/api/trip/" + encodeURIComponent(tripId) + "/prim-roads?buffer=" + roadBufferM),
@@ -549,7 +658,7 @@
       if (tripChanged) clearPointLayers();
       updateRoadsIfChanged(roads);
       updatePoints(points);
-      if (shouldAutoFit(points, tripChanged, !!manualFit || !!forceFit)) {
+      if (shouldAutoFit(!!manualFit || !!forceFit)) {
         fitToContent(points);
       }
       const now = new Date();
@@ -559,8 +668,7 @@
         " prim도로=" + roads.features.length +
         " (전체 " + (primInfo.count || "?") + ")" +
         " GPS=" + points.filter(function (p) { return p.gps_lat != null; }).length +
-        " 매칭=" + points.filter(function (p) { return p.match_lat != null; }).length +
-        " 버퍼=" + roadBufferM + "m"
+        " 매칭=" + points.filter(function (p) { return p.match_lat != null; }).length
       );
     } catch (err) {
       setStatus("로딩 실패: " + err.message, true);
@@ -613,6 +721,42 @@
     window.addEventListener("blur", hideCtxMenu);
   }
 
+  // 재매칭이 실제로 끝날 때까지(PENDING 건이 0이 될 때까지) 짧은 간격으로 확인 —
+  //   고정 지연(예: 2초)으로 추측하면 PC 성능·MapMatchSvr 재시작 여부에 따라 완료 전에
+  //   부분 결과를 "최종"으로 보여주고, 이후 일반 폴링이 나머지를 여러 번에 걸쳐 찔끔찔끔
+  //   반영하면서 "완료했는데도 계속 깜빡이는" 것처럼 보이는 문제의 원인이었다.
+  //   완료되면 즉시 멈추므로 PC 성능과 무관하게 동작한다 (2026-07-21 최정우 수정)
+  // 반환값: 처리가 실제로 100% 완료됐는지(true) — 호출부에서 이 경우에만
+  //   진행률 바를 끝까지 채운 채 보여준다 (2026-07-22 최정우 추가)
+  async function waitForRetestCompletion(tripId, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      if (currentTripId !== tripId) return false;		// 사용자가 다른 trip 으로 이동 — 추적 중단
+      let points;
+      try {
+        points = await fetchJson("/api/trip/" + encodeURIComponent(tripId) + "/points");
+      } catch (err) {
+        setStatus("재테스트 상태 확인 실패: " + err.message, true);
+        return false;
+      }
+      const pending = points.filter(function (p) { return p.match_status === MATCH_STATUS_PENDING; }).length;
+      // 완료 시점을 알 수 있는 경우이므로, 진행률 바에 실제 처리 비율(%) 표시 (2026-07-22 최정우 추가)
+      showProgressPercent(points.length > 0 ? ((points.length - pending) / points.length) * 100 : 0);
+      await loadTrip(tripId, false, false);
+      if (pending === 0)
+      {
+        setStatus("재테스트 완료: " + tripId + " (" + points.length + "건)");
+        return true;
+      }
+      if (Date.now() >= deadline)
+      {
+        setStatus("재테스트 시간 초과 — 미완료 " + pending + "건 (자동 갱신을 켜면 이후 계속 반영됩니다)", true);
+        return false;
+      }
+      await new Promise(function (resolve) { setTimeout(resolve, RETEST_POLL_MS); });
+    }
+  }
+
   // 선택된 Trip의 기존 수신 GPS(prim_rawgps)로 맵매칭 재테스트 — 매칭 결과만 초기화해
   //   MapMatchSvr 가 동일 좌표를 재폴링·재매칭하도록 함 (2026-07-21 최정우 추가)
   function setupRetestButton() {
@@ -624,6 +768,9 @@
       // config.ini 변경 시 서버가 재테스트 전 MapMatchSvr 를 재시작하므로 다소 오래 걸릴 수 있음
       //   (2026-07-21 최정우 추가)
       setStatus("재테스트 요청 중… " + tripId + " (설정 변경 시 MapMatchSvr 재시작 포함, 최대 1분)");
+      // 요청 직후(재매칭 시작 전)엔 아직 진행률(%)을 알 수 없어 불확정 표시로 시작 —
+      //   waitForRetestCompletion 진입 후 실제 처리 비율로 전환됨 (2026-07-22 최정우 추가)
+      showProgressIndeterminate();
       try {
         const res = await fetch("/api/trip/" + encodeURIComponent(tripId) + "/retest", {
           method: "POST",
@@ -635,14 +782,158 @@
           (data.restarted ? " (설정 변경 감지 → MapMatchSvr 재시작 후" : " (") +
           " " + data.reset + "건 재매칭 중…)"
         );
-        // 엔진 재폴링·재매칭 대기 후 결과 갱신 (2026-07-21 최정우 추가)
-        setTimeout(function () {
-          if (currentTripId === tripId) loadTrip(tripId, false, false);
-        }, 2000);
+        // 완료될 때까지 짧은 간격으로 확인 — 고정 지연 대신 실제 완료 시점에 맞춤 (2026-07-21 최정우 수정)
+        const completed = await waitForRetestCompletion(tripId, RETEST_TIMEOUT_MS);
+        if (completed) await finishProgress();
       } catch (err) {
         setStatus("재테스트 실패: " + err.message, true);
       } finally {
         btn.disabled = false;
+        hideProgress();
+      }
+    });
+  }
+
+  // "삭제" 버튼 — 선택된 Trip을 PRIM_RAWGPS 에서 완전히 삭제(되돌릴 수 없음).
+  //   삭제 후 지도·목록도 즉시 초기화하고 남은 Trip 중 최신 것을 다시 불러온다 (2026-07-22 최정우 추가)
+  // "지도초기화" 버튼 — 지도에 그려진 내용(점·도로·화살표)만 지우고 초기 화면(위치·줌)으로
+  //   되돌림. Trip 선택·데이터는 안 건드림 — 순수 화면 리셋 용도 (2026-07-22 최정우 추가)
+  function setupResetMapButton() {
+    const btn = document.getElementById("btnResetMap");
+    if (!btn) return;
+    btn.addEventListener("click", async function () {
+      btn.disabled = true;
+      showProgressIndeterminate();
+      try {
+        clearPointLayers();
+        clearRoadLayers();
+        // 시그니처도 같이 리셋 — 안 하면 다음 갱신 때 "안 바뀜"으로 판단해 도로가 다시 안 그려짐
+        lastRoadFc = null;
+        lastRoadSig = "";
+        map.invalidateSize(true);
+        map.setView([37.55, 126.98], 14);
+        setStatus("지도 초기화 완료");
+        await finishProgress();
+      } finally {
+        btn.disabled = false;
+        hideProgress();
+      }
+    });
+  }
+
+  function setupDeleteButton() {
+    const btn = document.getElementById("btnDelete");
+    if (!btn) return;
+    btn.addEventListener("click", async function () {
+      if (!currentTripId) return;
+      const tripId = currentTripId;
+      if (!window.confirm("Trip \"" + tripId + "\"을(를) DB에서 완전히 삭제하시겠습니까?\n되돌릴 수 없습니다."))
+        return;
+      btn.disabled = true;
+      setStatus("삭제 중… " + tripId);
+      showProgressIndeterminate();
+      try {
+        const res = await fetch("/api/trip/" + encodeURIComponent(tripId) + "/delete", {
+          method: "POST",
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+        // 지도·목록 초기화 후 남은 Trip 목록 다시 조회 (2026-07-22 최정우 추가)
+        clearAllDisplay("삭제 완료: " + tripId + " (" + data.deleted + "건) — 목록 갱신 중");
+        await refreshTrips(true);
+        await finishProgress();
+      } catch (err) {
+        setStatus("삭제 실패: " + err.message, true);
+      } finally {
+        btn.disabled = false;
+        hideProgress();
+      }
+    });
+  }
+
+  // 신규테스트: 엔진 기동 확인만으로는 화면에 반영되지 않는다 — Simulator 의 GPS 생성과
+  //   MapMatchSvr 의 매칭이 모두 비동기 백그라운드 작업이라, 기동 확인 시점엔 새 trip 이
+  //   아직 DB에 한 건도 없을 수 있다. 새 trip_id 가 실제로 나타나고(prevTripId 와 달라짐)
+  //   그 trip 의 PENDING 이 0이 될 때까지 짧은 간격으로 Trip 목록·지도를 계속 갱신해,
+  //   생성·매칭되는 과정이 지도에 실시간으로 반영되게 한다 (2026-07-22 최정우 추가)
+  //   반환값: 새 trip 이 100% 매칭 완료됐는지(true)
+  async function waitForNewTestData(prevTripId, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    // 새 trip 이 처음 나타난 시점에 딱 한 번만 그 범위로 이동·확대하고, 그 이후엔
+    // refreshTrips 를 forceFit 없이 호출한다 — 매 폴링마다 강제로 fitBounds 하면
+    // 매칭이 끝날 때까지 사용자가 확대·이동해도 계속 원래 범위로 되돌아가 버려
+    // 지도를 조작할 수 없는 것처럼 보였다 (재테스트 버튼은 원래도 forceFit 없이 폴링함)
+    // (2026-07-22 최정우 수정)
+    let fittedOnce = false;
+    for (;;) {
+      await refreshTrips(false);
+      if (currentTripId && currentTripId !== prevTripId) {
+        let points;
+        try {
+          points = await fetchJson("/api/trip/" + encodeURIComponent(currentTripId) + "/points");
+        } catch (err) {
+          points = null;
+        }
+        if (points && points.length > 0) {
+          if (!fittedOnce) {
+            fitToContent(points);
+            fittedOnce = true;
+          }
+          const pending = points.filter(function (p) { return p.match_status === MATCH_STATUS_PENDING; }).length;
+          showProgressPercent(((points.length - pending) / points.length) * 100);
+          // Simulator 가 분할 삽입 중이면 지금까지 들어온 몇 건만 빠르게 매칭돼도
+          // 아직 끝난 게 아니다 — 마지막 샘플(END 이벤트)까지 들어와서 매칭됐을 때만 완료로 본다
+          const hasEndEvent = points.some(function (p) { return p.trip_event === TRIP_EVENT_END; });
+          if (pending === 0 && hasEndEvent) {
+            setStatus("신규테스트 완료: " + currentTripId + " (" + points.length + "건)");
+            return true;
+          }
+        }
+      }
+      if (Date.now() >= deadline) {
+        setStatus("신규테스트 진행 시간 초과 — 자동 갱신을 켜면 이후 계속 반영됩니다", true);
+        return false;
+      }
+      await new Promise(function (resolve) { setTimeout(resolve, RETEST_POLL_MS); });
+    }
+  }
+
+  // "신규테스트" 버튼 — MapMatchSvr → Simulator 순서로 1초 확인 + 최대 3회 재시도 기동.
+  //   웹 자신은 이미 이 요청을 처리 중이므로 재기동 대상에서 제외. Simulator 는 기동될 때마다
+  //   새 trip_id 를 발급하므로, 결과적으로 새 테스트 주행이 시작된다 (2026-07-21 최정우 추가,
+  //   2026-07-22 최정우 수정 — 명칭을 실제 역할(신규 테스트)에 맞게 변경)
+  function setupStartEnginesButton() {
+    const btn = document.getElementById("btnStartEngines");
+    if (!btn) return;
+    btn.addEventListener("click", async function () {
+      btn.disabled = true;
+      const prevTripId = currentTripId;			// 재시작 전 trip — 새 trip 등장 판별용
+      setStatus("신규테스트 요청 중… (MapMatchSvr → Simulator, 최대 3회 재시도)");
+      showProgressIndeterminate();
+      try {
+        const res = await fetch("/api/system/start-engines", { method: "POST" });
+        const data = await res.json();
+        if (data.ok) {
+          setStatus("신규테스트 기동 완료 — 새 trip 데이터 생성·매칭 대기 중…");
+          // "최신 Trip"이 이전에(예: Trip 콤보박스 직접 선택 등으로) 꺼진 채 남아있으면
+          // 새로고침해도 브라우저가 체크박스 상태를 그대로 복원해 대기 로직이 아예 동작하지
+          // 않는다 — "신규테스트"는 새 trip 을 만들고 지켜보려는 의도이므로 여기서는
+          // 무조건 켠다 (2026-07-22 최정우 추가)
+          if (chkFollow) chkFollow.checked = true;
+          const completed = await waitForNewTestData(prevTripId, NEWTEST_TIMEOUT_MS);
+          if (completed) await finishProgress();
+        } else {
+          // failed_stage 가 없으면(예: 바이너리 자체가 없음) 로그 마지막 줄로 대체 표시 (2026-07-21 최정우 추가)
+          const logLines = (data.log || "").trim().split("\n");
+          const lastLine = logLines[logLines.length - 1] || "";
+          const reason = data.failed_stage ? (data.failed_stage + " 기동 실패") : lastLine;
+          setStatus("신규테스트 실패: " + reason, true);
+        }
+      } catch (err) {
+        setStatus("신규테스트 요청 실패: " + err.message, true);
+      } finally {
+        btn.disabled = false;
+        hideProgress();
       }
     });
   }
@@ -682,7 +973,6 @@
       const cfg = await fetchJson("/api/config");
       roadBufferM = cfg.road_buffer_m || 1000;
       pollSec = cfg.poll_sec || 0;
-      if (pollSec > 0 && chkPoll) chkPoll.checked = true;
       if (chkPoll && chkPoll.checked) startPoll();
       await loadTrips();
     } catch (err) {
@@ -693,10 +983,23 @@
       if (chkFollow) chkFollow.checked = false;
       loadTrip(tripSelect.value, true, true);
     });
-    document.getElementById("btnReload").addEventListener("click", function () {
-      refreshTrips(true);
+    // 다른 버튼들과 동일하게, 조회가 끝날 때까지 중복 클릭 방지용으로 비활성화 (2026-07-22 최정우 추가)
+    document.getElementById("btnReload").addEventListener("click", async function () {
+      const btn = this;
+      btn.disabled = true;
+      showProgressIndeterminate();
+      try {
+        await refreshTrips(true);
+        await finishProgress();
+      } finally {
+        btn.disabled = false;
+        hideProgress();
+      }
     });
     setupRetestButton();
+    setupResetMapButton();
+    setupDeleteButton();
+    setupStartEnginesButton();
     if (chkPoll) {
       chkPoll.addEventListener("change", function () {
         if (chkPoll.checked) startPoll();

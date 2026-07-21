@@ -92,9 +92,11 @@ bool CRouteProvider::SeedLink(LINK_GEOM& stOut)
 }
 
 /**
- * @brief 다음 연결 링크
+ * @brief 다음 연결 링크 — strExcludeToNode 로 향하는 링크(방금 지나온 도로의
+ *        반대방향/맞은편 차로)는 후보에서 제외해 곧바로 되돌아가지 않게 한다 (2026-07-22 최정우 수정)
 */
-bool CRouteProvider::NextLink(const string& strFromNode, const string& strExcludeLink, LINK_GEOM& stOut)
+bool CRouteProvider::NextLink(const string& strFromNode, const string& strExcludeLink,
+	const string& strExcludeToNode, LINK_GEOM& stOut)
 {
 	if (strFromNode.empty()) return false;
 
@@ -102,13 +104,13 @@ bool CRouteProvider::NextLink(const string& strFromNode, const string& strExclud
 	string strSQL = m_pcSQL->GetSQL("moct_link_next");
 	if (strSQL.empty()) { LOGFMTE("moct_link_next sql empty!"); return false; }
 
-	const char *aszParams[2] = { strFromNode.c_str(), strExcludeLink.c_str() };
+	const char *aszParams[3] = { strFromNode.c_str(), strExcludeLink.c_str(), strExcludeToNode.c_str() };
 	// 다음 연결 링크 조회 SQL 실행 (2026-07-08 최정우 주석 추가)
-	return RunLinkQuery(strSQL, aszParams, 2, stOut);
+	return RunLinkQuery(strSQL, aszParams, 3, stOut);
 }
 
 /**
- * @brief 링크 조회 공통 실행 (결과: link_id, t_node, max_spd, wkt, road_type)
+ * @brief 링크 조회 공통 실행 (결과: link_id, t_node, max_spd, wkt, road_type, f_node)
 */
 bool CRouteProvider::RunLinkQuery(const string& strSQL, const char * const *paszParams,
 	int nParams, LINK_GEOM& stOut)
@@ -130,6 +132,8 @@ bool CRouteProvider::RunLinkQuery(const string& strSQL, const char * const *pasz
 		string strWkt = PQgetvalue(res, 0, 3);
 		// ROAD_TYPE 문자열('000'~'004') → 정수 (2026-07-20 최정우 추가)
 		stOut.nRoadType = atoi(PQgetvalue(res, 0, 4));
+		// 역방향(맞은편) 링크 제외 판별용 시작 노드 (2026-07-22 최정우 추가)
+		stOut.strFromNode = PQgetvalue(res, 0, 5);
 
 		// WKT LineString → 좌표 배열 파싱 (2026-07-08 최정우 주석 추가)
 		if (CGeoUtil::ParseLineString(strWkt, stOut.vtPoints))

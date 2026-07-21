@@ -31,6 +31,7 @@ typedef struct sGeoPoint
 typedef struct sLinkGeom
 {
 	string				strLinkID;		// 링크 ID
+	string				strFromNode;	// 시작 노드 ID (역방향 링크 제외용) (2026-07-22 최정우 추가)
 	string				strToNode;		// 종료 노드 ID (다음 링크 탐색 키)
 	int					nMaxSpd;		// 제한속도 (km/h, 0=미지정)
 	int					nRoadType;		// MOCT_LINK.ROAD_TYPE (0:일반 1:교량 2:터널 3:고가 4:지하) (2026-07-20 최정우 추가)

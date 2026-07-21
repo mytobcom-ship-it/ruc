@@ -166,6 +166,17 @@ typedef struct sAltitudeScoreConfig
 //   경계 클램프면 차량이 링크 끝을 지난 것 → 연결 다음 링크에 더 나은 내부 수선발이 있을 수 있어 depth 확장
 #define MM_CLAMP_EPS				1.0									// (단위: m) 링크 경계 클램프 판정 허용오차
 
+// 최종 확정 후보가 여전히 경계 클램프(depth 확장해도 더 나은 내부 수선발을 못 찾음) 이면서,
+//   GPS↔매칭점 거리(INTERSECT_LEN)가 이 값을 넘으면 "신뢰도 낮은 매칭"으로 SKIP 처리 — 여러 GPS_SEQ가
+//   같은 꺾임점으로 뭉개져(클램프) MATCH_LAT/LON 이 정지한 것처럼 보이는 오탐(예: 주정차 오판) 방지용
+//   (2026-07-21 최정우 추가 — 클램프 저신뢰 SKIP)
+#define MM_CLAMP_SKIP_LEN			10.0								// (단위: m) 클램프+거리 초과 시 SKIP 판정 임계
+
+// 같은 링크 위 역행이 "확실한 노이즈"(heading 정방향 확인 + 오차 작음 + 후보 1개)로 판정되면,
+//   매칭 좌표가 뒤로 밀린 것처럼 보이지 않게 직전 위치보다 이 거리(m)만큼 앞으로 보정한다.
+//   링크 끝(END 노드)을 넘어서면 END 노드 좌표로 클램프 (2026-07-22 최정우 추가)
+#define MM_NOISE_FORWARD_NUDGE_M	1.0									// (단위: m) 확실한 노이즈 보정 시 전진량
+
 // (D) 장시간 공백 시 세션 앵커 폐기 → 초기(Begin) 재획득 임계 (2026-07-15 최정우 추가)
 //   직전 "매칭 성공" 이후 경과 시간이 이 값을 넘으면 연속성 신뢰 불가 → 세션 리셋
 #define MM_SESSION_RESET_GAP_SEC	30									// 직전 매칭 후 gap(초) 초과 시 세션 리셋
@@ -207,6 +218,9 @@ typedef struct sMatchEntry
 	double							dfAltAdj;							// 고도 보조 비용(m) — Continue 만, match trace formula용
 	double							dfReversePenalty;					// 역행 페널티(m) — match trace formula용 (2026-07-20 최정우 추가)
 	bool							bReverseSuspect;					// 위치 역행 + heading 도 역방향 일치 — margin 과 무관, 연속역행(reverse_confirm) 판정 전용 신호 (2026-07-21 최정우 추가)
+	bool							bSgmtClamped;						// 세그먼트 끝점(꺾임점) 스냅 — 클램프 저신뢰 SKIP 판정용 (2026-07-21 최정우 추가)
+	bool							bHasHeading;						// heading 값 존재 여부 — 같은 링크 역행 판정 시 노이즈/판단불가 구분용 (2026-07-22 최정우 추가)
+	bool							bAmbiguousReverse;					// 같은 링크 역행인데 heading 없음/애매해 노이즈 단정 불가 — SKIP 처리용 (2026-07-22 최정우 추가)
 	sint16							nDirAngleDiff;						// 주행방향 각도 차이
 	uint64							qwLinkID;							// 링크 ID
 	uint16							wLenFromLink;						// 링크의 시작점에서 부터 매핑된 세그먼트 시작점까지 거리
@@ -236,6 +250,9 @@ typedef struct sMatchEntry
 		dfAltAdj(0.0),
 		dfReversePenalty(0.0),
 		bReverseSuspect(false),
+		bSgmtClamped(false),
+		bHasHeading(false),
+		bAmbiguousReverse(false),
 		nDirAngleDiff(0),
 		qwLinkID(0),
 		wLenFromLink(0),

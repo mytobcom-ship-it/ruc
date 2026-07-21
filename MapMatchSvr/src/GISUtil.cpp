@@ -398,6 +398,9 @@ bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtIn
 	double dfIntersectSgmtDistance = dfVertexDistance * cos(RAD(static_cast<double>(nDirAngleDiff)));
 	const double dfSegLenCoord = stSgmtInfo.dfLen;
 	POINT stIntersect;
+	// 수선의 발이 세그먼트 밖이라 끝점(꺾임점)으로 스냅되는지 — 여러 GPS_SEQ 가 같은 꺾임점으로
+	//   뭉개지는(클램프) 저신뢰 매칭 판정용 신호 (2026-07-21 최정우 추가)
+	bool bSgmtClamped = !((dfIntersectSgmtDistance <= dfSegLenCoord) && (dfIntersectSgmtDistance >= 0));
 
 	if ((dfIntersectSgmtDistance <= dfSegLenCoord) && (dfIntersectSgmtDistance >= 0))		// 수선의 발이 세그먼트 위
 	{
@@ -468,6 +471,8 @@ bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtIn
 	pstSgmtMatchRes->nDirAngleDiff = nDirAngleDiff;
 	pstSgmtMatchRes->qwLinkID = stSgmtInfo.qwLinkID;
 	pstSgmtMatchRes->bReverseFit = bReverseFit;						// heading이 역방향에 더 가까움 (2026-07-21 최정우 추가)
+	pstSgmtMatchRes->bSgmtClamped = bSgmtClamped;						// 세그먼트 끝점 스냅 여부 (2026-07-21 최정우 추가)
+	pstSgmtMatchRes->bHasHeading = bHasHeading;						// heading 값 존재 여부 (2026-07-22 최정우 추가)
 
 	return true;
 }

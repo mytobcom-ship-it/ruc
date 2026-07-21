@@ -369,6 +369,11 @@ int main()
 	ILog4zManager::getRef().setLoggerPath(LOG4Z_MAIN_LOGGER_ID, stConfig.strLogPath.c_str());
 	ILog4zManager::getRef().setLoggerLevel(LOG4Z_MAIN_LOGGER_ID, stConfig.nLogLevel);
 	ILog4zManager::getRef().setLoggerOutFile(LOG4Z_MAIN_LOGGER_ID, true);
+	// 콘솔 표시(ANSI 컬러) 비활성화 — 실제 로그는 이미 파일로 남는데(setLoggerOutFile),
+	//   콘솔 출력은 nohup/setsid 로 기동 시 터미널이 아니라 *_launcher.log 로 그대로
+	//   리다이렉트되어, 색상 이스케이프 코드([0m[32m 등)가 텍스트로 찍히는 원인이었다
+	//   (2026-07-21 최정우 추가)
+	ILog4zManager::getRef().setLoggerDisplay(LOG4Z_MAIN_LOGGER_ID, false);
 	// log4z 로거 기동 (2026-07-08 최정우 주석 추가)
 	if (!ILog4zManager::getRef().start())
 	{

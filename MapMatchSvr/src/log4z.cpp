@@ -1362,7 +1362,14 @@ void LogerManager::showColorText(const char *text, int level)
         return;
     }
 #ifndef WIN32
-    printf("%s%s\e[0m", LOG_COLOR[level], text);
+	// stdout 이 실제 터미널일 때만 ANSI 컬러 코드 사용 — nohup/setsid 로 기동해 stdout 이 파일로
+	//   리다이렉트된 경우(예: *_launcher.log) 컬러 이스케이프 코드가 그대로 텍스트로 찍히던 원인.
+	//   이 함수는 showColorText 시작(start)/종료(stop) 같은 라이브러리 메타 메시지에 로거 display
+	//   설정과 무관하게 항상 호출되므로 여기서 직접 처리 (2026-07-21 최정우 추가)
+	if (isatty(fileno(stdout)))
+		printf("%s%s\e[0m", LOG_COLOR[level], text);
+	else
+		printf("%s", text);
 #else
     AutoLock l(_scLock);
     HANDLE hStd = ::GetStdHandle(STD_OUTPUT_HANDLE);

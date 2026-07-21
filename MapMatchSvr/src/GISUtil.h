@@ -51,6 +51,17 @@ typedef struct sSgmtMatchInput
 	uint64							qwPrevLinkID;						// 직전 매칭 성공 링크 ID (0=없음)
 	double							dfPrevLinkPos;						// 직전 매칭 위치 — 링크 시작점부터 거리(m)
 	bool							bHasPrevLinkPos;					// dfPrevLinkPos 유효 여부
+	// 직전 링크의 종료 노드 ID — 링크가 바뀌는 후보의 진입/진출 방향 판정용.
+	//   ContinueMapMatch::StartMapMatch 가 세팅 (2026-07-21 최정우 추가 — 진입링크 역행 감지)
+	uint64							qwPrevEdNodeID;						// 직전 링크 종료 노드 ID (0=없음)
+	// 직전 링크의 전체 길이(m) — 진입링크 후보의 역행 거리(확장 위치) 계산용.
+	//   dfPrevLinkPos 와 짝(둘 다 ContinueMapMatch::StartMapMatch 세팅) (2026-07-22 최정우 추가)
+	double							dfPrevLinkLen;						// 직전 링크 길이(m, 0=없음)
+	// 같은 링크 노이즈 보정(1m 전진) 기준점 — 이번 후보 자신의 계산값이 아니라 마지막으로
+	//   신뢰했던 실제 매칭 좌표. 호출측(MapMatch)이 WGS84 로 세팅하면 StartMapMatch 가
+	//   stPoint 와 동일하게 내부 스케일(*360000)로 변환한다 (2026-07-22 최정우 추가)
+	double							dfPrevMatchX;						// 직전 신뢰 매칭 X(경도) — 내부 스케일
+	double							dfPrevMatchY;						// 직전 신뢰 매칭 Y(위도) — 내부 스케일
 
 	sSgmtMatchInput() :
 		nRadius(0),
@@ -65,7 +76,11 @@ typedef struct sSgmtMatchInput
 		bUseAltScore(false),
 		qwPrevLinkID(0),
 		dfPrevLinkPos(0.0),
-		bHasPrevLinkPos(false)
+		bHasPrevLinkPos(false),
+		qwPrevEdNodeID(0),
+		dfPrevLinkLen(0.0),
+		dfPrevMatchX(0.0),
+		dfPrevMatchY(0.0)
 	{}
 } SGMT_MATCH_INPUT, *PSGMT_MATCH_INPUT;
 
@@ -127,6 +142,9 @@ typedef struct sSgmtMatchRes
 	sint16							nDirAngleDiff;						// 주행방향 각도 차이
 	uint64							qwLinkID;							// 링크 ID
 	bool							bReverseFit;						// heading 이 세그먼트 정방향보다 역방향에 더 가까움 (2026-07-21 최정우 추가)
+	bool							bSgmtClamped;						// 수선의 발이 세그먼트 밖이라 끝점(꺾임점)으로 스냅됨 (2026-07-21 최정우 추가 — 클램프 저신뢰 SKIP)
+	bool							bHasHeading;						// 이 포인트에 heading(방위각) 값이 있었는지 — 같은 링크 역행 판정 시
+										//   "확실한 노이즈"와 "판단 불가"를 구분하는 데 사용 (2026-07-22 최정우 추가)
 
 	sSgmtMatchRes() :
 		dfSgmtMatchLen(0.0),
@@ -134,7 +152,9 @@ typedef struct sSgmtMatchRes
 		dfCost(0.0),
 		nDirAngleDiff(0),
 		qwLinkID(0),
-		bReverseFit(false)
+		bReverseFit(false),
+		bSgmtClamped(false),
+		bHasHeading(false)
 	{}
 } SGMT_MATCH_RES, *PSGMT_MATCH_RES;
 

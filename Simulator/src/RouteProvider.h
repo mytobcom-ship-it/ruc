@@ -27,8 +27,10 @@ public:
 
 	// bounding box 내 임의의 시작 링크 1개
 	bool SeedLink(LINK_GEOM& stOut);
-	// 노드(strFromNode)에서 출발하는 다음 링크 1개 (strExcludeLink 제외)
-	bool NextLink(const string& strFromNode, const string& strExcludeLink, LINK_GEOM& stOut);
+	// 노드(strFromNode)에서 출발하는 다음 링크 1개 (strExcludeLink 제외, strExcludeToNode
+	//   로 향하는 역방향(맞은편) 링크도 제외 — 방금 지나온 도로를 곧바로 되돌아가는 것 방지) (2026-07-22 최정우 수정)
+	bool NextLink(const string& strFromNode, const string& strExcludeLink,
+		const string& strExcludeToNode, LINK_GEOM& stOut);
 
 private:
 	int  DetectSrid();

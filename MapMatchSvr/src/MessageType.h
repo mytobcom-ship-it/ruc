@@ -103,6 +103,8 @@ typedef struct sAltMatchCtx
 	double							dfHorizMove;						// 직전 매칭점→현재 GPS 수평거리(m)
 	double							dfPrevLinkPos;						// 직전 매칭 위치 — 링크 시작점부터 거리(m), 역행 페널티용 (2026-07-20 최정우 추가)
 	bool							bHasPrevLinkPos;					// dfPrevLinkPos 보유 여부 (2026-07-20 최정우 추가)
+	double							dfPrevMatchX;						// 직전(신뢰 가능) 매칭 성공 X(경도, WGS84) — 같은 링크 노이즈 보정 기준점 (2026-07-22 최정우 추가)
+	double							dfPrevMatchY;						// 직전(신뢰 가능) 매칭 성공 Y(위도, WGS84) (2026-07-22 최정우 추가)
 
 	sAltMatchCtx() :
 		nPrevAltitude(NO_ALTITUDE),
@@ -110,7 +112,9 @@ typedef struct sAltMatchCtx
 		bHasPrevAlt(false),
 		dfHorizMove(0.0),
 		dfPrevLinkPos(0.0),
-		bHasPrevLinkPos(false)
+		bHasPrevLinkPos(false),
+		dfPrevMatchX(0.0),
+		dfPrevMatchY(0.0)
 	{}
 } ALT_MATCH_CTX, *PALT_MATCH_CTX;
 
@@ -138,6 +142,8 @@ typedef struct sMapMatchInput
 	uint64							qwBiasLinkID;						// 연속실패 Begin 재검색용: 직전 성공 링크(연결성 편향, 0=미적용) (2026-07-15 최정우 추가)
 	double							dfPrevLinkPos;						// 직전 매칭 위치 — 링크 시작점부터 거리(m), 역행 페널티용 (2026-07-20 최정우 추가)
 	bool							bHasPrevLinkPos;					// dfPrevLinkPos 보유 여부 (2026-07-20 최정우 추가)
+	double							dfPrevMatchX;						// 직전(신뢰 가능) 매칭 성공 X(경도, WGS84) — 같은 링크 노이즈 보정 기준점 (2026-07-22 최정우 추가)
+	double							dfPrevMatchY;						// 직전(신뢰 가능) 매칭 성공 Y(위도, WGS84) (2026-07-22 최정우 추가)
 
 	sMapMatchInput() :
 		nCoordinateType(WGS84GEO),
@@ -157,7 +163,9 @@ typedef struct sMapMatchInput
 		bUseAltScore(false),
 		qwBiasLinkID(0),
 		dfPrevLinkPos(0.0),
-		bHasPrevLinkPos(false)
+		bHasPrevLinkPos(false),
+		dfPrevMatchX(0.0),
+		dfPrevMatchY(0.0)
 	{}
 } MAP_MATCH_INPUT, *PMAP_MATCH_INPUT;
 
@@ -198,6 +206,8 @@ typedef struct sMatchLinkInfo
 	bool							bOutOfRadius;						// 반경 밖·진단반경 초과 최근접 — SKIP 참고용 좌표·거리 유효, 정식 MATCHED 아님 (2026-07-10 최정우 수정)
 	bool							bReverseHit;						// 같은 링크 역행 페널티(dfReversePenalty>0)가 붙은 채로 최종 선택됨 — SKIP 격리용 (2026-07-21 최정우 추가)
 	bool							bReverseSuspect;					// 위치 역행 + heading 도 역방향 일치(margin 무관) — 연속역행(reverse_confirm) 스트릭 판정 전용 (2026-07-21 최정우 추가)
+	bool							bClampLowConf;						// 경계 클램프 + INTERSECT_LEN 초과 — 신뢰도 낮은 매칭 SKIP 처리용 (2026-07-21 최정우 추가)
+	bool							bAmbiguousReverse;					// 같은 링크 역행인데 heading 없음/애매해 노이즈 단정 불가 — SKIP 처리용 (2026-07-22 최정우 추가)
 } MATCH_LINK_INFO, *PMATCH_LINK_INFO;
 
 #define MATCH_LINK_INFO_SIZE											sizeof(MATCH_LINK_INFO)

@@ -333,6 +333,70 @@ web_start() {
 	return 0
 }
 
+# 웹 페이지 "전체기동" 버튼 전용 — 기동 후 1초 뒤 프로세스 존재만 확인(완전 초기화 완료 보장은
+#   아님), 미기동이면 동일 방법으로 최대 3회까지 재시도. engine_wait_running(수십 초 대기)보다
+#   훨씬 빠른 판정이라, "즉시 크래시했는지"만 잡아내는 용도 — link.psf 로딩처럼 정상적으로 오래
+#   걸리는 초기화 중엔 존재 자체는 1초 내 확인되므로 오탐 위험은 낮다 (2026-07-21 최정우 추가)
+engine_start_with_retry() {
+	local bin="$1"
+	local max_attempts=3
+	local name
+	name="$(engine_name "$bin")"
+	local attempt
+	for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+		echo "--- $name 기동 시도 $attempt/$max_attempts ---"
+		if engine_running "$bin"; then
+			echo "기존 $name 종료 중..."
+			if [ "$name" = "MapMatchSvr" ]; then
+				engine_stop "$bin" "$MM_STOP_WAIT" || true
+			else
+				engine_stop "$bin" "$SIM_STOP_WAIT" || true
+			fi
+		fi
+
+		local dir pidfile log
+		dir="$(engine_dir "$bin")"
+		pidfile="$(engine_pidfile "$bin")"
+		log="$(engine_launcher_log "$bin")"
+		cd "$dir" || return 1
+		echo "==== $(date '+%F %T') start $name (attempt $attempt/$max_attempts) ====" >>"$log"
+		nohup setsid "$bin" >>"$log" 2>&1 </dev/null &
+		echo "$!" > "$pidfile"
+
+		sleep 1
+		if engine_running "$bin"; then
+			echo "$name 기동 확인됨 (pid=$(engine_pids "$bin"))"
+			return 0
+		fi
+
+		echo "$name 1초 후 미기동 (시도 $attempt/$max_attempts)"
+		rm -f "$pidfile"
+	done
+
+	echo "오류: $name ${max_attempts}회 재시도 후에도 기동 실패"
+	engine_show_launcher_tail "$bin"
+	return 1
+}
+
+# 웹 "전체기동" 버튼 전용 — MapMatchSvr → Simulator 순서로 1초 확인+3회 재시도 기동.
+#   웹 자신은 이미 이 요청을 처리 중이므로 재기동 대상에서 제외 (2026-07-21 최정우 추가)
+test_start_mm_sim_retry() {
+	test_require_bins || return 1
+	echo "=== MapMatchSvr 기동 (1초 확인, 최대 3회 재시도) ==="
+	if ! engine_start_with_retry "$MM_BIN"; then
+		echo "FAILED_STAGE=MapMatchSvr"
+		return 1
+	fi
+	echo "=== RawGpsSimSvr 기동 (1초 확인, 최대 3회 재시도) ==="
+	if ! engine_start_with_retry "$SIM_BIN"; then
+		echo "FAILED_STAGE=RawGpsSimSvr"
+		return 1
+	fi
+	echo "=== 완료 ==="
+	test_ps_all
+	return 0
+}
+
 # MapMatchSvr 단독 재시작 — config.ini 값 변경을 반영. Simulator/web_viewer 는 건드리지
 #   않는다(engine_start 가 이미 떠있으면 내부적으로 stop→start 처리) (2026-07-21 최정우 추가)
 test_restart_mm() {

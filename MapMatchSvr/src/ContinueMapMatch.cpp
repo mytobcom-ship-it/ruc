@@ -91,8 +91,15 @@ bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPU
 
 	stSgmtMatchInput.stPoint.dfX *= 360000.0;
 	stSgmtMatchInput.stPoint.dfY *= 360000.0;
+	// 같은 링크 노이즈 보정 기준점도 동일 내부 스케일로 변환 (2026-07-22 최정우 추가)
+	stSgmtMatchInput.dfPrevMatchX *= 360000.0;
+	stSgmtMatchInput.dfPrevMatchY *= 360000.0;
 	// 역행 페널티 판정용 직전 링크 ID — 이 링크 위 후보만 dfPrevLinkPos 와 비교 (2026-07-20 최정우 추가)
 	stSgmtMatchInput.qwPrevLinkID = qwLinkID;
+	// 링크가 바뀌는 후보의 진입/진출 노드 판정용 — 직전 링크의 종료 노드 (2026-07-21 최정우 추가)
+	stSgmtMatchInput.qwPrevEdNodeID = pstLinkInfo->qwEdNodeID;
+	// 진입링크 후보의 확장 위치(역행 거리) 계산용 — 직전 링크 길이 (2026-07-22 최정우 추가)
+	stSgmtMatchInput.dfPrevLinkLen = pstLinkInfo->dfLen;
 
 	// 0 depth 세팅 
 	// 링크 세그먼트 정보
@@ -282,6 +289,8 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
 		stMatchEntry.dfMatchY = stSgmtMatchRes.stMatchPoint.dfY;
 		stMatchEntry.dfSgmtMatchLen = stSgmtMatchRes.dfSgmtMatchLen;
 		stMatchEntry.dfIntersectLenSgmt = stSgmtMatchRes.dfIntersectLenSgmt;
+		stMatchEntry.bSgmtClamped = stSgmtMatchRes.bSgmtClamped;			// 세그먼트 끝점 스냅 여부 (2026-07-21 최정우 추가)
+		stMatchEntry.bHasHeading = stSgmtMatchRes.bHasHeading;				// heading 값 존재 여부 (2026-07-22 최정우 추가)
 		// ── 연속 맵매칭 고도 보조 비용 가산 (Begin 미적용) ──
 		//   dfCost = INTERSECT_LEN + 방위각비용 + CalcAltRoadPenalty(Δalt, ROAD_TYPE)
 		// 값이 작을수록 우선 — 보너스(음수)면 동일 거리·방향 후보보다 유리
@@ -327,7 +336,94 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
 				//   판정이 GPS 노이즈에 흔들리지 않고 heading 이 뒷받침되는 경우만 스트릭에 반영하게 함
 				//   (2026-07-21 최정우 추가)
 				if ((dfBackward > MM_REVERSE_SUSPECT_EPS) && stSgmtMatchRes.bReverseFit)
+				{
 					stMatchEntry.bReverseSuspect = true;
+				}
+				else if (dfBackward > MM_REVERSE_SUSPECT_EPS)
+				{
+					// heading 이 역방향 쪽이 아님(bReverseFit=false) — 이 뒤로 밀린 위치가
+					//   "확실한 노이즈"인지 "판단 불가"인지 구분한다.
+					//   확실한 노이즈: heading 이 있고, 방위각이 정방향과 잘 맞고(각도비용이 상한 미도달),
+					//     GPS 오차(INTERSECT_LEN)도 작음 → 매칭 좌표를 직전 위치보다 살짝 앞으로 보정해
+					//     지도에 역주행처럼 튀어 보이지 않게 하고, MATCH_STATUS 는 그대로 둔다(MATCHED 유지).
+					//   판단 불가: heading 이 없거나(NO_ANGLE) 각도가 애매/큼 → 노이즈라 단정 못 하므로
+					//     좌표는 계산된 값 그대로 두고 SKIP 표시만 얹어 다운스트림이 신뢰하지 않게 한다.
+					//   (2026-07-22 최정우 추가)
+					bool bPoorAngle = IsPoorAngleFit(stMatchEntry);
+					bool bDefiniteNoise = stSgmtMatchRes.bHasHeading && !bPoorAngle
+						&& (stMatchEntry.dfIntersectLenSgmt <= MM_CLAMP_SKIP_LEN);
+
+					if (bDefiniteNoise)
+					{
+						double dfNewPos = stSgmtMatchInput.dfPrevLinkPos + MM_NOISE_FORWARD_NUDGE_M;
+						if (dfNewPos >= stMatchEntry.dfLen)
+						{
+							// 링크 끝(END 노드)을 넘으면 END 노드 좌표로 클램프
+							stMatchEntry.dfMatchX = stMatchEntry.dfEdNodeX;
+							stMatchEntry.dfMatchY = stMatchEntry.dfEdNodeY;
+							stMatchEntry.dfSgmtMatchLen = stMatchEntry.dfLen
+								- static_cast<double>(stMatchEntry.wLenFromLink);
+						}
+						else
+						{
+							// 이번 후보(현재 GPS) 자신의 계산값이 아니라, 마지막으로 신뢰했던
+							//   실제 매칭 좌표(dfPrevMatchX/Y)를 기준점으로 삼아 세그먼트 방향으로
+							//   정확히 MM_NOISE_FORWARD_NUDGE_M(1m)만 전진시킨다 — 이번 후보의
+							//   좌표 자체가 노이즈라 못 믿는 상황이므로, 노이즈가 섞인 값을 기준으로
+							//   재보정하지 않고 마지막 확실한 지점에서 다시 계산한다 (2026-07-22 최정우 수정)
+							stMatchEntry.dfMatchX = stSgmtMatchInput.dfPrevMatchX
+								+ MM_NOISE_FORWARD_NUDGE_M * sin(RAD(static_cast<double>(stSgmtInfo.nDirAng)));
+							stMatchEntry.dfMatchY = stSgmtMatchInput.dfPrevMatchY
+								+ MM_NOISE_FORWARD_NUDGE_M * cos(RAD(static_cast<double>(stSgmtInfo.nDirAng)));
+							stMatchEntry.dfSgmtMatchLen = dfNewPos - static_cast<double>(stMatchEntry.wLenFromLink);
+						}
+					}
+					else
+					{
+						stMatchEntry.bAmbiguousReverse = true;
+					}
+				}
+
+				double dfMargin = 0.0;
+				if ((stSgmtMatchInput.nSpeed >= 0) && (stSgmtMatchInput.nSpeed < m_dfReverseSpeed))
+					dfMargin = m_dfReverseMargin;
+				double dfPenalized = dfBackward - dfMargin;
+				if (dfPenalized > 0.0)
+				{
+					stMatchEntry.dfReversePenalty = dfPenalized * m_dfReverseWeight;
+					stMatchEntry.dfCost += stMatchEntry.dfReversePenalty;
+				}
+			}
+		}
+		// 링크가 바뀌는 후보 — 진입/진출 노드 판정 (2026-07-21 최정우 추가 — 진입링크 역행 감지)
+		//   위 역행 페널티/의심 판정은 "같은 링크 위에서 뒤로 감"만 잡아서, 후보 링크 자체가
+		//   바뀌면(예: 링크 경계 클램프로 depth 확장돼 인접 링크가 선택되는 경우) 전혀 걸리지 않았다.
+		//   그 결과 reverse_confirm(연속역행 확정) 스트릭 판정 대상에서 완전히 빠져, 저속+GPS 노이즈만
+		//   있어도 진입 링크(직전 링크와 같은 노드로 "들어가는" 링크, 즉 진행 방향상 나올 수 없는 링크)로
+		//   단 1건만에 확정 매칭되는 문제가 있었다.
+		//   정상 전진(진출)이라면 후보의 시작 노드(qwStNodeID)가 직전 링크의 종료 노드와 같아야 한다.
+		//   대신 후보의 "종료" 노드가 직전 링크의 종료 노드와 같다면, 그 후보는 같은 노드로 들어가는
+		//   방향(진입)이라는 뜻 — 위상적으로 확실한 역행 신호이므로 heading/거리와 무관하게 표시한다.
+		//   (같은 링크 위 판정과 마찬가지로 여기서도 SKIP 이 아니라 "의심" 신호만 세팅 — reverse_confirm
+		//   만큼 연속되어야 실제 역행/유턴으로 확정되고, 1건짜리 노이즈는 이 신호만으로 SKIP·앵커 고정된다)
+		else if (stSgmtMatchInput.qwPrevEdNodeID != 0 && (stMatchEntry.qwLinkID != stSgmtMatchInput.qwPrevLinkID)
+			&& (stMatchEntry.qwStNodeID != stSgmtMatchInput.qwPrevEdNodeID)
+			&& (stMatchEntry.qwEdNodeID == stSgmtMatchInput.qwPrevEdNodeID))
+		{
+			// 위상적으로 확실한 역행이므로 의심 신호는 무조건 세팅(거리·margin 무관) — 기존과 동일.
+			//   다만 "몇 m나 역행했는지"도 same-link 케이스처럼 수치로 내기 위해, 직전 링크의
+			//   남은 거리(끝까지) + 진입링크 안쪽으로 들어간 깊이(끝→매칭점)를 이어붙인
+			//   "확장 역행거리"를 계산해 same-link 와 동일한 margin 기반 비용 페널티를 적용한다.
+			//   (링크가 달라도 두 링크 모두 같은 노드에서 만나므로 거리를 이어붙일 수 있음)
+			//   (2026-07-22 최정우 추가)
+			stMatchEntry.bReverseSuspect = true;
+
+			if (stSgmtMatchInput.dfPrevLinkLen > 0.0)
+			{
+				double dfRemainInPrev = stSgmtMatchInput.dfPrevLinkLen - stSgmtMatchInput.dfPrevLinkPos;
+				double dfPenetrateIntoCand = stMatchEntry.dfLen
+					- (static_cast<double>(stMatchEntry.wLenFromLink) + stMatchEntry.dfSgmtMatchLen);
+				double dfBackward = dfRemainInPrev + dfPenetrateIntoCand;
 
 				double dfMargin = 0.0;
 				if ((stSgmtMatchInput.nSpeed >= 0) && (stSgmtMatchInput.nSpeed < m_dfReverseSpeed))

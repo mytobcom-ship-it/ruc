@@ -96,7 +96,7 @@ def api_trips():
                        COUNT(*) AS cnt
                 FROM roadnet.prim_rawgps
                 GROUP BY trip_id, device_key
-                ORDER BY MAX(gps_dt) DESC
+                  ORDER BY MAX(gps_dt) DESC, trip_id DESC, device_key DESC
                 LIMIT %s
                 """,
                 (limit,),
@@ -137,6 +137,47 @@ def restart_mapmatch():
     return result.returncode == 0, (result.stdout + result.stderr)
 
 
+@app.route("/api/system/start-engines", methods=["POST"])
+def api_start_engines():
+    """웹 페이지 "전체기동" 버튼 — MapMatchSvr → Simulator 순서로 1초 확인 + 최대 3회
+    재시도 기동 (test_svr.sh start-mm-sim-retry 위임). 웹 자신은 이미 이 요청을 처리
+    중이므로 재기동 대상에서 제외 — 어느 단계에서 실패했는지 stdout 의 FAILED_STAGE= 를
+    파싱해 응답에 포함한다 (2026-07-21 최정우 추가)"""
+    try:
+        result = subprocess.run(
+            ["./test_svr.sh", "start-mm-sim-retry"],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        return jsonify({"ok": False, "error": "기동 스크립트 타임아웃(120s)"}), 500
+
+    output = result.stdout + result.stderr
+    failed_stage = None
+    for line in output.splitlines():
+        if line.startswith("FAILED_STAGE="):
+            failed_stage = line.split("=", 1)[1].strip()
+    ok = (result.returncode == 0) and (failed_stage is None)
+    return jsonify({
+        "ok": ok,
+        "failed_stage": failed_stage,
+        "log": output[-3000:],
+    })
+
+
+@app.route("/api/trip/<path:trip_id>/delete", methods=["POST"])
+def api_trip_delete(trip_id):
+    """선택된 Trip을 PRIM_RAWGPS 에서 완전히 삭제 — 되돌릴 수 없음. 웹 "삭제" 버튼 전용
+    (2026-07-22 최정우 추가)"""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM roadnet.prim_rawgps WHERE trip_id = %s", (trip_id,))
+            deleted = cur.rowcount
+    return jsonify({"trip_id": trip_id, "deleted": deleted})
+
+
 @app.route("/api/trip/<path:trip_id>/retest", methods=["POST"])
 def api_trip_retest(trip_id):
     """기존 수신 GPS(prim_rawgps)는 그대로 두고 매칭 결과만 초기화 — MapMatchSvr 가
@@ -164,6 +205,29 @@ def api_trip_retest(trip_id):
     return jsonify({"trip_id": trip_id, "reset": reset_count, "restarted": restarted})
 
 
+# SKIP(3)/ERROR(4) 원인 컬럼(MATCH_REASON)이 없어, 이미 저장된 값(MATCH_LINK_ID·INTERSECT_LEN·
+# ACCURACY_M)만으로 가능한 원인을 추정 표시한다. 엔진이 실제로 기록한 사유가 아니라 "근사치"이므로
+# 문구에 항상 "추정"을 붙인다 — MapMatchSvr 쪽 SKIP/ERROR 분기(RawLogWorker.cpp)와 완전히 1:1
+# 대응하지 않을 수 있음 (2026-07-21 최정우 추가)
+RADIUS_SKIP_ACCURACY_M = 50  # MapMatchSvr/bin/config.ini [mapmatch] radius_skip 기본값과 동일 가정
+
+
+def infer_match_reason(match_status, match_link_id, intersect_len, accuracy_m):
+    if match_status == 1:
+        return None
+    if match_status == 4:
+        return "매칭 실패 추정 (반경 내 후보 없음·처리 오류 등 — 로그 확인 필요)"
+    if match_status == 3:
+        if accuracy_m is not None and accuracy_m > RADIUS_SKIP_ACCURACY_M:
+            return "정확도 초과 추정 (ACCURACY_M={}m > {}m)".format(accuracy_m, RADIUS_SKIP_ACCURACY_M)
+        if match_link_id is None:
+            return "후보 없음 추정 (반경 밖·좌표 유효성 오류 등)"
+        if intersect_len is not None and intersect_len > 10:
+            return "저신뢰 매칭 추정 (세그먼트 클램프 등으로 오차 {}m)".format(intersect_len)
+        return "역행 의심 미확정 추정 (또는 이상속도 등 정합성 검사)"
+    return None
+
+
 @app.route("/api/trip/<path:trip_id>/points")
 def api_trip_points(trip_id):
     with get_conn() as conn:
@@ -175,7 +239,7 @@ def api_trip_points(trip_id):
             cur.execute(
                 """
                 SELECT g.gps_seq, g.gps_dt, g.trip_event, g.drive_status, g.match_status,
-                       g.gps_lat, g.gps_lon, g.intersect_len,
+                       g.gps_lat, g.gps_lon, g.intersect_len, g.accuracy_m,
                        g.match_link_id,
                        l.name AS match_link_name,
                        CASE
@@ -199,19 +263,23 @@ def api_trip_points(trip_id):
             )
             rows = []
             for r in cur.fetchall():
+                match_status = int(r["match_status"])
+                intersect_len = int(r["intersect_len"]) if r["intersect_len"] is not None else None
+                accuracy_m = int(r["accuracy_m"]) if r["accuracy_m"] is not None else None
                 rows.append({
                     "gps_seq": int(r["gps_seq"]),
                     "gps_dt": r["gps_dt"],
                     "trip_event": int(r["trip_event"]),
                     "drive_status": int(r["drive_status"]),
-                    "match_status": int(r["match_status"]),
+                    "match_status": match_status,
                     "gps_lat": float(r["gps_lat"]) if r["gps_lat"] is not None else None,
                     "gps_lon": float(r["gps_lon"]) if r["gps_lon"] is not None else None,
                     "match_lat": float(r["match_lat"]) if r["match_lat"] is not None else None,
                     "match_lon": float(r["match_lon"]) if r["match_lon"] is not None else None,
-                    "intersect_len": int(r["intersect_len"]) if r["intersect_len"] is not None else None,
+                    "intersect_len": intersect_len,
                     "match_link_id": r["match_link_id"],
                     "match_link_name": r["match_link_name"],
+                    "match_reason": infer_match_reason(match_status, r["match_link_id"], intersect_len, accuracy_m),
                 })
     return jsonify(rows)
 

@@ -217,6 +217,10 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 	// 역행 페널티 컨텍스트 — qwPrevLinkID 는 ContinueMapMatch::StartMapMatch 내부에서 세팅 (2026-07-20 최정우 추가)
 	stSgmtMatchInput.dfPrevLinkPos = stMapMatchInput.dfPrevLinkPos;
 	stSgmtMatchInput.bHasPrevLinkPos = stMapMatchInput.bHasPrevLinkPos;
+	// 같은 링크 노이즈 보정 기준점(직전 신뢰 매칭 좌표, WGS84) — StartMapMatch 내부에서
+	//   내부 스케일(*360000)로 변환됨 (2026-07-22 최정우 추가)
+	stSgmtMatchInput.dfPrevMatchX = stMapMatchInput.dfPrevMatchX;
+	stSgmtMatchInput.dfPrevMatchY = stMapMatchInput.dfPrevMatchY;
 
 	// 연속(링크 그래프) 맵매칭 엔진 호출 (2026-07-08 최정우 주석 추가)
 	if (!m_cContinueMapMatch.StartMapMatch(m_pcDataLoader, stSgmtMatchInput, qwLinkID, nSearchStep, &wErrorCode, &stMatchEntry, pstTraceCtx))
@@ -386,6 +390,15 @@ bool CMapMatch::SetResponseValue(uint16 wErrorCode, MATCH_ENTRY stMatchEntry,
 		pstMatchLinkInfo->bReverseHit		= (stMatchEntry.dfReversePenalty > 0.0);
 		// 위치 역행 + heading 역방향 일치(margin 무관) — 연속역행(reverse_confirm) 스트릭 판정 전용 (2026-07-21 최정우 추가)
 		pstMatchLinkInfo->bReverseSuspect	= stMatchEntry.bReverseSuspect;
+		// 최종 확정 후보가 세그먼트 끝점(꺾임점)에 스냅됐고 GPS와 거리가 먼 경우 — 여러 GPS_SEQ 가
+		//   같은 꺾임점으로 뭉개져 MATCH_LAT/LON 이 실제로는 계속 이동 중인데도 정지한 것처럼 보이는
+		//   오탐(예: 주정차 오판) 방지용. bSgmtClamped 는 GISUtil::SgmtMatch 가 세그먼트 단위로
+		//   판정한 신호라, 링크 전체 시작/끝이 아니라도(링크 중간 꺾임점) 잡힌다 — IsBoundaryClamped
+		//   (ContinueMapMatch, 링크 전체 기준)와는 다른 신호이니 혼동 주의 (2026-07-21 최정우 추가)
+		pstMatchLinkInfo->bClampLowConf = stMatchEntry.bSgmtClamped
+			&& (stMatchEntry.dfIntersectLenSgmt > MM_CLAMP_SKIP_LEN);
+		// 같은 링크 역행인데 heading 없음/애매해 노이즈 단정 불가 — SKIP 격리용 (2026-07-22 최정우 추가)
+		pstMatchLinkInfo->bAmbiguousReverse = stMatchEntry.bAmbiguousReverse;
 	}
 
 	return (wErrorCode == NO_ERROR) ? true : false;

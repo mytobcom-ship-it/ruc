@@ -20,7 +20,8 @@ SELECT
 	COALESCE(t_node, '') AS t_node,
 	COALESCE(max_spd, 0) AS max_spd,
 	ST_AsText(ST_Transform(geom, 4326)) AS wkt,
-	COALESCE(road_type, '000') AS road_type
+	COALESCE(road_type, '000') AS road_type,
+	COALESCE(f_node, '') AS f_node
 FROM network.moct_link
 WHERE geom && ST_Transform(
 		ST_MakeEnvelope($1::float8, $2::float8, $3::float8, $4::float8, 4326), $5::int)
@@ -29,18 +30,22 @@ WHERE geom && ST_Transform(
 ORDER BY random()
 LIMIT $6::int;
 
--- ── 다음 연결 링크 (from_node 출발, 직전 링크 제외) ───────────────────────
--- $1=from_node $2=exclude_link_id
+-- ── 다음 연결 링크 (from_node 출발, 직전 링크·역방향(맞은편) 링크 제외) ───
+-- $1=from_node $2=exclude_link_id $3=exclude_to_node(직전 출발 노드 — 이 노드로
+--   돌아가는 링크는 방금 지나온 도로의 반대방향(맞은편 차로)이므로 제외해
+--   차량이 곧바로 왔던 길을 되돌아가는 것을 막는다) (2026-07-22 최정우 수정)
 [moct_link_next]
 SELECT
 	link_id,
 	COALESCE(t_node, '') AS t_node,
 	COALESCE(max_spd, 0) AS max_spd,
 	ST_AsText(ST_Transform(geom, 4326)) AS wkt,
-	COALESCE(road_type, '000') AS road_type
+	COALESCE(road_type, '000') AS road_type,
+	COALESCE(f_node, '') AS f_node
 FROM network.moct_link
 WHERE f_node = $1
 	AND link_id <> $2
+	AND (t_node IS DISTINCT FROM NULLIF($3, ''))
 	AND t_node IS NOT NULL
 ORDER BY random()
 LIMIT 1;

@@ -904,20 +904,48 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 				static_cast<unsigned long long>(stMatchLinkInfo.qwLinkID));
 			nFinalStatus = MATCH_STATUS_SKIP;
 		}
+
+		// 경계 클램프 + GPS와 거리가 먼 저신뢰 매칭 — SKIP 처리. 여러 GPS_SEQ 가 같은 꺾임점으로
+		//   뭉개져 실제로는 계속 이동 중인데도 MATCH_LAT/LON 이 정지한 것처럼 보이는 오탐(예: 주정차
+		//   오판) 을 다운스트림에서 MATCHED 로 신뢰하지 않도록 함. 세션 앵커(qwLinkID 등)는 그대로
+		//   갱신 — 엔진 내부 연속 매칭 추적은 방해하지 않고, DB 저장값만 SKIP 으로 표시 (2026-07-21 최정우 추가)
+		if (bMatched && stMatchLinkInfo.bClampLowConf)
+		{
+			LOGFMTW("[#%02d] clamp low-confidence! device=[%s] trip_id=[%s] seq=[%u] "
+				"intersect_len=[%.1fm] link=[%llu] -> SKIP",
+				nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRawLogInfo.dwSeqNo,
+				stMatchLinkInfo.dfIntersectLenSgmt,
+				static_cast<unsigned long long>(stMatchLinkInfo.qwLinkID));
+			nFinalStatus = MATCH_STATUS_SKIP;
+		}
+
+		// 같은 링크 역행인데 heading 없음/각도 애매해 "확실한 노이즈"로 단정 못 하는 경우 — SKIP 처리.
+		//   좌표는 계산된 값 그대로 저장(원본 GPS 대비 위치는 정상), 신뢰도만 낮게 표시 (2026-07-22 최정우 추가)
+		if (bMatched && stMatchLinkInfo.bAmbiguousReverse)
+		{
+			LOGFMTW("[#%02d] ambiguous reverse! device=[%s] trip_id=[%s] seq=[%u] link=[%llu] -> SKIP",
+				nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRawLogInfo.dwSeqNo,
+				static_cast<unsigned long long>(stMatchLinkInfo.qwLinkID));
+			nFinalStatus = MATCH_STATUS_SKIP;
+		}
 	}
+
+	// 신뢰 못 하는 좌표(역행 미확정·클램프 저신뢰·역행 판단불가)는 다음 포인트의 HEADING/SPEED/
+	//   이상속도 검사 기준으로 쓰지 않음 (2026-07-22 최정우 수정 — 역행 판단불가 케이스 추가)
+	const bool bUntrustedMatch = bReverseSkip || stMatchLinkInfo.bClampLowConf || stMatchLinkInfo.bAmbiguousReverse;
 
 	stSession.dwLastGpsSeq = stRawLogInfo.dwSeqNo;
 	// 다음 포인트의 이상속도 검사 신뢰도 판단용 — 앵커 갱신 여부와 동일 조건 (2026-07-21 최정우 추가)
-	stSession.bLastPointOk = (bMatched && !bReverseSkip);
+	stSession.bLastPointOk = (bMatched && !bUntrustedMatch);
 
 	// ── 매칭 성공(MATCHED) 시에만 세션 앵커 갱신 — SKIP/ERROR 는 직전 성공 앵커 유지 (2026-07-10 최정우 수정) ──
 	//   · XY·시각: HEADING/SPEED 보정용 (ALTITUDE_M NULL이어도 갱신)
 	//   · 고도: ALTITUDE_M 유효 시에만 nPrevAltitude·nPrevRoadType 저장
 	//     (직전 매칭 좌표에 Z 없음 — GPS 고도를 앵커로 기억)
 	//   · 직전 고도 없이 현재만 있으면 bHasPrevAlt=false → 고도 점수 스킵
-	//   · 역행 미확정(bReverseSkip) 시에도 이 앵커는 갱신하지 않음 — 다음 포인트가 오염된 좌표를
-	//     기준으로 HEADING/SPEED 를 잘못 계산하지 않도록 (2026-07-21 최정우 추가)
-	if (bMatched && !bReverseSkip)
+	//   · 역행 미확정(bReverseSkip)·클램프 저신뢰 시에도 이 앵커는 갱신하지 않음 — 다음 포인트가
+	//     오염된 좌표를 기준으로 HEADING/SPEED 를 잘못 계산하지 않도록 (2026-07-21 최정우 수정)
+	if (bMatched && !bUntrustedMatch)
 	{
 		stSession.dfLastMatchX = stMatchLinkInfo.dfMatchX;
 		stSession.dfLastMatchY = stMatchLinkInfo.dfMatchY;
@@ -1074,6 +1102,10 @@ bool CRawLogWorker::RunMapMatch(int nThreadId, const sRawLogInfo& stRawLogInfo,
 	{
 		stAltCtx.dfPrevLinkPos = pstSession->dfLastMatchLinkPos;
 		stAltCtx.bHasPrevLinkPos = true;
+		// 같은 링크 노이즈 보정(1m 전진) 시, 이번 후보 자신의 계산값이 아니라 마지막으로
+		//   신뢰했던 실제 매칭 좌표를 기준점으로 삼기 위해 함께 전달 (2026-07-22 최정우 추가)
+		stAltCtx.dfPrevMatchX = pstSession->dfLastMatchX;
+		stAltCtx.dfPrevMatchY = pstSession->dfLastMatchY;
 	}
 
 	// 연속 맵매칭 링크는 "맵매칭 성공(반경 내 MATCHED)" 시에만 세션에 반영한다.

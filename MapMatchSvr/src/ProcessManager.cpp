@@ -214,6 +214,9 @@ void CProcessManager::BuildMapMatchInput(const sRawLogInfo& stRawLogInfo,
 	{
 		pstMapMatchInput->dfPrevLinkPos = pstAltCtx->dfPrevLinkPos;
 		pstMapMatchInput->bHasPrevLinkPos = true;
+		// 같은 링크 노이즈 보정 기준점(직전 신뢰 매칭 좌표) 함께 전달 (2026-07-22 최정우 추가)
+		pstMapMatchInput->dfPrevMatchX = pstAltCtx->dfPrevMatchX;
+		pstMapMatchInput->dfPrevMatchY = pstAltCtx->dfPrevMatchY;
 	}
 }
 

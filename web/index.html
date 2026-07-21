@@ -50,6 +50,17 @@
     .leaflet-dragging .leaflet-interactive {
       cursor: default !important;
     }
+    /* Trip id 콤보박스 우클릭 → 복사하기 커스텀 메뉴 (2026-07-21 최정우 추가) */
+    #ctxMenu {
+      display: none; position: fixed; z-index: 2000;
+      background: #fff; border: 1px solid #cbd5e1; border-radius: 4px;
+      box-shadow: 0 2px 8px rgba(0,0,0,.2); font-size: 13px; min-width: 100px;
+      overflow: hidden;
+    }
+    #ctxMenu .ctx-item {
+      padding: 6px 12px; cursor: default; color: #1e293b;
+    }
+    #ctxMenu .ctx-item:hover { background: #e2e8f0; }
   </style>
 </head>
 <body>
@@ -58,6 +69,7 @@
       <select id="tripSelect"><option value="">로딩…</option></select>
     </label>
     <button id="btnReload" type="button">새로고침</button>
+    <button id="btnRetest" type="button" title="선택된 Trip의 기존 수신 GPS로 맵매칭 재테스트">재테스트</button>
     <label><input type="checkbox" id="chkPoll" checked /> 자동 갱신</label>
     <label><input type="checkbox" id="chkFollow" checked /> 최신 Trip</label>
     <span id="status" style="font-size:12px;color:#64748b;"></span>
@@ -66,6 +78,7 @@
   <div id="legend">
     <div><span class="line" style="background:#1e3a8a;"></span>주변 도로 (prim_link_info · PSF)</div>
     <div style="padding-left:14px;color:#64748b;">▶ f_node → t_node 진행방향 (줌 14+)</div>
+    <div style="padding-left:14px;color:#64748b;">도로 마우스오버 → 시설물(교량/터널/고가/지하차도) 표시</div>
     <div><span class="dot" style="background:#e53935;"></span>GPS 원시 <span style="color:#64748b;">(G순번)</span></div>
     <div><span class="dot" style="background:#1e88e5;"></span>맵매칭 성공 <span style="color:#64748b;">(M순번)</span></div>
     <div><span class="dot" style="background:#fb8c00;"></span>SKIP <span style="color:#64748b;">(M순번)</span></div>
@@ -73,7 +86,8 @@
     <div><span class="line" style="background:#94a3b8;height:0;border-top:2px dashed #94a3b8;"></span>GPS↔세그먼트 교차 <span style="color:#64748b;">(intersect_len)</span></div>
     <div><span class="line" style="background:#e53935;height:0;border-top:2px dashed #e53935;"></span>GPS 궤적(순서 연결)</div>
   </div>
+  <div id="ctxMenu"><div class="ctx-item" id="ctxCopy">복사하기</div></div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="/app.js?v=20260715arrowdir"></script>
+  <script src="/app.js?v=20260721retestcfg"></script>
 </body>
 </html>

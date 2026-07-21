@@ -39,7 +39,6 @@ typedef struct sConfig
 	string							strRawLogSelectSession;				// GPS 로그 조회·예약 SQL
 	string							strRawLogUpdateSession;				// GPS 로그 갱신 SQL
 	string							strChargeInsertSession;				// 과금 INSERT SQL (#10 보류, 비어 있으면 비활성)
-	string							strRawLogSkipSession;				// 역행(dip) 실시간 판정 재정정 UPDATE SQL (선택) (2026-07-20 최정우 추가)
 
 	// 피더 (DB poll)
 	int								nFetchLimit;						// 1회 조회·예약 최대 건수 (건)
@@ -70,16 +69,16 @@ typedef struct sConfig
 	int								nDistance;							// distance
 	int								nMatchTimeout;						// timeout
 
-	int								nAltitudeGap;						// altitude_gap
-	int								nAltitudeBonus;						// altitude_bonus
-	int								nAltitudePenalty;					// altitude_penalty
-	double							dfAltitudeWeight;					// altitude_weight
-	double							dfAltitudeSlope;					// altitude_slope
-	double							dfReversePenaltyWeight;				// reverse_penalty_weight (2026-07-20 최정우 추가)
-	double							dfReverseSpeedGateKmh;				// reverse_speed_gate_kmh (2026-07-20 최정우 추가)
-	double							dfReverseDeadZoneM;					// reverse_dead_zone_m (2026-07-20 최정우 추가)
-	double							dfSpeedDiffFactor;					// speed_diff_factor (2026-07-20 최정우 추가)
-	int								nSpeedDiffMargin;					// speed_diff_margin (km/h) (2026-07-20 최정우 추가)
+	int								nAltGap;							// alt_gap
+	int								nAltPenalty;						// alt_penalty (양수=페널티·음수=보너스)
+	double							dfAltWeight;						// alt_weight
+	double							dfAltSlope;							// alt_slope
+	double							dfReverseWeight;				// reverse_weight (2026-07-20 최정우 추가)
+	double							dfReverseSpeed;				// reverse_speed (2026-07-20 최정우 추가)
+	double							dfReverseMargin;					// reverse_margin (2026-07-20 최정우 추가)
+	int								nReverseConfirm;					// reverse_confirm — 연속 역행 확정 포인트 수 (2026-07-21 최정우 추가)
+	double							dfSpeedFactor;					// speed_factor (2026-07-20 최정우 추가)
+	int								nSpeedMargin;					// speed_margin (km/h) (2026-07-20 최정우 추가)
 } CONFIG, *PCONFIG;
 
 #define CONFIG_SIZE												sizeof(CONFIG)

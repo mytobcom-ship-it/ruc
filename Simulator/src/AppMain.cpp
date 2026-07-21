@@ -129,6 +129,11 @@ static bool LoadConfig(const string& strFile, SIM_CONFIG& stConfig, int& nLogLev
 	stConfig.dfSpeedFactorMax = GetProfileDouble(cIni, "speed", "factor_max", 1.0);
 	stConfig.dfDefaultMaxSpd = GetProfileDouble(cIni, "speed", "default_max_kmh", 50.0);
 
+	// [deadzone] — 터널·지하차도 GPS 신호 두절 시뮬레이션 (2026-07-21 최정우 추가)
+	stConfig.dfDeadZoneProb = GetProfileDouble(cIni, "deadzone", "drop_prob", 0.9);
+	if (stConfig.dfDeadZoneProb < 0.0) stConfig.dfDeadZoneProb = 0.0;
+	if (stConfig.dfDeadZoneProb > 1.0) stConfig.dfDeadZoneProb = 1.0;
+
 	return true;
 }
 

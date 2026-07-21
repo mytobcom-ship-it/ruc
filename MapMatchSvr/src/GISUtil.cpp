@@ -438,11 +438,11 @@ bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtIn
 	//     · 예) 거리 10m·각도차 40° → 10 + 1.0×40 = 50
 	//            거리 30m·각도차  5° → 30 + 1.0×5 = 35  ⇒ 더 작은 35(방향 맞는 도로) 선택
 	//   ※ 방위각 차이가 120°를 넘는 후보는 아예 제외(역방향 오매칭 방지)
-	//   ※ 방위각 비용은 MM_DIR_MAX_PENALTY_M(15m)로 상한 — 근접 후보가 방위각 때문에 훨씬 먼
+	//   ※ 방위각 비용은 MM_DIR_MAX_PENALTY(15m)로 상한 — 근접 후보가 방위각 때문에 훨씬 먼
 	//     후보에게 역전당하지 않도록 함(2026-07-18 최정우 추가). 예) 거리 5m·각도차 100° →
 	//     5 + min(100, 15) = 20 vs 거리 40m·각도차 5° → 40 + 5 = 45 ⇒ 더 가까운 20(5m) 선택
 	//
-	//   [변수 매핑] dfCost = dfIntersectLenSgmt + min(dfDirWeight*|nHeadingDiff|, MM_DIR_MAX_PENALTY_M),
+	//   [변수 매핑] dfCost = dfIntersectLenSgmt + min(dfDirWeight*|nHeadingDiff|, MM_DIR_MAX_PENALTY),
 	//              nHeadingDiff = GetAngleDiff(세그먼트 방위각, 차량 방위각),
 	//              dfDirWeight  = 속도(nSpeed)로 0~MM_DIR_WEIGHT 사이 결정
 	// ────────────────────────────────────────────────────────────────────────────
@@ -457,7 +457,7 @@ bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtIn
 				/ static_cast<double>(MM_SPEED_HIGH_KMH - MM_SPEED_LOW_KMH);
 	}
 	double dfAnglePenalty = bHasHeading
-		? std::min(dfDirWeight * fabs(static_cast<double>(nHeadingDiff)), MM_DIR_MAX_PENALTY_M)
+		? std::min(dfDirWeight * fabs(static_cast<double>(nHeadingDiff)), MM_DIR_MAX_PENALTY)
 		: 0.0;																// 방위각 비용 상한 캡 — 근접 후보 역전 방지 (2026-07-18 최정우 추가)
 
 	pstSgmtMatchRes->stMatchPoint.dfX = stIntersect.dfX;
@@ -467,7 +467,7 @@ bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtIn
 	pstSgmtMatchRes->dfCost = dfIntersectLenSgmt + dfAnglePenalty;		// 링크 선택 기준 (2026-07-08 최정우 추가)
 	pstSgmtMatchRes->nDirAngleDiff = nDirAngleDiff;
 	pstSgmtMatchRes->qwLinkID = stSgmtInfo.qwLinkID;
-	pstSgmtMatchRes->bReverseFit = bReverseFit;
+	pstSgmtMatchRes->bReverseFit = bReverseFit;						// heading이 역방향에 더 가까움 (2026-07-21 최정우 추가)
 
 	return true;
 }
@@ -499,12 +499,12 @@ double RoadTypeDirectionPenalty(double dfDeltaAlt, uint8 nCandRoadType,
 	if (dfDeltaAlt > static_cast<double>(stAltConfig.nGap))
 	{
 		if (IsUndergroundRoad(nCandRoadType))
-			return static_cast<double>(stAltConfig.nPenalty);
+			return static_cast<double>(stAltConfig.nAltPenalty);
 	}
 	else if (dfDeltaAlt < -static_cast<double>(stAltConfig.nGap))
 	{
 		if (IsElevatedRoad(nCandRoadType))
-			return static_cast<double>(stAltConfig.nPenalty);
+			return static_cast<double>(stAltConfig.nAltPenalty);
 	}
 	return 0.0;
 }
@@ -515,31 +515,31 @@ double RoadTypeDirectionPenalty(double dfDeltaAlt, uint8 nCandRoadType,
  * @brief 연속 맵매칭 고도·ROAD_TYPE 보조 비용 (m 환산, 양수=불리·음수=유리)
  * @param[in] stSgmtMatchInput 세그먼트 매칭 입력 (고도 컨텍스트)
  * @param[in] nCandRoadType 후보 링크 ROAD_TYPE
- * @param[in] stAltConfig config altitude_* 설정
+ * @param[in] stAltConfig config alt_* 설정
  * @return 고도 보조 비용 (dfCost 가산분)
  * @remark
  * ── 쉬운 설명 (ACCURACY_M 적응 반경 주석과 동일 형식) ──
- *   전제: bUseAltScore, 직전·현재 ALTITUDE_M 유효, TUNNELING 아님, altitude_weight>0
- *   Δalt = nAltitudeM − nPrevAltitudeM  (직전 매칭 성공 시 GPS 고도 앵커)
+ *   전제: bUseAltScore, 직전·현재 ALTITUDE_M 유효, TUNNELING 아님, alt_weight>0
+ *   Δalt = nAltitudeM − nPrevAltitude  (직전 매칭 성공 시 GPS 고도 앵커)
  *
- *   |Δalt| ≤ altitude_gap:
- *     · 후보 ROAD_TYPE = 직전  → −altitude_bonus
+ *   |Δalt| ≤ alt_gap:
+ *     · 후보 ROAD_TYPE = 직전  → −alt_penalty
  *     · 호환(고가↔교량)        → 0
- *     · 불일치                 → +altitude_penalty
+ *     · 불일치                 → +alt_penalty
  *
- *   |Δalt| > altitude_gap:
- *     · altitude_weight × (|Δalt| − altitude_gap) + 방향 패널티
- *     · Δalt > +차이 이고 후보=지하 → +altitude_penalty
- *     · Δalt < −차이 이고 후보=고가/교량 → +altitude_penalty
+ *   |Δalt| > alt_gap:
+ *     · alt_weight × (|Δalt| − alt_gap) + 방향 패널티
+ *     · Δalt > +차이 이고 후보=지하 → +alt_penalty
+ *     · Δalt < −차이 이고 후보=고가/교량 → +alt_penalty
  *
- *   |Δalt|/dfHorizMoveM > altitude_slope → 0 (GPS 고도 불신, 폴백)
+ *   |Δalt|/dfHorizMove > alt_slope → 0 (GPS 고도 불신, 폴백)
  *
  *   [변수 매핑]
  *     dfAltAdj = CalcAltRoadPenalty(...)
  *     dfCost   = dfIntersectLenSgmt + dfAnglePenalty + dfAltAdj
  *
- *   예) 차이=8, 보너스=3, 페널티=10, 가중치=0.5
- *       직전100m·현재106m(Δ=6), 후보=직전과 동일 고가 → −3
+ *   예) 차이=8, alt_penalty=10, 가중치=0.5
+ *       직전100m·현재106m(Δ=6), 후보=직전과 동일 고가 → −10
  *       직전100m·현재106m(Δ=6), 후보=일반(직전 고가)   → +10
  *       직전100m·현재120m(Δ=20), 후보=지하             → 0.5×(20−8)+10 = +16
  * ────────────────────────────────────────────────────────────────────────────
@@ -549,17 +549,17 @@ double CGISUtil::CalcAltRoadPenalty(const SGMT_MATCH_INPUT& stSgmtMatchInput, ui
 {
 	if (!stSgmtMatchInput.bUseAltScore || stAltConfig.dfWeight <= 0.0)
 		return 0.0;
-	if (stSgmtMatchInput.nAltitudeM < 0 || stSgmtMatchInput.nPrevAltitudeM < 0)
+	if (stSgmtMatchInput.nAltitudeM < 0 || stSgmtMatchInput.nPrevAltitude < 0)
 		return 0.0;
 	if (stSgmtMatchInput.nDriveStatus == DRIVE_STATUS_TUNNELING)
 		return 0.0;
 
 	double dfDeltaAlt = static_cast<double>(stSgmtMatchInput.nAltitudeM)
-		- static_cast<double>(stSgmtMatchInput.nPrevAltitudeM);
+		- static_cast<double>(stSgmtMatchInput.nPrevAltitude);
 
-	if (stSgmtMatchInput.dfHorizMoveM >= MM_CALC_MIN_DIST && stAltConfig.dfSlope > 0.0)
+	if (stSgmtMatchInput.dfHorizMove >= MM_CALC_MIN_DIST && stAltConfig.dfSlope > 0.0)
 	{
-		double dfSlope = fabs(dfDeltaAlt) / stSgmtMatchInput.dfHorizMoveM;
+		double dfSlope = fabs(dfDeltaAlt) / stSgmtMatchInput.dfHorizMove;
 		if (dfSlope > stAltConfig.dfSlope)
 			return 0.0;
 	}
@@ -567,11 +567,11 @@ double CGISUtil::CalcAltRoadPenalty(const SGMT_MATCH_INPUT& stSgmtMatchInput, ui
 	if (fabs(dfDeltaAlt) <= static_cast<double>(stAltConfig.nGap))
 	{
 		if (nCandRoadType == stSgmtMatchInput.nPrevRoadType)
-			return -static_cast<double>(stAltConfig.nBonus);
+			return -static_cast<double>(stAltConfig.nAltPenalty);
 		// 직전·후보 ROAD_TYPE 호환성(고가↔교량 등) 판정 (2026-07-08 최정우 주석 추가)
 		if (IsRoadTypeCompatible(nCandRoadType, stSgmtMatchInput.nPrevRoadType))
 			return 0.0;
-		return static_cast<double>(stAltConfig.nPenalty);
+		return static_cast<double>(stAltConfig.nAltPenalty);
 	}
 
 	// Δalt 방향·ROAD_TYPE 불일치 추가 패널티 산출 (2026-07-08 최정우 주석 추가)

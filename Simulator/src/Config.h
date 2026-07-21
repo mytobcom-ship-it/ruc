@@ -63,6 +63,9 @@ typedef struct sConfig
 	double		dfSpeedFactorMax;	// 제한속도 대비 최대 비율
 	double		dfDefaultMaxSpd;	// 제한속도 없을 때 기본값 (km/h)
 
+	// [deadzone] GPS 음영구간(터널·지하차도) — 신호 두절 시뮬레이션 (2026-07-21 최정우 추가)
+	double		dfDeadZoneProb;		// 터널(002)·지하(004) 구간 tick 당 표본 미생성(신호 두절) 확률 (0~1)
+
 	sConfig() :
 		nLogLevel(2), nDBPort(5432), nVehicles(10), nFlushSec(3),
 		nReportSec(30), nMaxSamples(0), dfIdleProb(0.05),
@@ -71,7 +74,8 @@ typedef struct sConfig
 		nRouteMinM(2000), nRouteMaxLinks(20), nSeedCandidates(20),
 		dfNoiseSigmaM(4.0), dfNoiseMaxM(20.0),
 		dfOutlierProb(0.03), dfOutlierMinM(25.0), dfOutlierMaxM(80.0),
-		dfSpeedFactorMin(0.5), dfSpeedFactorMax(1.0), dfDefaultMaxSpd(50.0)
+		dfSpeedFactorMin(0.5), dfSpeedFactorMax(1.0), dfDefaultMaxSpd(50.0),
+		dfDeadZoneProb(0.9)
 	{}
 } SIM_CONFIG, *PSIM_CONFIG;
 

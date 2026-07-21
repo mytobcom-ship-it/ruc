@@ -14,6 +14,7 @@ RUC 맵매칭 테스트 통합 제어
   $0 ps        맵매칭 / 시뮬 / 웹 뷰어 상태 확인
   $0 stop      웹 뷰어 → 시뮬 → 맵매칭 종료
   $0 restart   종료 후 재기동
+  $0 mm-restart  맵매칭(MapMatchSvr)만 재시작 — config.ini 값 변경 반영 (시뮬·웹 뷰어는 유지)
 
 별칭: status (= ps)
 
@@ -30,6 +31,7 @@ main() {
 		start)   test_start_all || rc=1 ;;
 		stop)    test_stop_all || rc=1 ;;
 		restart) test_restart_all || rc=1 ;;
+		mm-restart) test_restart_mm || rc=1 ;;
 		ps|status) test_ps_all ;;
 		-h|--help|help) usage ;;
 		*)

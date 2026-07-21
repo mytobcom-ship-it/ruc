@@ -31,22 +31,13 @@ typedef struct sVehicleTripSession
 	double							dfLastMatchY;						// 직전 매칭 성공 Y(위도, WGS84) (2026-07-08 최정우 추가)
 	time_t							dtLastMatchGps;						// 직전 매칭 성공 GPS 수신시각 — 속도 계산용 (2026-07-08 최정우 추가)
 	bool							bHasLastMatch;						// 직전 매칭 좌표 보유 여부 (2026-07-08 최정우 추가)
-	sint16							nPrevAltitudeM;						// 직전 매칭 성공 GPS 고도(m) — 연속 고도 앵커. NO_ALTITUDE=없음
+	sint16							nPrevAltitude;						// 직전 매칭 성공 GPS 고도(m) — 연속 고도 앵커. NO_ALTITUDE=없음
 	uint8							nPrevRoadType;						// 직전 성공 링크 ROAD_TYPE (고가/지하/교량 등)
 	bool							bHasPrevAlt;						// 직전 고도 앵커 보유 — true일 때만 연속 맵매칭 고도 점수 적용
-	double							dfLastMatchLinkPos;					// 직전(N-1) 매칭 위치 — 링크 시작점부터 거리(m), 역행 페널티용 (2026-07-20 최정우 추가)
+	double							dfLastMatchLinkPos;					// 직전 매칭 위치 — 링크 시작점부터 거리(m), 역행 페널티용 (2026-07-20 최정우 추가)
 	bool							bHasPrevLinkPos;					// dfLastMatchLinkPos 보유 여부 (2026-07-20 최정우 추가)
-	uint32							dwLastMatchGpsSeq;					// 직전(N-1) 매칭 성공 GPS_SEQ — 역행 dip 재정정 UPDATE 타겟팅용 (2026-07-20 최정우 추가)
-	float							fLastMatchSpeedKmh;					// 직전(N-1) 매칭 성공 SPEED_KMH. 음수=NULL (2026-07-20 최정우 추가)
-
-	// 역행(dip) 실시간 판정용 — 직전(N-1) 이전, 즉 N-2 매칭 성공 앵커 (2026-07-20 최정우 추가)
-	//   배치 경계(작은 배치로 자주 끊기는 실시간 스트리밍)를 넘어서도 3점(N-2,N-1,N) 비교가 가능하도록
-	//   세션에 최근 2건을 고정 슬롯으로 보관 — vector 대신 고정 필드 2세트 (개수가 2로 고정이라 가변 컨테이너 불필요)
-	uint64							qwPriorLinkID;						// N-2 매칭 성공 링크 ID
-	double							dfPriorMatchLinkPos;				// N-2 매칭 성공 링크상 위치(m)
-	uint32							dwPriorMatchGpsSeq;					// N-2 매칭 성공 GPS_SEQ
-	float							fPriorMatchSpeedKmh;				// N-2 매칭 성공 SPEED_KMH. 음수=NULL
-	bool							bHasPriorMatch;						// 위 N-2 앵커 보유 여부
+	int								nReverseStreak;						// 연속 역행(bReverseHit) 포인트 수 — reverse_confirm 미만이면 SKIP·앵커 고정 (2026-07-21 최정우 추가)
+	bool							bLastPointOk;						// 직전 처리 포인트가 정상 매칭(앵커 갱신)이었는지 — false 면 이상속도 검사 신뢰 못함 (2026-07-21 최정우 추가)
 
 	char							szTripId[60+1];						// 현재 세션의 TRIP_ID — 신규 trip 감지(END/START 누락 대비) (2026-07-08 최정우 추가)
 
@@ -59,18 +50,13 @@ typedef struct sVehicleTripSession
 		dfLastMatchY(0.0),									// (2026-07-08 최정우 추가)
 		dtLastMatchGps(0),									// (2026-07-08 최정우 추가)
 		bHasLastMatch(false),								// (2026-07-08 최정우 추가)
-		nPrevAltitudeM(NO_ALTITUDE),
+		nPrevAltitude(NO_ALTITUDE),
 		nPrevRoadType(ROAD_TYPE_NORMAL),
 		bHasPrevAlt(false),
 		dfLastMatchLinkPos(0.0),							// (2026-07-20 최정우 추가)
 		bHasPrevLinkPos(false),								// (2026-07-20 최정우 추가)
-		dwLastMatchGpsSeq(0),								// (2026-07-20 최정우 추가)
-		fLastMatchSpeedKmh(-1.0f),							// (2026-07-20 최정우 추가)
-		qwPriorLinkID(0),									// (2026-07-20 최정우 추가)
-		dfPriorMatchLinkPos(0.0),							// (2026-07-20 최정우 추가)
-		dwPriorMatchGpsSeq(0),								// (2026-07-20 최정우 추가)
-		fPriorMatchSpeedKmh(-1.0f),							// (2026-07-20 최정우 추가)
-		bHasPriorMatch(false)								// (2026-07-20 최정우 추가)
+		nReverseStreak(0),									// (2026-07-21 최정우 추가)
+		bLastPointOk(true)									// (2026-07-21 최정우 추가)
 	{
 		szTripId[0] = '\0';									// (2026-07-08 최정우 추가)
 	}
@@ -92,20 +78,7 @@ typedef struct sRawLogUpdateRow
 	string							strMatchLat;
 	string							strMatchLon;
 	string							strMatchLinkId;						// 맵매칭 링크 ID (MATCH_LINK_ID) (2026-07-15 최정우 추가)
-	string							strReverseFit;						// 역방향 핏 채택 여부 (REVERSE_FIT) — 역주행 의심 신호 (2026-07-18 최정우 추가)
 } RAW_LOG_UPDATE_ROW, *PRAW_LOG_UPDATE_ROW;
-
-/**
- * @struct sRetroSkipTarget
- * @brief 역행(dip) 실시간 판정으로 SKIP 재정정이 필요한 이미 적재된 행 (2026-07-20 최정우 추가)
- * @remark 배치 경계를 넘어 N-2/N-1/N 을 비교하다 보니, N-1 은 이미 이전 배치에서 bulk UPDATE 로
- *   적재 완료된 상태일 수 있다 — 그래서 벡터 값을 고치는 게 아니라 별도 단건 UPDATE 로 정정한다.
-*/
-typedef struct sRetroSkipTarget
-{
-	string							strTripId;
-	string							strGpsSeq;
-} RETRO_SKIP_TARGET;
 
 /**
  * @struct sRawLogWorkerConfig
@@ -116,7 +89,6 @@ typedef struct sRawLogWorkerConfig
 	CPostgrePool					*pcPostgrePool;
 	CProcessManager					*pcProcessManager;
 	string							strUpdateSQL;						// [rawgps_update] 완료(1/3/4) 및 release(0) 공용
-	string							strSkipSQL;							// [rawgps_skip] 역행(dip) 실시간 판정 — 이미 적재된 이전 점 단건 재정정 (2026-07-20 최정우 추가)
 	string							strChargeInsertSQL;						// [charge_insert] #10 보류 — 재설계 후 INSERT
 	int								nWorkerThreads;
 	int								nTtlSec;							// trip_id 세션 유지 시간 (초, 0=비활성)
@@ -126,10 +98,11 @@ typedef struct sRawLogWorkerConfig
 	int								nConnRetryWait;						// [database] conn_retry_wait — 재시도 사이 대기 (ms, 2026-07-10 최정우 추가)
 	int								nRadiusSkip;						// config radius_skip — ACCURACY_M 초과 시 SKIP (m). 0=비활성 (2026-07-08 최정우)
 	int								nHeadingMaxDist;					// (단위: m) 연속매칭 heading 계산 이동거리 상한. 초과 시 heading 미사용, 0=비활성 ([mapmatch] distance) (2026-07-15 최정우 추가)
-	double							dfSpeedDiffFactor;					// config speed_diff_factor — 이동거리 환산속도/SPEED_KMH 배율 상한. 0=비활성 (2026-07-20 최정우 추가)
-	int								nSpeedDiffMargin;					// config speed_diff_margin (km/h) — 노이즈 허용 여유분 (2026-07-20 최정우 추가)
-	double							dfReverseDeadZoneM;					// config reverse_dead_zone_m — 역행(dip) 실시간 판정 임계(m) (2026-07-20 최정우 추가)
-	double							dfReverseSpeedGateKmh;				// config reverse_speed_gate_kmh — 이 속도 미만이면 역행 dip 판정 제외 (2026-07-20 최정우 추가)
+	double							dfSpeedFactor;					// config speed_factor — 이동거리 환산속도/SPEED_KMH 배율 상한. 0=비활성 (2026-07-20 최정우 추가)
+	int								nSpeedMargin;					// config speed_margin (km/h) — 노이즈 허용 여유분 (2026-07-20 최정우 추가)
+	double							dfReverseMargin;					// config reverse_margin — 저속 시 역행 허용거리(m) (2026-07-20 최정우 추가)
+	double							dfReverseSpeed;				// config reverse_speed — 이 속도 미만이면 데드존 적용 (2026-07-20 최정우 추가)
+	int								nReverseConfirm;					// config reverse_confirm — 연속 역행 확정 포인트 수 (2026-07-21 최정우 추가)
 	// int								nRadiusSkipM;						// (구) config radius_skip_m (2026-07-08 최정우)
 	// int								nAccuracySkip;						// (구) config accuracy_skip (2026-07-08 최정우)
 } RAWLOG_WORKER_CONFIG, *PRAWLOG_WORKER_CONFIG;
@@ -156,18 +129,14 @@ public:
 
 private:
 	// pstSession: 배치 임시 세션(in-memory). bulk 성공 후에만 m_vtTripSessions 에 반영
-	// pvtRetroSkip: 역행(dip) 실시간 판정으로 이미 적재된 N-1 행에 대한 재정정 대상 누적 (2026-07-20 최정우 추가)
 	bool ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo,
-		vector<RAW_LOG_UPDATE_ROW> *pvtUpdates, VEHICLE_TRIP_SESSION *pstSession, bool *pbTripEnded,
-		vector<RETRO_SKIP_TARGET> *pvtRetroSkip);
+		vector<RAW_LOG_UPDATE_ROW> *pvtUpdates, VEHICLE_TRIP_SESSION *pstSession, bool *pbTripEnded);
 	bool RunMapMatch(int nThreadId, const sRawLogInfo& stRawLogInfo, VEHICLE_TRIP_SESSION *pstSession,
-		MATCH_LINK_INFO *pstMatchLinkInfo, vector<RETRO_SKIP_TARGET> *pvtRetroSkip);
+		MATCH_LINK_INFO *pstMatchLinkInfo);
 	static bool AppendUpdateRow(vector<RAW_LOG_UPDATE_ROW> *pvtUpdates,
-		const sRawLogInfo& stRawLogInfo, sint16 nStatus, int nIntersectLenM = -1,
+		const sRawLogInfo& stRawLogInfo, sint16 nStatus, int nIntersectLen = -1,
 		const double *pdfMatchLat = nullptr, const double *pdfMatchLon = nullptr,
-		uint64 qwMatchLinkId = 0, const bool *pbReverseFit = nullptr);
-	// 역행(dip) 실시간 판정 — 이미 적재된 N-1 행 1건을 MATCHED→SKIP 으로 재정정 (2026-07-20 최정우 추가)
-	bool RetroactiveSkip(PGconn *pcConn, const RETRO_SKIP_TARGET& stTarget);
+		uint64 qwMatchLinkId = 0);
 	bool BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDATE_ROW>& vtUpdates);
 	// bulk update 실패 시 동일 rawgps_update 로 PROCESSING(2)→PENDING(0) 예약 해제
 	bool BulkReleaseRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDATE_ROW>& vtUpdates);
@@ -194,7 +163,7 @@ private:
 	// 하버사인: WGS84 경위도(도) 두 점 사이 지표거리(m) (2026-07-08 최정우 추가)
 	static double HaversineMeters(const POINT& stA, const POINT& stB);
 	// INTERSECT_LEN: GPS↔세그먼트 교차점(MATCH_LAT/LON) 하버사인 거리(m) 반올림
-	static int CalcIntersectLenM(const sRawLogInfo& stRawLogInfo, double dfMatchLon, double dfMatchLat);
+	static int CalcIntersectLen(const sRawLogInfo& stRawLogInfo, double dfMatchLon, double dfMatchLat);
 
 private:
 	RAWLOG_WORKER_CONFIG				m_stConfig;

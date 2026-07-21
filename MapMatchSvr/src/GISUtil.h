@@ -41,10 +41,10 @@ typedef struct sSgmtMatchInput
 	sint16							nSpeed;								// 순간속도(km/h, -1:없음) — 방위각 가중치 적응용 (2026-07-08 최정우 추가)
 	// 연속 맵매칭 고도(ALTITUDE_M) — Begin 미사용, bUseAltScore=true 일 때만 CalcAltRoadPenalty 적용
 	sint16							nAltitudeM;							// 현재 GPS 고도(m). NO_ALTITUDE=없음
-	sint16							nPrevAltitudeM;						// 직전 매칭 GPS 고도(m). NO_ALTITUDE=없음
+	sint16							nPrevAltitude;						// 직전 매칭 GPS 고도(m). NO_ALTITUDE=없음
 	uint8							nPrevRoadType;						// 직전 성공 링크 ROAD_TYPE
 	sint16							nDriveStatus;						// DRIVE_STATUS (터널 시 고도 무시)
-	double							dfHorizMoveM;						// 직전 매칭점→현재 GPS 수평거리(m)
+	double							dfHorizMove;						// 직전 매칭점→현재 GPS 수평거리(m)
 	bool							bUseAltScore;						// 연속 맵매칭 고도 보조 점수 적용 여부
 	// 직전 매칭 위치(같은 링크 내 역행 억제) — ContinueMapMatch::StartMapMatch 가 qwPrevLinkID 세팅,
 	//   dfPrevLinkPos/bHasPrevLinkPos 는 호출측(MapMatch)이 세션에서 전달 (2026-07-20 최정우 추가)
@@ -58,10 +58,10 @@ typedef struct sSgmtMatchInput
 		nRoadRank(0),
 		nSpeed(NO_SPEED),
 		nAltitudeM(NO_ALTITUDE),
-		nPrevAltitudeM(NO_ALTITUDE),
+		nPrevAltitude(NO_ALTITUDE),
 		nPrevRoadType(ROAD_TYPE_NORMAL),
 		nDriveStatus(0),
-		dfHorizMoveM(0.0),
+		dfHorizMove(0.0),
 		bUseAltScore(false),
 		qwPrevLinkID(0),
 		dfPrevLinkPos(0.0),
@@ -126,7 +126,7 @@ typedef struct sSgmtMatchRes
 	double							dfCost;								// 소프트 비용 = INTERSECT_LEN(m) + w_a·|방위각차| (2026-07-08 최정우 추가)
 	sint16							nDirAngleDiff;						// 주행방향 각도 차이
 	uint64							qwLinkID;							// 링크 ID
-	bool							bReverseFit;						// 세그먼트 역방향(T→F+180°)이 정방향보다 더 잘 맞아 채택됨 — 역주행 의심 신호 (2026-07-18 최정우 추가)
+	bool							bReverseFit;						// heading 이 세그먼트 정방향보다 역방향에 더 가까움 (2026-07-21 최정우 추가)
 
 	sSgmtMatchRes() :
 		dfSgmtMatchLen(0.0),

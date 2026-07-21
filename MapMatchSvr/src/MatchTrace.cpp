@@ -83,7 +83,7 @@ void CMatchTrace::LogResult(const MATCH_TRACE_CTX *pstCtx, const SGMT_MATCH_INPU
 	char szAlt[8];
 	char szPrevAlt[8];
 	AltValue(szAlt, sizeof(szAlt), pstCtx->nAltitudeM);
-	AltValue(szPrevAlt, sizeof(szPrevAlt), pstCtx->nPrevAltitudeM);
+	AltValue(szPrevAlt, sizeof(szPrevAlt), pstCtx->nPrevAltitude);
 
 	LOGFMTD("[#%02d] match trace device=[%s] trip_id=[%s] seq=[%u] mode=[%s] prev_link=[%llu] step=[%d]",
 		pstCtx->nThreadId, pstCtx->szDeviceKey, pstCtx->szTripId, pstCtx->dwSeqNo,
@@ -114,11 +114,12 @@ void CMatchTrace::LogResult(const MATCH_TRACE_CTX *pstCtx, const SGMT_MATCH_INPU
 			&& it->dfIntersectLenSgmt == stWinner.dfIntersectLenSgmt);
 
 		LOGFMTD("[#%02d] match cand   seq=[%u] rank=[%d] %s link=[%llu] cost=[%.1f] intersect_len=[%.1f] "
-			"angle_cost=[%.1f] alt_adj=[%+.1f] road=[%03u] rank_road=[%03u] formula=[%s]",
+			"angle_cost=[%.1f] alt_adj=[%+.1f] road=[%03u] rank_road=[%03u] suspect=[%d] formula=[%s]",
 			pstCtx->nThreadId, pstCtx->dwSeqNo, nRank + 1, bSelect ? "SELECT" : "      ",
 			static_cast<unsigned long long>(it->qwLinkID), it->dfCost,
 			it->dfIntersectLenSgmt, it->dfAngleCost, it->dfAltAdj,
 			static_cast<unsigned>(it->nRoadType), static_cast<unsigned>(it->nRoadRank),
+			it->bReverseSuspect ? 1 : 0,
 			szFormula);
 	}
 

@@ -168,9 +168,6 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	// [sql] charge_insert (선택) (2026-07-11 최정우 주석 추가)
 	cIniReader.GetProfileStr("sql", "charge_insert", "", pstConfig->strChargeInsertSession);
 
-	// [sql] rawlog_skip (선택) — 역행(dip) 실시간 판정 재정정 UPDATE (2026-07-20 최정우 추가)
-	cIniReader.GetProfileStr("sql", "rawlog_skip", "", pstConfig->strRawLogSkipSession);
-
 	// [feeder] (2026-07-11 최정우 주석 추가)
 	// [feeder] limit (단위: 건수) (2026-07-11 최정우 주석 추가)
 	cIniReader.GetProfileInt("feeder", "limit", CFG_DEF_LIMIT, pstConfig->nFetchLimit);
@@ -269,50 +266,49 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	if (pstConfig->nRadiusSkip < 0)
 		pstConfig->nRadiusSkip = CFG_DEF_RADIUS_SKIP;
 
-	// [mapmatch] altitude_gap (단위: m) (2026-07-11 최정우 주석 추가)
-	cIniReader.GetProfileInt("mapmatch", "altitude_gap", CFG_DEF_ALT_GAP, pstConfig->nAltitudeGap);
-	// [mapmatch] altitude_bonus (단위: m) (2026-07-11 최정우 주석 추가)
-	cIniReader.GetProfileInt("mapmatch", "altitude_bonus", CFG_DEF_ALT_BONUS, pstConfig->nAltitudeBonus);
-	// [mapmatch] altitude_penalty (단위: m) (2026-07-11 최정우 주석 추가)
-	cIniReader.GetProfileInt("mapmatch", "altitude_penalty", CFG_DEF_ALT_PENALTY, pstConfig->nAltitudePenalty);
+	// [mapmatch] alt_gap (단위: m) (2026-07-21 최정우 수정 — altitude_gap 이름 변경)
+	cIniReader.GetProfileInt("mapmatch", "alt_gap", CFG_DEF_ALT_GAP, pstConfig->nAltGap);
+	// [mapmatch] alt_penalty (양수=페널티·음수=보너스) (2026-07-21 최정우 수정 — altitude_bonus/altitude_penalty 통합)
+	cIniReader.GetProfileInt("mapmatch", "alt_penalty", CFG_DEF_ALT_PENALTY, pstConfig->nAltPenalty);
 
-	// [mapmatch] altitude_weight (2026-07-11 최정우 주석 추가)
-	cIniReader.GetProfileDouble("mapmatch", "altitude_weight", CFG_DEF_ALT_WEIGHT, pstConfig->dfAltitudeWeight);
-	if (pstConfig->dfAltitudeWeight < 0.0)
-		pstConfig->dfAltitudeWeight = CFG_DEF_ALT_WEIGHT;
+	// [mapmatch] alt_weight (2026-07-21 최정우 수정 — altitude_weight 이름 변경)
+	cIniReader.GetProfileDouble("mapmatch", "alt_weight", CFG_DEF_ALT_WEIGHT, pstConfig->dfAltWeight);
+	if (pstConfig->dfAltWeight < 0.0)
+		pstConfig->dfAltWeight = CFG_DEF_ALT_WEIGHT;
 
-	// [mapmatch] altitude_slope (2026-07-11 최정우 주석 추가)
-	cIniReader.GetProfileDouble("mapmatch", "altitude_slope", CFG_DEF_ALT_SLOPE, pstConfig->dfAltitudeSlope);
-	if (pstConfig->dfAltitudeSlope < 0.0)
-		pstConfig->dfAltitudeSlope = CFG_DEF_ALT_SLOPE;
+	// [mapmatch] alt_slope (2026-07-21 최정우 수정 — altitude_slope 이름 변경)
+	cIniReader.GetProfileDouble("mapmatch", "alt_slope", CFG_DEF_ALT_SLOPE, pstConfig->dfAltSlope);
+	if (pstConfig->dfAltSlope < 0.0)
+		pstConfig->dfAltSlope = CFG_DEF_ALT_SLOPE;
 
-	// [mapmatch] reverse_penalty_weight — 직전 매칭 위치보다 역행하는 후보 1m당 비용 가중 (2026-07-20 최정우 추가)
-	cIniReader.GetProfileDouble("mapmatch", "reverse_penalty_weight", CFG_DEF_REVERSE_PENALTY_WEIGHT, pstConfig->dfReversePenaltyWeight);
-	if (pstConfig->dfReversePenaltyWeight < 0.0)
-		pstConfig->dfReversePenaltyWeight = CFG_DEF_REVERSE_PENALTY_WEIGHT;
+	// [mapmatch] reverse_weight — 직전 매칭 위치보다 역행하는 후보 1m당 비용 가중 (2026-07-20 최정우 추가)
+	cIniReader.GetProfileDouble("mapmatch", "reverse_weight", CFG_DEF_REVERSE_WEIGHT, pstConfig->dfReverseWeight);
+	if (pstConfig->dfReverseWeight < 0.0)
+		pstConfig->dfReverseWeight = CFG_DEF_REVERSE_WEIGHT;
 
-	// [mapmatch] reverse_speed_gate_kmh/reverse_dead_zone_m — 저속 역행 데드존 (2026-07-20 최정우 추가)
-	cIniReader.GetProfileDouble("mapmatch", "reverse_speed_gate_kmh", CFG_DEF_REVERSE_SPEED_GATE, pstConfig->dfReverseSpeedGateKmh);
-	if (pstConfig->dfReverseSpeedGateKmh < 0.0)
-		pstConfig->dfReverseSpeedGateKmh = CFG_DEF_REVERSE_SPEED_GATE;
-	cIniReader.GetProfileDouble("mapmatch", "reverse_dead_zone_m", CFG_DEF_REVERSE_DEAD_ZONE, pstConfig->dfReverseDeadZoneM);
-	if (pstConfig->dfReverseDeadZoneM < 0.0)
-		pstConfig->dfReverseDeadZoneM = CFG_DEF_REVERSE_DEAD_ZONE;
+	// [mapmatch] reverse_speed/reverse_margin — 저속 역행 데드존 (2026-07-20 최정우 추가)
+	cIniReader.GetProfileDouble("mapmatch", "reverse_speed", CFG_DEF_REVERSE_SPEED, pstConfig->dfReverseSpeed);
+	if (pstConfig->dfReverseSpeed < 0.0)
+		pstConfig->dfReverseSpeed = CFG_DEF_REVERSE_SPEED;
+	cIniReader.GetProfileDouble("mapmatch", "reverse_margin", CFG_DEF_REVERSE_MARGIN, pstConfig->dfReverseMargin);
+	if (pstConfig->dfReverseMargin < 0.0)
+		pstConfig->dfReverseMargin = CFG_DEF_REVERSE_MARGIN;
+	// [mapmatch] reverse_confirm — 연속 역행 확정 포인트 수. 미만이면 노이즈로 보고 SKIP·앵커 고정 (2026-07-21 최정우 추가)
+	cIniReader.GetProfileInt("mapmatch", "reverse_confirm", CFG_DEF_REVERSE_CONFIRM, pstConfig->nReverseConfirm);
+	if (pstConfig->nReverseConfirm <= 0)
+		pstConfig->nReverseConfirm = CFG_DEF_REVERSE_CONFIRM;
 
-	// [mapmatch] speed_diff_factor/margin — 이동거리 환산속도와 SPEED_KMH 정합성 SKIP 판정 (2026-07-20 최정우 추가)
-	cIniReader.GetProfileDouble("mapmatch", "speed_diff_factor", CFG_DEF_SPEED_DIFF_FACTOR, pstConfig->dfSpeedDiffFactor);
-	if (pstConfig->dfSpeedDiffFactor < 0.0)
-		pstConfig->dfSpeedDiffFactor = CFG_DEF_SPEED_DIFF_FACTOR;
-	cIniReader.GetProfileInt("mapmatch", "speed_diff_margin", CFG_DEF_SPEED_DIFF_MARGIN, pstConfig->nSpeedDiffMargin);
-	if (pstConfig->nSpeedDiffMargin < 0)
-		pstConfig->nSpeedDiffMargin = CFG_DEF_SPEED_DIFF_MARGIN;
+	// [mapmatch] speed_factor/margin — 이동거리 환산속도와 SPEED_KMH 정합성 SKIP 판정 (2026-07-20 최정우 추가)
+	cIniReader.GetProfileDouble("mapmatch", "speed_factor", CFG_DEF_SPEED_FACTOR, pstConfig->dfSpeedFactor);
+	if (pstConfig->dfSpeedFactor < 0.0)
+		pstConfig->dfSpeedFactor = CFG_DEF_SPEED_FACTOR;
+	cIniReader.GetProfileInt("mapmatch", "speed_margin", CFG_DEF_SPEED_MARGIN, pstConfig->nSpeedMargin);
+	if (pstConfig->nSpeedMargin < 0)
+		pstConfig->nSpeedMargin = CFG_DEF_SPEED_MARGIN;
 
-	if (pstConfig->nAltitudeGap < 0)
-		pstConfig->nAltitudeGap = 0;
-	if (pstConfig->nAltitudeBonus < 0)
-		pstConfig->nAltitudeBonus = 0;
-	if (pstConfig->nAltitudePenalty < 0)
-		pstConfig->nAltitudePenalty = 0;
+	if (pstConfig->nAltGap < 0)
+		pstConfig->nAltGap = 0;
+	// nAltPenalty 는 부호 자체가 의미(양수=페널티·음수=보너스)이므로 하한 clamp 없음 (2026-07-21 최정우 수정)
 
 	// [mapmatch] maxstep (필수 >0) (2026-07-11 최정우 주석 추가)
 	cIniReader.GetProfileInt("mapmatch", "maxstep", 0, pstConfig->nMaxStep);

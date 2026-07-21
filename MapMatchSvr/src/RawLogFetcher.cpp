@@ -594,9 +594,9 @@ bool CRawLogFetcher::CheckPgUpdateAffected(PGresult *pcResult, int nExpected,
  * @param[in] pstrGpsSeqs GPS_SEQ 배열
  * @param[in] nCount release 대상 행 수
  * @return true(전건 release), false(실행 오류·부분 release·인자 무효)
- * @remark Worker BulkReleaseRawLogs 와 동일: $7="0", $3~$6·$8='', WHERE MATCH_STATUS=2
+ * @remark Worker BulkReleaseRawLogs 와 동일: $7="0", $3~$6='', WHERE MATCH_STATUS=2
  *   - 파라미터 순서는 [rawgps_update] 기준 $1 TRIP_ID, $2 GPS_SEQ, $3 MATCH_LAT, $4 MATCH_LON,
- *     $5 INTERSECT_LEN, $6 MATCH_LINK_ID, $7 MATCH_STATUS, $8 REVERSE_FIT (2026-07-18 최정우 수정 —
+ *     $5 INTERSECT_LEN, $6 MATCH_LINK_ID, $7 MATCH_STATUS (2026-07-18 최정우 수정 —
  *     이전 코드는 $3 자리에 MATCH_STATUS를 넣고 MATCH_LINK_ID를 아예 빠뜨려 현재 SQL과 어긋나 있었음)
  *   - PQcmdTuples == nCount 검증 (#5)
 */
@@ -622,9 +622,8 @@ bool CRawLogFetcher::ReleaseReservedRows(PGconn *pcConn,
 	string strMatchLatArray = BuildPgTextArray(vtEmpty);
 	string strMatchLonArray = BuildPgTextArray(vtEmpty);
 	string strMatchLinkIdArray = BuildPgTextArray(vtEmpty);
-	string strReverseFitArray = BuildPgTextArray(vtEmpty);
 
-	const char *pszParams[8] =
+	const char *pszParams[7] =
 	{
 		strTripIdArray.c_str(),
 		strGpsSeqArray.c_str(),
@@ -632,11 +631,10 @@ bool CRawLogFetcher::ReleaseReservedRows(PGconn *pcConn,
 		strMatchLonArray.c_str(),
 		strIntersectLenArray.c_str(),
 		strMatchLinkIdArray.c_str(),
-		strMatchStatusArray.c_str(),
-		strReverseFitArray.c_str()
+		strMatchStatusArray.c_str()
 	};
 
-	const int nParamLengths[8] =
+	const int nParamLengths[7] =
 	{
 		static_cast<int>(strTripIdArray.size()),
 		static_cast<int>(strGpsSeqArray.size()),
@@ -644,14 +642,13 @@ bool CRawLogFetcher::ReleaseReservedRows(PGconn *pcConn,
 		static_cast<int>(strMatchLonArray.size()),
 		static_cast<int>(strIntersectLenArray.size()),
 		static_cast<int>(strMatchLinkIdArray.size()),
-		static_cast<int>(strMatchStatusArray.size()),
-		static_cast<int>(strReverseFitArray.size())
+		static_cast<int>(strMatchStatusArray.size())
 	};
-	const int nParamFormats[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+	const int nParamFormats[7] = { 0, 0, 0, 0, 0, 0, 0 };
 
 	// rawgps_update bulk release ($7=0) 실행 (2026-07-08 최정우 주석 추가)
 	PGresult *pcResult = PQexecParams(pcConn, m_strUpdateSQL.c_str(),
-		8, nullptr, pszParams, nParamLengths, nParamFormats, 0);
+		7, nullptr, pszParams, nParamLengths, nParamFormats, 0);
 
 	if (pcResult == nullptr)
 		return false;

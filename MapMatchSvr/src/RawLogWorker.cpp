@@ -356,9 +356,10 @@ bool CRawLogWorker::ShouldSkipGpsInput(int nThreadId, const sRawLogInfo& stRawLo
  * @param[out] pnImpliedSpeedKmh 이동거리 환산속도(km/h) — 로그·참고용, nullable
  * @return true(SKIP 대상 — 이동거리가 SPEED_KMH 대비 비정상), false(정상 또는 판단 불가)
  * @remark
- *   전제: config speed_diff_factor>0, 직전 매칭 성공 위치 보유(bHasLastMatch), SPEED_KMH 유효(NULL 아님),
- *         직전 매칭 시각과의 간격이 (0, MM_CALC_MAX_GAP_SEC] 이내
- *   판정: 환산속도(직전 매칭 위치→현재 GPS 하버사인 거리 / 시간간격) > SPEED_KMH × speed_diff_factor + speed_diff_margin
+ *   전제: config speed_factor>0, 직전 매칭 성공 위치 보유(bHasLastMatch), 직전 포인트가 정상 매칭
+ *         (bLastPointOk — 아니면 갭이 정상 1구간보다 넓어져 평균/순간 비교 신뢰 못함, 2026-07-21 최정우 추가),
+ *         SPEED_KMH 유효(NULL 아님), 직전 매칭 시각과의 간격이 (0, MM_CALC_MAX_GAP_SEC] 이내
+ *   판정: 환산속도(직전 매칭 위치→현재 GPS 하버사인 거리 / 시간간격) > SPEED_KMH × speed_factor + speed_margin
  *   예) SPEED_KMH=37, factor=2.0, margin=25 → 상한 99km/h. 환산속도 187km/h → SKIP
 */
 bool CRawLogWorker::ShouldSkipImplausibleSpeed(int nThreadId, const sRawLogInfo& stRawLogInfo,
@@ -367,10 +368,12 @@ bool CRawLogWorker::ShouldSkipImplausibleSpeed(int nThreadId, const sRawLogInfo&
 	if (pnImpliedSpeedKmh != nullptr)
 		*pnImpliedSpeedKmh = -1;
 
-	if (m_stConfig.dfSpeedDiffFactor <= 0.0)
+	if (m_stConfig.dfSpeedFactor <= 0.0)
 		return false;			// 비활성
 	if (!stSession.bHasLastMatch)
 		return false;			// 비교 기준(직전 매칭 위치) 없음 — START 등
+	if (!stSession.bLastPointOk)
+		return false;			// 직전 포인트가 매칭 실패 — 갭이 정상 1구간보다 넓어져 평균/순간 비교 신뢰 못함 (2026-07-21 최정우 추가)
 	if (stRawLogInfo.fSpeed < 0.0f)
 		return false;			// SPEED_KMH NULL — 비교 불가
 
@@ -387,8 +390,8 @@ bool CRawLogWorker::ShouldSkipImplausibleSpeed(int nThreadId, const sRawLogInfo&
 	if (pnImpliedSpeedKmh != nullptr)
 		*pnImpliedSpeedKmh = static_cast<int>(dfImpliedKmh + 0.5);
 
-	double dfLimitKmh = static_cast<double>(stRawLogInfo.fSpeed) * m_stConfig.dfSpeedDiffFactor
-		+ static_cast<double>(m_stConfig.nSpeedDiffMargin);
+	double dfLimitKmh = static_cast<double>(stRawLogInfo.fSpeed) * m_stConfig.dfSpeedFactor
+		+ static_cast<double>(m_stConfig.nSpeedMargin);
 	if (dfImpliedKmh <= dfLimitKmh)
 		return false;
 
@@ -462,18 +465,13 @@ void CRawLogWorker::ResetTripSessionForBegin(VEHICLE_TRIP_SESSION& stSession, bo
 	stSession.dfLastMatchY = 0.0;
 	stSession.dtLastMatchGps = 0;
 	stSession.bHasLastMatch = false;
-	stSession.nPrevAltitudeM = NO_ALTITUDE;
+	stSession.nPrevAltitude = NO_ALTITUDE;
 	stSession.nPrevRoadType = ROAD_TYPE_NORMAL;
 	stSession.bHasPrevAlt = false;
 	stSession.dfLastMatchLinkPos = 0.0;
 	stSession.bHasPrevLinkPos = false;
-	stSession.dwLastMatchGpsSeq = 0;
-	stSession.fLastMatchSpeedKmh = -1.0f;
-	stSession.qwPriorLinkID = 0;
-	stSession.dfPriorMatchLinkPos = 0.0;
-	stSession.dwPriorMatchGpsSeq = 0;
-	stSession.fPriorMatchSpeedKmh = -1.0f;
-	stSession.bHasPriorMatch = false;
+	stSession.nReverseStreak = 0;
+	stSession.bLastPointOk = true;
 
 	if (bFullReset)
 		stSession.bStartWarned = false;
@@ -551,22 +549,11 @@ void CRawLogWorker::run(int nThreadId, void *context)
 
 	bool bTripEnded = false;
 	bool bProcessOk = true;
-	vector<RETRO_SKIP_TARGET> vtRetroSkip;			// 역행(dip) 실시간 판정 — 재정정 대상 누적 (2026-07-20 최정우 추가)
 	for (size_t i=0; i<pvtBatch->size(); ++i)
 	{
 		// GPS 1건 검증·맵매칭·UPDATE 행 적재 (2026-07-08 최정우 주석 추가)
-		if (!ProcessRawLog(nThreadId, (*pvtBatch)[i], &vtUpdates, &stWorkSession, &bTripEnded, &vtRetroSkip))
+		if (!ProcessRawLog(nThreadId, (*pvtBatch)[i], &vtUpdates, &stWorkSession, &bTripEnded))
 			bProcessOk = false;
-	}
-
-	// 역행(dip) 재정정 대상이 있으면 이미 적재된 N-1 행을 단건 UPDATE 로 SKIP 전환 (2026-07-20 최정우 추가)
-	for (size_t i=0; i<vtRetroSkip.size(); ++i)
-	{
-		if (!RetroactiveSkip(pcConn, vtRetroSkip[i]))
-		{
-			LOGFMTW("[#%02d] retroactive skip failed!trip_id=[%s] seq=[%s]",
-				nThreadId, vtRetroSkip[i].strTripId.c_str(), vtRetroSkip[i].strGpsSeq.c_str());
-		}
 	}
 
 	// vtUpdates 에 없는 예약 행 release (AppendUpdateRow 실패 등 #4 배치 내 orphan)
@@ -714,10 +701,9 @@ void CRawLogWorker::stop(int nThreadId, void *context)
  * @remark 세션 갱신은 pstSession(배치 임시)에만 적용. run() 이 bulk 성공 시 커밋.
 */
 bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo,
-		vector<RAW_LOG_UPDATE_ROW> *pvtUpdates, VEHICLE_TRIP_SESSION *pstSession, bool *pbTripEnded,
-		vector<RETRO_SKIP_TARGET> *pvtRetroSkip)
+		vector<RAW_LOG_UPDATE_ROW> *pvtUpdates, VEHICLE_TRIP_SESSION *pstSession, bool *pbTripEnded)
 {
-	if ((pvtUpdates == nullptr) || (pstSession == nullptr) || (pbTripEnded == nullptr) || (pvtRetroSkip == nullptr))
+	if ((pvtUpdates == nullptr) || (pstSession == nullptr) || (pbTripEnded == nullptr))
 		return false;
 
 	sint16 nRejectStatus = MATCH_STATUS_SKIP;
@@ -758,6 +744,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 	if (ShouldSkipGpsInput(nThreadId, stRawLogInfo))
 	{
 		stSession.dwLastGpsSeq = stRawLogInfo.dwSeqNo;
+		stSession.bLastPointOk = false;			// (2026-07-21 최정우 추가)
 		if (stRawLogInfo.nTripEvent == TRIP_EVENT_END)
 			*pbTripEnded = true;
 		return AppendUpdateRow(pvtUpdates, stRawLogInfo, MATCH_STATUS_SKIP);
@@ -778,6 +765,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRawLogInfo.dwSeqNo,
 			static_cast<int>(stRawLogInfo.nAccuracyM), m_stConfig.nRadiusSkip);
 		stSession.dwLastGpsSeq = stRawLogInfo.dwSeqNo;
+		stSession.bLastPointOk = false;			// (2026-07-21 최정우 추가)
 		if (stRawLogInfo.nTripEvent == TRIP_EVENT_END)
 			*pbTripEnded = true;
 
@@ -788,8 +776,8 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		CProcessManager& cPM = m_stConfig.pcProcessManager[nThreadId];
 		if (cPM.FindNearestSegment(stRawLogInfo, &stNear))
 		{
-			int nNearLenM = CalcIntersectLenM(stRawLogInfo, stNear.dfMatchX, stNear.dfMatchY);
-			return AppendUpdateRow(pvtUpdates, stRawLogInfo, MATCH_STATUS_SKIP, nNearLenM,
+			int nNearLen = CalcIntersectLen(stRawLogInfo, stNear.dfMatchX, stNear.dfMatchY);
+			return AppendUpdateRow(pvtUpdates, stRawLogInfo, MATCH_STATUS_SKIP, nNearLen,
 				&stNear.dfMatchY, &stNear.dfMatchX, stNear.qwLinkID);
 		}
 		return AppendUpdateRow(pvtUpdates, stRawLogInfo, MATCH_STATUS_SKIP);
@@ -800,6 +788,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 	if (ShouldSkipImplausibleSpeed(nThreadId, stRawLogInfo, stSession, &nImpliedSpeedKmh))
 	{
 		stSession.dwLastGpsSeq = stRawLogInfo.dwSeqNo;
+		stSession.bLastPointOk = false;			// (2026-07-21 최정우 추가)
 		if (stRawLogInfo.nTripEvent == TRIP_EVENT_END)
 			*pbTripEnded = true;
 
@@ -810,8 +799,8 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		CProcessManager& cPM = m_stConfig.pcProcessManager[nThreadId];
 		if (cPM.FindNearestSegment(stRawLogInfo, &stNear))
 		{
-			int nNearLenM = CalcIntersectLenM(stRawLogInfo, stNear.dfMatchX, stNear.dfMatchY);
-			return AppendUpdateRow(pvtUpdates, stRawLogInfo, MATCH_STATUS_SKIP, nNearLenM,
+			int nNearLen = CalcIntersectLen(stRawLogInfo, stNear.dfMatchX, stNear.dfMatchY);
+			return AppendUpdateRow(pvtUpdates, stRawLogInfo, MATCH_STATUS_SKIP, nNearLen,
 				&stNear.dfMatchY, &stNear.dfMatchX, stNear.qwLinkID);
 		}
 		return AppendUpdateRow(pvtUpdates, stRawLogInfo, MATCH_STATUS_SKIP);
@@ -846,12 +835,17 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 	CClock cMatchClock;
 	cMatchClock.Start();
 	// ProcessManager 경유 시작/Continue 맵매칭 (2026-07-08 최정우 주석 추가)
-	bool bMatched = RunMapMatch(nThreadId, stRawLogInfo, &stSession, &stMatchLinkInfo, pvtRetroSkip);
+	bool bMatched = RunMapMatch(nThreadId, stRawLogInfo, &stSession, &stMatchLinkInfo);
 	// 맵매칭 처리 시간 측정 종료 (2026-07-08 최정우 주석 추가)
 	cMatchClock.Stop();
 
 	// 반경 밖·진단반경 초과 최근접 — MATCHED 아님, SKIP(3)·세션 미갱신·MATCH_LAT/LON·INTERSECT_LEN 저장 (2026-07-10 최정우 수정)
 	const bool bOut = (!bMatched) && stMatchLinkInfo.bOutOfRadius;
+	// 연속 역행 미확정(reverse_confirm 미만) — SKIP·세션 앵커 고정. RunMapMatch 가 이미 nReverseStreak 갱신.
+	//   bReverseSuspect(위치+heading 둘 다 역행) 기준 — bReverseHit(비용 페널티 적용됨, margin 관대)
+	//   대신 사용해 GPS 노이즈로 인한 오탐을 줄임 (2026-07-21 최정우 수정)
+	const bool bReverseSkip = bMatched && stMatchLinkInfo.bReverseSuspect
+		&& (stSession.nReverseStreak < m_stConfig.nReverseConfirm);
 
 	if (!bMatched && bOut)
 	{
@@ -874,27 +868,56 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 			static_cast<int>(stMatchLinkInfo.wErrorCode), pszErrMsg);
 		nFinalStatus = MATCH_STATUS_ERROR;
 	}
-	else if (m_stConfig.nMatchTimeoutMs > 0)
+	else
 	{
-		const double dfElapsedMs = cMatchClock.GetElapsedTime() * 1000.0;
-		if (dfElapsedMs > static_cast<double>(m_stConfig.nMatchTimeoutMs))
+		// bMatched == true 인 경우, 아래 두 검사(타임아웃/역행 SKIP)는 각각 독립적으로 실행되어야 한다.
+		//
+		// [버그였던 예전 코드]                          [문제]
+		//   else if (nMatchTimeoutMs > 0) { ... }         "타임아웃 검사 기능이 켜져 있다"는 조건만으로
+		//   else if (bReverseSkip)        { ... }         이 가지로 들어가 버려서, 실제로는 200ms를
+		//                                                  안 넘겨 안에서 아무 것도 안 해도 바로 아래
+		//                                                  else if(bReverseSkip) 는 검사조차 못 받고
+		//                                                  건너뛰어짐 → reverse_confirm 기반 SKIP이
+		//                                                  timeout 기능이 켜져 있는 한 항상 무력화됨.
+		//
+		// [수정] else if 로 나란히 두지 않고, if 두 개로 분리해서 둘 다 매번 검사되게 함
+		//   (2026-07-21 최정우 수정 — 인위적 역행 테스트로 발견)
+		if (m_stConfig.nMatchTimeoutMs > 0)
 		{
-			LOGFMTW("[#%02d] map match timeout! elapsed=[%.1fms] threshold=[%dms] seq=[%u] device=[%s] trip_id=[%s]",
-				nThreadId, dfElapsedMs, m_stConfig.nMatchTimeoutMs,
-				stRawLogInfo.dwSeqNo, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID);
-			nFinalStatus = MATCH_STATUS_ERROR;
-			bMatched = false;   // MATCH_LAT/LON 미기록(격리)
+			const double dfElapsedMs = cMatchClock.GetElapsedTime() * 1000.0;
+			if (dfElapsedMs > static_cast<double>(m_stConfig.nMatchTimeoutMs))
+			{
+				LOGFMTW("[#%02d] map match timeout! elapsed=[%.1fms] threshold=[%dms] seq=[%u] device=[%s] trip_id=[%s]",
+					nThreadId, dfElapsedMs, m_stConfig.nMatchTimeoutMs,
+					stRawLogInfo.dwSeqNo, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID);
+				nFinalStatus = MATCH_STATUS_ERROR;
+				bMatched = false;   // MATCH_LAT/LON 미기록(격리)
+			}
+		}
+
+		if (bMatched && bReverseSkip)
+		{
+			// 연속 역행이 reverse_confirm 미만 — 노이즈 취급, SKIP 저장(좌표는 원본 그대로)·세션 앵커 미갱신 (2026-07-21 최정우 추가)
+			LOGFMTW("[#%02d] reverse hit! device=[%s] trip_id=[%s] seq=[%u] streak=[%d/%d] link=[%llu] -> SKIP",
+				nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRawLogInfo.dwSeqNo,
+				stSession.nReverseStreak, m_stConfig.nReverseConfirm,
+				static_cast<unsigned long long>(stMatchLinkInfo.qwLinkID));
+			nFinalStatus = MATCH_STATUS_SKIP;
 		}
 	}
 
 	stSession.dwLastGpsSeq = stRawLogInfo.dwSeqNo;
+	// 다음 포인트의 이상속도 검사 신뢰도 판단용 — 앵커 갱신 여부와 동일 조건 (2026-07-21 최정우 추가)
+	stSession.bLastPointOk = (bMatched && !bReverseSkip);
 
 	// ── 매칭 성공(MATCHED) 시에만 세션 앵커 갱신 — SKIP/ERROR 는 직전 성공 앵커 유지 (2026-07-10 최정우 수정) ──
 	//   · XY·시각: HEADING/SPEED 보정용 (ALTITUDE_M NULL이어도 갱신)
-	//   · 고도: ALTITUDE_M 유효 시에만 nPrevAltitudeM·nPrevRoadType 저장
+	//   · 고도: ALTITUDE_M 유효 시에만 nPrevAltitude·nPrevRoadType 저장
 	//     (직전 매칭 좌표에 Z 없음 — GPS 고도를 앵커로 기억)
 	//   · 직전 고도 없이 현재만 있으면 bHasPrevAlt=false → 고도 점수 스킵
-	if (bMatched)
+	//   · 역행 미확정(bReverseSkip) 시에도 이 앵커는 갱신하지 않음 — 다음 포인트가 오염된 좌표를
+	//     기준으로 HEADING/SPEED 를 잘못 계산하지 않도록 (2026-07-21 최정우 추가)
+	if (bMatched && !bReverseSkip)
 	{
 		stSession.dfLastMatchX = stMatchLinkInfo.dfMatchX;
 		stSession.dfLastMatchY = stMatchLinkInfo.dfMatchY;
@@ -902,7 +925,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		stSession.bHasLastMatch = true;
 		if (stRawLogInfo.nAltitudeM >= 0)
 		{
-			stSession.nPrevAltitudeM = stRawLogInfo.nAltitudeM;
+			stSession.nPrevAltitude = stRawLogInfo.nAltitudeM;
 			stSession.nPrevRoadType = stMatchLinkInfo.nRoadType;
 			stSession.bHasPrevAlt = true;
 		}
@@ -910,18 +933,16 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 
 	// INTERSECT_LEN: GPS↔세그먼트 교차점(MATCH_LAT/LON) 하버사인 거리(m) → 정수 반올림
 	const bool bHasCoords = (bMatched || bOut);
-	int nIntersectLenM = -1;
+	int nIntersectLen = -1;
 	if (bHasCoords)
-		nIntersectLenM = CalcIntersectLenM(stRawLogInfo,
+		nIntersectLen = CalcIntersectLen(stRawLogInfo,
 			stMatchLinkInfo.dfMatchX, stMatchLinkInfo.dfMatchY);
 
 	// DB 저장: MATCHED/SKIP 시 MATCH_LAT/LON·INTERSECT_LEN(GPS↔세그먼트 교차점 거리)·MATCH_LINK_ID. ERROR 는 미저장
-	//   bReverseFit: MATCHED 시에만 유효(SKIP 최근접은 방위각 무시 탐색이라 의미 없음) (2026-07-18 최정우 추가)
-	if (!AppendUpdateRow(pvtUpdates, stRawLogInfo, nFinalStatus, nIntersectLenM,
+	if (!AppendUpdateRow(pvtUpdates, stRawLogInfo, nFinalStatus, nIntersectLen,
 		bHasCoords ? &stMatchLinkInfo.dfMatchY : nullptr,
 		bHasCoords ? &stMatchLinkInfo.dfMatchX : nullptr,
-		bHasCoords ? stMatchLinkInfo.qwLinkID : 0,
-		bMatched ? &stMatchLinkInfo.bReverseFit : nullptr))
+		bHasCoords ? stMatchLinkInfo.qwLinkID : 0))
 		return false;
 
 	// END 이벤트면 MATCHED/ERROR/SKIP 무관 세션 종료 (bulk 성공 후 mapSessions.erase)
@@ -985,10 +1006,9 @@ bool CRawLogWorker::AppendReleaseRowFromRawLog(vector<RAW_LOG_UPDATE_ROW> *pvtRe
  * @return true(매칭 성공), false(실패)
 */
 bool CRawLogWorker::RunMapMatch(int nThreadId, const sRawLogInfo& stRawLogInfo,
-		VEHICLE_TRIP_SESSION *pstSession, MATCH_LINK_INFO *pstMatchLinkInfo,
-		vector<RETRO_SKIP_TARGET> *pvtRetroSkip)
+		VEHICLE_TRIP_SESSION *pstSession, MATCH_LINK_INFO *pstMatchLinkInfo)
 {
-	if (pstSession == nullptr || pstMatchLinkInfo == nullptr || pvtRetroSkip == nullptr
+	if (pstSession == nullptr || pstMatchLinkInfo == nullptr
 		|| m_stConfig.pcProcessManager == nullptr)
 		return false;
 
@@ -1016,7 +1036,7 @@ bool CRawLogWorker::RunMapMatch(int nThreadId, const sRawLogInfo& stRawLogInfo,
 			POINT stCur;  stCur.dfX  = stAdjusted.dfX;           stCur.dfY  = stAdjusted.dfY;
 			// 직전·현재 GPS 하버사인 수평 이동거리(m) (2026-07-08 최정우 주석 추가)
 			double dfMoveM = HaversineMeters(stPrev, stCur);
-			stAltCtx.dfHorizMoveM = dfMoveM;
+			stAltCtx.dfHorizMove = dfMoveM;
 
 			if (stAdjusted.fSpeed < 0.0f)
 				stAdjusted.fSpeed = static_cast<float>(dfMoveM / dfGapSec * 3.6);
@@ -1034,17 +1054,17 @@ bool CRawLogWorker::RunMapMatch(int nThreadId, const sRawLogInfo& stRawLogInfo,
 		POINT stPrev; stPrev.dfX = pstSession->dfLastMatchX; stPrev.dfY = pstSession->dfLastMatchY;
 		POINT stCur;  stCur.dfX  = stAdjusted.dfX;           stCur.dfY  = stAdjusted.dfY;
 		// 고도 점수용 수평 이동거리(m) (2026-07-08 최정우 주석 추가)
-		stAltCtx.dfHorizMoveM = HaversineMeters(stPrev, stCur);
+		stAltCtx.dfHorizMove = HaversineMeters(stPrev, stCur);
 	}
 
 	// ── 고도 앵커 → 연속 맵매칭 컨텍스트 (Begin 미적용) ──
 	//   · 전제: bHasPrevAlt (직전 매칭 성공 시 ALTITUDE_M 있었음)
-	//   · dfHorizMoveM: 직전 매칭 XY → 현재 GPS XY 하버사인(m) — 경사 판정용
-	//   · Δalt = 현재 ALTITUDE_M − nPrevAltitudeM (ProcessManager/ContinueMapMatch에서 사용)
+	//   · dfHorizMove: 직전 매칭 XY → 현재 GPS XY 하버사인(m) — 경사 판정용
+	//   · Δalt = 현재 ALTITUDE_M − nPrevAltitude (ProcessManager/ContinueMapMatch에서 사용)
 	// · 예) seq10 매칭·고도100m 저장 → seq11 고도106m·같은 고가 → 차이=8 이내 보너스 −3
 	if (pstSession->bHasPrevAlt)
 	{
-		stAltCtx.nPrevAltitudeM = pstSession->nPrevAltitudeM;
+		stAltCtx.nPrevAltitude = pstSession->nPrevAltitude;
 		stAltCtx.nPrevRoadType = pstSession->nPrevRoadType;
 		stAltCtx.bHasPrevAlt = true;
 	}
@@ -1068,50 +1088,23 @@ bool CRawLogWorker::RunMapMatch(int nThreadId, const sRawLogInfo& stRawLogInfo,
 		double dfNewLinkPos = static_cast<double>(pstMatchLinkInfo->wLenFromLink)
 			+ pstMatchLinkInfo->dfSgmtMatchLen;
 
-		// 역행(dip) 실시간 판정 — 새 점(N) 확정 전, 세션에 있던 N-2("Prior")·N-1("Last") 앵커로
-		//   "N-1 이 N-2·N 보다 뒤(움푹 파인 패턴)인지" 판정. 배치 경계와 무관하게 매 GPS마다 즉시
-		//   판정 가능 — N-1 은 이미 이전 배치에서 적재 완료됐을 수 있어 재정정 대상만 큐잉하고,
-		//   실제 UPDATE 는 run() 이 배치 종료 후 처리한다 (2026-07-20 최정우 추가)
-		if (pstSession->bHasPriorMatch && pstSession->bHasPrevLinkPos && (qwLinkID != 0)
-			&& (pstSession->qwPriorLinkID == qwLinkID) && (pstSession->qwLinkID == qwLinkID)
-			&& (pstSession->fLastMatchSpeedKmh >= 0.0f)
-			&& (pstSession->fLastMatchSpeedKmh >= static_cast<float>(m_stConfig.dfReverseSpeedGateKmh))
-			&& (pstSession->dfLastMatchLinkPos < pstSession->dfPriorMatchLinkPos)
-			&& (pstSession->dfLastMatchLinkPos < dfNewLinkPos))
-		{
-			double dfDipM = pstSession->dfPriorMatchLinkPos - pstSession->dfLastMatchLinkPos;
-			if (dfDipM > m_stConfig.dfReverseDeadZoneM)
-			{
-				char szGpsSeq[16];
-				snprintf(szGpsSeq, sizeof(szGpsSeq), "%u", pstSession->dwLastMatchGpsSeq);
-				RETRO_SKIP_TARGET stTarget;
-				stTarget.strTripId = stRawLogInfo.szTripID;
-				stTarget.strGpsSeq = szGpsSeq;
-				pvtRetroSkip->push_back(stTarget);
+		// 연속 역행 스트릭 갱신 — bReverseSuspect(위치 역행 + heading 도 역방향 일치, margin 무관)
+		//   연속 횟수를 센다. bReverseHit(비용 페널티, margin 관대) 대신 이 신호를 써서, GPS 노이즈성
+		//   흔들림(heading은 여전히 정방향)은 스트릭에 안 잡히고 실제 역행(heading도 반대)만 잡히게 함
+		//   (2026-07-21 최정우 수정 — heading 대조 결합)
+		//   reverse_confirm 미만이면 노이즈로 보고 앵커(dfLastMatchLinkPos) 고정 — 다음 포인트도
+		//   같은 기준점과 비교돼 판정이 안 흔들린다. reverse_confirm 이상이면 실제 이동으로 확정하고
+		//   앵커를 지금 위치로 재설정해 정상 추적을 재개한다 (2026-07-21 최정우 추가 — dip 판정 대체)
+		if (pstMatchLinkInfo->bReverseSuspect)
+			pstSession->nReverseStreak += 1;
+		else
+			pstSession->nReverseStreak = 0;
 
-				LOGFMTW("[#%02d] reversal dip detected(realtime)!device=[%s] trip_id=[%s] retro_seq=[%s] "
-					"link=[%llu] prior_pos=[%.1fm] last_pos=[%.1fm] new_pos=[%.1fm] dip=[%.1fm] speed=[%.1fkm/h] -> SKIP",
-					nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, szGpsSeq,
-					static_cast<unsigned long long>(qwLinkID), pstSession->dfPriorMatchLinkPos,
-					pstSession->dfLastMatchLinkPos, dfNewLinkPos, dfDipM, pstSession->fLastMatchSpeedKmh);
-			}
-		}
-
-		// 세션 앵커 슬롯 교체: 기존 N-1("Last") → N-2("Prior"), 새 점(N) → N-1("Last") (2026-07-20 최정우 추가)
-		if (pstSession->bHasPrevLinkPos)
-		{
-			pstSession->qwPriorLinkID = pstSession->qwLinkID;
-			pstSession->dfPriorMatchLinkPos = pstSession->dfLastMatchLinkPos;
-			pstSession->dwPriorMatchGpsSeq = pstSession->dwLastMatchGpsSeq;
-			pstSession->fPriorMatchSpeedKmh = pstSession->fLastMatchSpeedKmh;
-			pstSession->bHasPriorMatch = true;
-		}
+		const bool bConfirmed = (pstSession->nReverseStreak >= m_stConfig.nReverseConfirm);
 
 		pstSession->qwLinkID = qwLinkID;		// 성공 시에만 링크 전진(다음 점 연속 매칭 기준)
-		// 역행 페널티 기준 위치 갱신 — 링크 시작점부터 매칭점까지 거리(m) (2026-07-20 최정우 추가)
-		pstSession->dfLastMatchLinkPos = dfNewLinkPos;
-		pstSession->dwLastMatchGpsSeq = stRawLogInfo.dwSeqNo;			// (2026-07-20 최정우 추가)
-		pstSession->fLastMatchSpeedKmh = stRawLogInfo.fSpeed;			// (2026-07-20 최정우 추가)
+		if (!pstMatchLinkInfo->bReverseSuspect || bConfirmed)
+			pstSession->dfLastMatchLinkPos = dfNewLinkPos;
 		pstSession->bHasPrevLinkPos = true;
 	}
 	return bMatched;
@@ -1145,7 +1138,7 @@ double CRawLogWorker::HaversineMeters(const POINT& stA, const POINT& stB)
  * @param[in] dfMatchLat 세그먼트 교차점 위도 (MATCH_LAT)
  * @return 반올림 정수 거리(m), GPS 무효 시 -1
 */
-int CRawLogWorker::CalcIntersectLenM(const sRawLogInfo& stRawLogInfo,
+int CRawLogWorker::CalcIntersectLen(const sRawLogInfo& stRawLogInfo,
 		double dfMatchLon, double dfMatchLat)
 {
 	if (stRawLogInfo.bGpsLatNull || stRawLogInfo.bGpsLonNull)
@@ -1207,16 +1200,15 @@ string CRawLogWorker::BuildPgTextArray(const vector<string>& vtValues)
  * @param[out] pvtUpdates bulk UPDATE 대상 목록
  * @param[in] stRawLogInfo 원시 GPS
  * @param[in] nStatus MATCH_STATUS (1/3/4/0)
- * @param[in] nIntersectLenM GPS↔세그먼트 교차점 거리(m, INTERSECT_LEN), -1 이면 미갱신
+ * @param[in] nIntersectLen GPS↔세그먼트 교차점 거리(m, INTERSECT_LEN), -1 이면 미갱신
  * @param[in] pdfMatchLat 매칭 위도 (MATCHED 시), nullptr 이면 미갱신
  * @param[in] pdfMatchLon 매칭 경도 (MATCHED 시), nullptr 이면 미갱신
  * @return true(적재 성공), false(pvtUpdates null·trip_id 무효)
  * @remark invalid trip_id 시 false — run() orphan release 가 PK 없으면 복구 대기
 */
 bool CRawLogWorker::AppendUpdateRow(vector<RAW_LOG_UPDATE_ROW> *pvtUpdates,
-		const sRawLogInfo& stRawLogInfo, sint16 nStatus, int nIntersectLenM,
-		const double *pdfMatchLat, const double *pdfMatchLon, uint64 qwMatchLinkId,
-		const bool *pbReverseFit)
+		const sRawLogInfo& stRawLogInfo, sint16 nStatus, int nIntersectLen,
+		const double *pdfMatchLat, const double *pdfMatchLon, uint64 qwMatchLinkId)
 {
 	if (pvtUpdates == nullptr)
 		return false;
@@ -1234,12 +1226,11 @@ bool CRawLogWorker::AppendUpdateRow(vector<RAW_LOG_UPDATE_ROW> *pvtUpdates,
 	char szMatchLat[32];
 	char szMatchLon[32];
 	char szMatchLinkId[24];
-	char szReverseFit[4];
 
 	snprintf(szSeqNo, sizeof(szSeqNo), "%u", stRawLogInfo.dwSeqNo);
 	snprintf(szStatus, sizeof(szStatus), "%d", static_cast<int>(nStatus));
-	if (nIntersectLenM >= 0)
-		snprintf(szIntersectLen, sizeof(szIntersectLen), "%d", nIntersectLenM);
+	if (nIntersectLen >= 0)
+		snprintf(szIntersectLen, sizeof(szIntersectLen), "%d", nIntersectLen);
 	else
 		szIntersectLen[0] = '\0';
 
@@ -1262,12 +1253,6 @@ bool CRawLogWorker::AppendUpdateRow(vector<RAW_LOG_UPDATE_ROW> *pvtUpdates,
 	else
 		szMatchLinkId[0] = '\0';
 
-	// 역방향 핏 채택 여부 (nullptr=미제공 → 빈 문자열, 기존 값 유지) (2026-07-18 최정우 추가)
-	if (pbReverseFit != nullptr)
-		snprintf(szReverseFit, sizeof(szReverseFit), "%s", *pbReverseFit ? "t" : "f");
-	else
-		szReverseFit[0] = '\0';
-
 	RAW_LOG_UPDATE_ROW stRow;
 	stRow.strTripId = stRawLogInfo.szTripID;
 	stRow.strGpsSeq = szSeqNo;
@@ -1276,40 +1261,8 @@ bool CRawLogWorker::AppendUpdateRow(vector<RAW_LOG_UPDATE_ROW> *pvtUpdates,
 	stRow.strMatchLat = szMatchLat;
 	stRow.strMatchLon = szMatchLon;
 	stRow.strMatchLinkId = szMatchLinkId;
-	stRow.strReverseFit = szReverseFit;
 	pvtUpdates->push_back(stRow);
 	return true;
-}
-
-/**
- * @brief 역행(dip) 실시간 판정 — 이미 적재된 N-1 행 1건을 MATCHED→SKIP 으로 재정정
- * @param[in] pcConn DB 커넥션
- * @param[in] stTarget 정정 대상 (TRIP_ID, GPS_SEQ)
- * @return true(쿼리 정상 실행 — 이미 다른 상태로 바뀐 행이라 0건 갱신이어도 정상), false(쿼리 실패)
- * @remark [rawgps_skip] WHERE MATCH_STATUS=1 가드 — 그 사이 다른 로직으로 상태가 바뀐 행은
- *   덮어쓰지 않는다 (2026-07-20 최정우 추가)
-*/
-bool CRawLogWorker::RetroactiveSkip(PGconn *pcConn, const RETRO_SKIP_TARGET& stTarget)
-{
-	if ((pcConn == nullptr) || m_stConfig.strSkipSQL.empty())
-		return false;
-
-	const char *aszParams[2] = { stTarget.strTripId.c_str(), stTarget.strGpsSeq.c_str() };
-	PGresult *pcResult = PQexecParams(pcConn, m_stConfig.strSkipSQL.c_str(),
-		2, nullptr, aszParams, nullptr, nullptr, 0);
-
-	ExecStatusType nExecStatus = pcResult ? PQresultStatus(pcResult) : PGRES_FATAL_ERROR;
-	bool bOk = (nExecStatus == PGRES_COMMAND_OK) || (nExecStatus == PGRES_TUPLES_OK);
-	if (!bOk)
-		LOGFMTE("retroactive skip query fail!trip_id=[%s] seq=[%s] error=[%s]",
-			stTarget.strTripId.c_str(), stTarget.strGpsSeq.c_str(),
-			pcConn ? PQerrorMessage(pcConn) : "no connection");
-	else
-		LOGFMTI("retroactive skip applied!trip_id=[%s] seq=[%s]",
-			stTarget.strTripId.c_str(), stTarget.strGpsSeq.c_str());
-
-	if (pcResult) PQclear(pcResult);
-	return bOk;
 }
 
 /**
@@ -1374,7 +1327,6 @@ bool CRawLogWorker::BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDAT
 	vector<string> vtMatchLat;
 	vector<string> vtMatchLon;
 	vector<string> vtMatchLinkId;
-	vector<string> vtReverseFit;
 
 	vtTripId.reserve(vtUpdates.size());
 	vtGpsSeq.reserve(vtUpdates.size());
@@ -1383,7 +1335,6 @@ bool CRawLogWorker::BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDAT
 	vtMatchLat.reserve(vtUpdates.size());
 	vtMatchLon.reserve(vtUpdates.size());
 	vtMatchLinkId.reserve(vtUpdates.size());
-	vtReverseFit.reserve(vtUpdates.size());
 
 	for (size_t i=0; i<vtUpdates.size(); ++i)
 	{
@@ -1395,7 +1346,6 @@ bool CRawLogWorker::BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDAT
 		vtMatchLat.push_back(stRow.strMatchLat);
 		vtMatchLon.push_back(stRow.strMatchLon);
 		vtMatchLinkId.push_back(stRow.strMatchLinkId);
-		vtReverseFit.push_back(stRow.strReverseFit);
 	}
 
 	// rawgps_update text[] 파라미터 리터럴 생성 (2026-07-08 최정우 주석 추가)
@@ -1406,12 +1356,10 @@ bool CRawLogWorker::BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDAT
 	string strMatchLatArray = BuildPgTextArray(vtMatchLat);
 	string strMatchLonArray = BuildPgTextArray(vtMatchLon);
 	string strMatchLinkIdArray = BuildPgTextArray(vtMatchLinkId);
-	string strReverseFitArray = BuildPgTextArray(vtReverseFit);
 
 	// 파라미터 순서 = PRIM_RAWGPS 컬럼 순서 ($1 TRIP_ID, $2 GPS_SEQ, $3 MATCH_LAT,
-	//   $4 MATCH_LON, $5 INTERSECT_LEN, $6 MATCH_LINK_ID, $7 MATCH_STATUS,
-	//   $8 REVERSE_FIT) (2026-07-18 최정우 추가)
-	const char *pszParams[8] =
+	//   $4 MATCH_LON, $5 INTERSECT_LEN, $6 MATCH_LINK_ID, $7 MATCH_STATUS)
+	const char *pszParams[7] =
 	{
 		strTripIdArray.c_str(),
 		strGpsSeqArray.c_str(),
@@ -1419,11 +1367,10 @@ bool CRawLogWorker::BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDAT
 		strMatchLonArray.c_str(),
 		strIntersectLenArray.c_str(),
 		strMatchLinkIdArray.c_str(),
-		strMatchStatusArray.c_str(),
-		strReverseFitArray.c_str()
+		strMatchStatusArray.c_str()
 	};
 
-	const int nParamLengths[8] =
+	const int nParamLengths[7] =
 	{
 		static_cast<int>(strTripIdArray.size()),
 		static_cast<int>(strGpsSeqArray.size()),
@@ -1431,14 +1378,13 @@ bool CRawLogWorker::BulkUpdateRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDAT
 		static_cast<int>(strMatchLonArray.size()),
 		static_cast<int>(strIntersectLenArray.size()),
 		static_cast<int>(strMatchLinkIdArray.size()),
-		static_cast<int>(strMatchStatusArray.size()),
-		static_cast<int>(strReverseFitArray.size())
+		static_cast<int>(strMatchStatusArray.size())
 	};
-	const int nParamFormats[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+	const int nParamFormats[7] = { 0, 0, 0, 0, 0, 0, 0 };
 
 	// rawgps_update bulk UPDATE 실행 (2026-07-08 최정우 주석 추가)
 	PGresult *pcResult = PQexecParams(pcConn, m_stConfig.strUpdateSQL.c_str(),
-		8, nullptr, pszParams, nParamLengths, nParamFormats, 0);
+		7, nullptr, pszParams, nParamLengths, nParamFormats, 0);
 
 	if (pcResult == nullptr)
 		return false;
@@ -1501,7 +1447,6 @@ bool CRawLogWorker::BulkReleaseRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDA
 		stRow.strMatchLat.clear();
 		stRow.strMatchLon.clear();
 		stRow.strMatchLinkId.clear();
-		stRow.strReverseFit.clear();
 
 		const string strRetryKey = MakeReleaseRetryKey(stRow.strTripId, stRow.strGpsSeq);
 		const int nRetryMax = m_stConfig.nRetryMax;

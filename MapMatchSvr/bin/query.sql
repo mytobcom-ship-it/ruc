@@ -71,7 +71,7 @@ RETURNING
 -- ── 2. 결과 갱신 ──────────────────────────────────────────────────────────
 -- [rawgps_update] PROCESSING(2) → MATCHED(1)/SKIP(3)/ERROR(4). DRIVE_STATUS=4 동일 갱신 (2026-07-10 최정우 수정)
 -- 파라미터는 PRIM_RAWGPS 컬럼 순서대로 배열 (2026-07-15 최정우 재정렬)
--- $1=TRIP_ID[], $2=GPS_SEQ[], $3=MATCH_LAT[], $4=MATCH_LON[], $5=INTERSECT_LEN[](GPS↔세그먼트 교차점 거리,m), $6=MATCH_LINK_ID[], $7=MATCH_STATUS[], $8=REVERSE_FIT[](역방향 핏 채택 여부 — 역주행 의심 신호, 2026-07-18 최정우 추가)
+-- $1=TRIP_ID[], $2=GPS_SEQ[], $3=MATCH_LAT[], $4=MATCH_LON[], $5=INTERSECT_LEN[](GPS↔세그먼트 교차점 거리,m), $6=MATCH_LINK_ID[], $7=MATCH_STATUS[]
 [rawgps_update]
 UPDATE ROADNET.PRIM_RAWGPS AS T
 SET
@@ -95,11 +95,6 @@ SET
 		WHEN V.MATCH_STATUS IN (3, 4) THEN NULL
 		ELSE T.MATCH_LINK_ID
 	END,
-	REVERSE_FIT = CASE
-		WHEN V.REVERSE_FIT <> '' THEN V.REVERSE_FIT::BOOLEAN
-		WHEN V.MATCH_STATUS IN (3, 4) THEN NULL
-		ELSE T.REVERSE_FIT
-	END,
 	MATCH_STATUS = V.MATCH_STATUS
 FROM (
 	SELECT
@@ -109,8 +104,7 @@ FROM (
 		U.MATCH_LON,
 		U.INTERSECT_LEN,
 		U.MATCH_LINK_ID,
-		U.MATCH_STATUS::SMALLINT AS MATCH_STATUS,
-		U.REVERSE_FIT
+		U.MATCH_STATUS::SMALLINT AS MATCH_STATUS
 	FROM UNNEST(
 		$1::TEXT[],
 		$2::TEXT[],
@@ -118,8 +112,7 @@ FROM (
 		$4::TEXT[],
 		$5::TEXT[],
 		$6::TEXT[],
-		$7::TEXT[],
-		$8::TEXT[]
+		$7::TEXT[]
 	) AS U(
 		TRIP_ID,
 		GPS_SEQ,
@@ -127,8 +120,7 @@ FROM (
 		MATCH_LON,
 		INTERSECT_LEN,
 		MATCH_LINK_ID,
-		MATCH_STATUS,
-		REVERSE_FIT
+		MATCH_STATUS
 	)
 ) AS V
 WHERE T.TRIP_ID = V.TRIP_ID
@@ -141,15 +133,3 @@ SELECT 1 WHERE FALSE;
 # CHARGE_TARGET 설계 미완 — Worker 미호출, INSERT 비활성 (2026-07-10 최정우 수정)
 # DRIVE_STATUS=4(OFF_ROAD) 과금 판별·적재 생략은 Worker 에서 처리 예정
 # 설계 확정 후 INSERT INTO ROADNET.CHARGE_TARGET (...) VALUES (...); 복원
-
--- ── 역행(dip) 실시간 판정 재정정 — 이미 MATCHED 로 적재된 N-1 행 1건을 SKIP 으로 전환 (2026-07-20 최정우 추가) ──
--- $1=TRIP_ID $2=GPS_SEQ
--- WHERE MATCH_STATUS=1 가드: 그 사이 다른 로직으로 상태가 바뀐 행은 덮어쓰지 않음
-[rawgps_skip]
-UPDATE ROADNET.PRIM_RAWGPS
-SET
-	MATCH_STATUS = 3
-WHERE
-	TRIP_ID = $1
-	AND GPS_SEQ = $2::bigint
-	AND MATCH_STATUS = 1;

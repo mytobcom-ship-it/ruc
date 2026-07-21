@@ -89,34 +89,32 @@ enum eLinkNodeType : uint8
 
 /**
  * @struct sAltitudeScoreConfig
- * @brief 연속 맵매칭 고도(ALTITUDE_M) 보조 점수 설정 — config [mapmatch] altitude_*
- * @remark Begin 맵매칭 미적용. altitude_weight=0 이면 전체 비활성.
+ * @brief 연속 맵매칭 고도(ALTITUDE_M) 보조 점수 설정 — config [mapmatch] alt_gap/alt_penalty/alt_weight/alt_slope
+ * @remark Begin 맵매칭 미적용. alt_weight=0 이면 전체 비활성.
  *
  * 고도 보조 비용(음수=유리·양수=불리)은 기존 dfCost(INTERSECT_LEN+방위각)에 가산.
- *   |Δalt| ≤ altitude_gap:
- *     · 같은 ROAD_TYPE  → −altitude_bonus
+ *   |Δalt| ≤ alt_gap:
+ *     · 같은 ROAD_TYPE  → −alt_penalty (alt_penalty 가 양수인 설정 기준 — 부호는 그대로 뒤집어 적용)
  *     · 호환 ROAD_TYPE  → 0  (고가↔교량)
- *     · 불일치          → +altitude_penalty
- *   |Δalt| > altitude_gap:
- *     · altitude_weight × (|Δalt| − altitude_gap) + 방향 패널티
- *     · 상승(Δ>차이) 시 지하 후보 +페널티 / 하강(Δ<−차이) 시 고가·교량 후보 +페널티
- *   |Δalt|/수평거리 > altitude_slope → 고도 신호 무시(0)
+ *     · 불일치          → +alt_penalty
+ *   |Δalt| > alt_gap:
+ *     · alt_weight × (|Δalt| − alt_gap) + 방향 패널티
+ *     · 상승(Δ>차이) 시 지하 후보 +alt_penalty / 하강(Δ<−차이) 시 고가·교량 후보 +alt_penalty
+ *   |Δalt|/수평거리 > alt_slope → 고도 신호 무시(0)
  *
- * 예) 차이=8, 보너스=3, 페널티=10, 가중치=0.5 / 직전·현재 100m·106m, 같은 고가
- *     → Δ=6 ≤ 8 → 고도 보조 −3m (후보 우선)
+ * 예) 차이=8, alt_penalty=10, 가중치=0.5 / 직전·현재 100m·106m, 같은 고가
+ *     → Δ=6 ≤ 8 → 고도 보조 −10m (후보 우선)
 */
 typedef struct sAltitudeScoreConfig
 {
-	sint16							nGap;								// config altitude_gap — 직전 매칭 고도와 허용 차이(m)
-	sint16							nBonus;								// config altitude_bonus — 차이 안·같은 ROAD_TYPE 비용 감산(m)
-	sint16							nPenalty;							// config altitude_penalty — 차이 안·ROAD_TYPE 불일치 추가 비용(m)
-	double							dfWeight;							// config altitude_weight — 차이 초과 시 고도차 가중. 0=비활성
-	double							dfSlope;							// config altitude_slope — |Δ고도|/수평거리 상한. 초과 시 고도 무시
+	sint16							nGap;								// config alt_gap — 직전 매칭 고도와 허용 차이(m)
+	sint16							nAltPenalty;						// config alt_penalty — 양수=ROAD_TYPE 불일치 비용 가산·음수=같은 ROAD_TYPE 비용 감산(m)
+	double							dfWeight;							// config alt_weight — 차이 초과 시 고도차 가중. 0=비활성
+	double							dfSlope;							// config alt_slope — |Δ고도|/수평거리 상한. 초과 시 고도 무시
 
 	sAltitudeScoreConfig() :
 		nGap(8),
-		nBonus(3),
-		nPenalty(10),
+		nAltPenalty(10),
 		dfWeight(0.5),
 		dfSlope(0.12)
 	{}
@@ -144,7 +142,7 @@ typedef struct sAltitudeScoreConfig
 //   목적: dfCost=거리+w_a·|각도차| 합산 시, 각도차가 커도(하드컷 120° 이내) 비용이 무한정 커져 실거리가
 //   훨씬 먼 후보가 선택되는 것을 방지. 예) 5m/100°(cap 미적용 시 cost 105) vs 40m/5° 후보에서,
 //   cap=15 적용 시 5m 후보 cost=20 으로 40m 후보(cost 45)를 이김 → 근접 우위가 보존됨.
-#define MM_DIR_MAX_PENALTY_M		15.0								// (단위: m) 방위각 비용 상한
+#define MM_DIR_MAX_PENALTY		15.0								// (단위: m) 방위각 비용 상한
 #define MM_SPEED_LOW_KMH			5									// 이하: 저속 → 방위각 불신(w_a=0)
 #define MM_SPEED_HIGH_KMH			20									// 이상: 방위각 가중치 최대(w_a=MM_DIR_WEIGHT)
 
@@ -155,6 +153,10 @@ typedef struct sAltitudeScoreConfig
 // 정식 매칭 실패(반경 밖)·정확도 SKIP 시 최근접 세그먼트 진단 탐색 반경(m) (2026-07-10 최정우 추가)
 //   좌표·INTERSECT_LEN(GPS↔세그먼트 교차점 거리)를 참고용으로 남기기 위한 최대 탐색 반경.
 #define MM_DIAG_RADIUS				250									// (단위: m) 반경 밖 최근접 후보 탐색 반경(진단용, 방위각 무시)
+
+// bReverseSuspect(연속역행 스트릭용 신호) 판정 시, 이보다 작은 위치 후퇴는 부동소수점 오차로
+//   보고 무시 — margin 과 무관하게 항상 적용되는 최소 임계 (2026-07-21 최정우 추가)
+#define MM_REVERSE_SUSPECT_EPS		0.1									// (단위: m) 역행 의심 판정 최소 후퇴거리
 
 // 연속 실패 후 Begin 재검색 시, 직전 성공 링크와 "연결(회전 가능)되지 않은" 후보에 주는 비용 페널티(m 상당) (2026-07-15 최정우 추가)
 //   목적: 회전·수렴 구간에서 나란한 도로로 튀는 오매칭 억제. 소프트 페널티라 명백히 더 가까운 도로는 그대로 선택됨.
@@ -204,9 +206,9 @@ typedef struct sMatchEntry
 	double							dfAngleCost;						// 방위각 비용(m) — match trace formula용
 	double							dfAltAdj;							// 고도 보조 비용(m) — Continue 만, match trace formula용
 	double							dfReversePenalty;					// 역행 페널티(m) — match trace formula용 (2026-07-20 최정우 추가)
+	bool							bReverseSuspect;					// 위치 역행 + heading 도 역방향 일치 — margin 과 무관, 연속역행(reverse_confirm) 판정 전용 신호 (2026-07-21 최정우 추가)
 	sint16							nDirAngleDiff;						// 주행방향 각도 차이
 	uint64							qwLinkID;							// 링크 ID
-	bool							bReverseFit;						// 세그먼트 역방향이 정방향보다 더 잘 맞아 채택됨 — 역주행 의심 신호 (2026-07-18 최정우 추가)
 	uint16							wLenFromLink;						// 링크의 시작점에서 부터 매핑된 세그먼트 시작점까지 거리
 	uint8							nMaxSpeed;							// 제한 속도
 	double							dfLen;								// 링크 길이
@@ -233,9 +235,9 @@ typedef struct sMatchEntry
 		dfAngleCost(0.0), 
 		dfAltAdj(0.0),
 		dfReversePenalty(0.0),
+		bReverseSuspect(false),
 		nDirAngleDiff(0),
 		qwLinkID(0),
-		bReverseFit(false),
 		wLenFromLink(0),
 		nMaxSpeed(0), 
 		dfLen(0.0), 

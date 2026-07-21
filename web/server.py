@@ -8,6 +8,7 @@ import configparser
 import json
 import math
 import os
+import subprocess
 from pathlib import Path
 
 import psycopg2
@@ -16,6 +17,9 @@ from flask import Flask, jsonify, request, send_from_directory
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.ini"
+REPO_ROOT = BASE_DIR.parent
+MM_CONFIG_PATH = REPO_ROOT / "MapMatchSvr" / "bin" / "config.ini"
+MM_PIDFILE = REPO_ROOT / "MapMatchSvr" / "bin" / "MapMatchSvr.pid"
 
 app = Flask(__name__, static_folder=str(BASE_DIR), static_url_path="")
 
@@ -108,6 +112,56 @@ def api_trips():
                 for r in cur.fetchall()
             ]
     return jsonify(rows)
+
+
+def mapmatch_config_stale():
+    """MapMatchSvr/bin/config.ini 가 마지막 기동 이후 수정됐는지 — 설정은 기동 시
+    1회만 읽으므로(핫리로드 없음), 이 경우 재시작해야 값이 반영된다 (2026-07-21 최정우 추가)"""
+    if not MM_CONFIG_PATH.exists():
+        return False
+    if not MM_PIDFILE.exists():
+        return True
+    return MM_CONFIG_PATH.stat().st_mtime > MM_PIDFILE.stat().st_mtime
+
+
+def restart_mapmatch():
+    """MapMatchSvr 만 재시작(Simulator·web_viewer 는 유지) — test_svr.sh mm-restart 위임
+    (2026-07-21 최정우 추가)"""
+    result = subprocess.run(
+        ["./test_svr.sh", "mm-restart"],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
+    return result.returncode == 0, (result.stdout + result.stderr)
+
+
+@app.route("/api/trip/<path:trip_id>/retest", methods=["POST"])
+def api_trip_retest(trip_id):
+    """기존 수신 GPS(prim_rawgps)는 그대로 두고 매칭 결과만 초기화 — MapMatchSvr 가
+    PENDING(0)을 재폴링해 동일 좌표로 재매칭하게 한다. config.ini 가 마지막 기동 이후
+    바뀌었으면 재테스트 전 MapMatchSvr 를 먼저 재시작해 새 설정을 반영한다 (2026-07-21 최정우 추가)"""
+    restarted = False
+    if mapmatch_config_stale():
+        ok, log = restart_mapmatch()
+        if not ok:
+            return jsonify({"error": "MapMatchSvr 재시작 실패", "log": log[-2000:]}), 500
+        restarted = True
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE roadnet.prim_rawgps
+                SET match_status = 0, match_link_id = NULL,
+                    match_lat = NULL, match_lon = NULL, intersect_len = NULL
+                WHERE trip_id = %s
+                """,
+                (trip_id,),
+            )
+            reset_count = cur.rowcount
+    return jsonify({"trip_id": trip_id, "reset": reset_count, "restarted": restarted})
 
 
 @app.route("/api/trip/<path:trip_id>/points")
@@ -203,7 +257,7 @@ def api_trip_prim_roads(trip_id):
                 )
                 SELECT l.link_id, l.name, l.len,
                        l.st_nd_id, l.st_nd_name, l.ed_nd_id, l.ed_nd_name,
-                       ST_AsGeoJSON(l.geom) AS geojson
+                       ST_AsGeoJSON(l.geom) AS geojson, l.road_type
                 FROM roadnet.prim_link_info l
                 CROSS JOIN env e
                 WHERE l.geom IS NOT NULL
@@ -222,6 +276,8 @@ def api_trip_prim_roads(trip_id):
                     "st_nd_name": row[4],
                     "ed_nd_id": row[5],
                     "ed_nd_name": row[6],
+                    # 시설 유형 (0=일반, 1=교량, 2=터널, 3=고가, 4=지하) — hover 표시용 (2026-07-21 최정우 추가)
+                    "road_type": int(row[8]) if row[8] is not None else None,
                 }))
     return jsonify({"type": "FeatureCollection", "features": features})
 
@@ -242,7 +298,7 @@ def api_prim_roads_bbox():
                 """
                 SELECT l.link_id, l.name, l.len,
                        l.st_nd_id, l.st_nd_name, l.ed_nd_id, l.ed_nd_name,
-                       ST_AsGeoJSON(l.geom) AS geojson
+                       ST_AsGeoJSON(l.geom) AS geojson, l.road_type
                 FROM roadnet.prim_link_info l
                 WHERE l.geom IS NOT NULL
                   AND l.geom && ST_MakeEnvelope(%s, %s, %s, %s, 4326)
@@ -260,6 +316,7 @@ def api_prim_roads_bbox():
                     "st_nd_name": row[4],
                     "ed_nd_id": row[5],
                     "ed_nd_name": row[6],
+                    "road_type": int(row[8]) if row[8] is not None else None,
                 }))
     return jsonify({"type": "FeatureCollection", "features": features})
 

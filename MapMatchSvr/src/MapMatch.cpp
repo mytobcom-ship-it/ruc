@@ -64,15 +64,15 @@ void CMapMatch::SetAltitudeConfig(const ALTITUDE_SCORE_CONFIG& stAltConfig)
 }
 
 /**
- * @brief 연속 맵매칭 역행 페널티 설정 (config reverse_penalty_weight/reverse_speed_gate_kmh/reverse_dead_zone_m)
+ * @brief 연속 맵매칭 역행 페널티 설정 (config reverse_weight/reverse_speed/reverse_margin)
  * @param[in] dfWeight 역행 1m당 비용 가중치
- * @param[in] dfSpeedGateKmh 저속 데드존 적용 속도 상한(km/h) (2026-07-20 최정우 추가)
- * @param[in] dfDeadZoneM 저속 시 페널티 없이 허용하는 역행 거리(m) (2026-07-20 최정우 추가)
+ * @param[in] dfSpeed 저속 데드존 적용 속도 상한(km/h) (2026-07-20 최정우 추가)
+ * @param[in] dfMargin 저속 시 페널티 없이 허용하는 역행 거리(m) (2026-07-20 최정우 추가)
  * @return void
 */
-void CMapMatch::SetReversePenaltyWeight(double dfWeight, double dfSpeedGateKmh, double dfDeadZoneM)
+void CMapMatch::SetReversePenaltyWeight(double dfWeight, double dfSpeed, double dfMargin)
 {
-	m_cContinueMapMatch.SetReversePenaltyWeight(dfWeight, dfSpeedGateKmh, dfDeadZoneM);
+	m_cContinueMapMatch.SetReversePenaltyWeight(dfWeight, dfSpeed, dfMargin);
 }
 
 /**
@@ -181,9 +181,9 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 
 	// (B) 공백 적응: 직전 매칭점→현재 이동거리 클수록 탐색 depth 확대 (2026-07-15 최정우 추가)
 	//   공백(SKIP 연속 등)으로 차량이 여러 링크 전진했을 수 있어, 이동거리 MM_STEP_EXTEND_DIST 마다 depth +1 (최대 +MM_STEP_EXTEND_MAX)
-	if (stMapMatchInput.dfHorizMoveM > 0.0)
+	if (stMapMatchInput.dfHorizMove > 0.0)
 	{
-		int nExtraStep = static_cast<int>(stMapMatchInput.dfHorizMoveM / MM_STEP_EXTEND_DIST);
+		int nExtraStep = static_cast<int>(stMapMatchInput.dfHorizMove / MM_STEP_EXTEND_DIST);
 		if (nExtraStep > MM_STEP_EXTEND_MAX)
 			nExtraStep = MM_STEP_EXTEND_MAX;
 		nSearchStep = static_cast<sint16>(nSearchStep + nExtraStep);
@@ -209,10 +209,10 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 	stSgmtMatchInput.nSpeed = stMapMatchInput.nSpeed;		// 방위각 가중치 적응용(속도) (2026-07-08 최정우 추가)
 	// 연속 맵매칭 고도 컨텍스트 — 세션 앵커·현재 GPS 고도 (시작 미전달)
 	stSgmtMatchInput.nAltitudeM = stMapMatchInput.nAltitudeM;
-	stSgmtMatchInput.nPrevAltitudeM = stMapMatchInput.nPrevAltitudeM;
+	stSgmtMatchInput.nPrevAltitude = stMapMatchInput.nPrevAltitude;
 	stSgmtMatchInput.nPrevRoadType = stMapMatchInput.nPrevRoadType;
 	stSgmtMatchInput.nDriveStatus = stMapMatchInput.nDriveStatus;
-	stSgmtMatchInput.dfHorizMoveM = stMapMatchInput.dfHorizMoveM;
+	stSgmtMatchInput.dfHorizMove = stMapMatchInput.dfHorizMove;
 	stSgmtMatchInput.bUseAltScore = stMapMatchInput.bUseAltScore;
 	// 역행 페널티 컨텍스트 — qwPrevLinkID 는 ContinueMapMatch::StartMapMatch 내부에서 세팅 (2026-07-20 최정우 추가)
 	stSgmtMatchInput.dfPrevLinkPos = stMapMatchInput.dfPrevLinkPos;
@@ -237,7 +237,7 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 	//   120° 방위각 하드컷(MM_DIR_MAX_DEG)이 나란한/반대방향 도로 오매칭은 이미 차단.
 	//   dfAngleCost는 (거리+cap)-거리 형태로 역산되어 부동소수점 반올림 오차가 있을 수 있어
 	//   허용오차(0.01m) 적용 (2026-07-18 최정우 수정)
-	if (stMatchEntry.dfAngleCost >= (MM_DIR_MAX_PENALTY_M - 0.01))
+	if (stMatchEntry.dfAngleCost >= (MM_DIR_MAX_PENALTY - 0.01))
 	{
 		SGMT_MATCH_INPUT stBeginSgmtMatchInput;
 		MATCH_ENTRY stBeginMatchEntry;
@@ -366,7 +366,6 @@ bool CMapMatch::SetResponseValue(uint16 wErrorCode, MATCH_ENTRY stMatchEntry,
 		pstMatchLinkInfo->dfIntersectLenSgmt = stMatchEntry.dfIntersectLenSgmt;
 		pstMatchLinkInfo->nDirAngleDiff		= stMatchEntry.nDirAngleDiff;
 		pstMatchLinkInfo->qwLinkID			= stMatchEntry.qwLinkID;
-		pstMatchLinkInfo->bReverseFit		= stMatchEntry.bReverseFit;
 		pstMatchLinkInfo->wLenFromLink		= stMatchEntry.wLenFromLink;
 		pstMatchLinkInfo->nMaxSpeed			= stMatchEntry.nMaxSpeed;
 		pstMatchLinkInfo->dfLen				= stMatchEntry.dfLen;
@@ -383,6 +382,10 @@ bool CMapMatch::SetResponseValue(uint16 wErrorCode, MATCH_ENTRY stMatchEntry,
 		pstMatchLinkInfo->dfEdNodeX			= stMatchEntry.dfEdNodeX / 360000.0;
 		pstMatchLinkInfo->dfEdNodeY			= stMatchEntry.dfEdNodeY / 360000.0;
 		pstMatchLinkInfo->nEdNodeType		= stMatchEntry.nEdNodeType;
+		// 같은 링크 역행 페널티가 붙은 채로 최종 선택된 후보 — RawLogWorker SKIP 격리용 (2026-07-21 최정우 추가)
+		pstMatchLinkInfo->bReverseHit		= (stMatchEntry.dfReversePenalty > 0.0);
+		// 위치 역행 + heading 역방향 일치(margin 무관) — 연속역행(reverse_confirm) 스트릭 판정 전용 (2026-07-21 최정우 추가)
+		pstMatchLinkInfo->bReverseSuspect	= stMatchEntry.bReverseSuspect;
 	}
 
 	return (wErrorCode == NO_ERROR) ? true : false;

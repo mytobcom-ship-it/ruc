@@ -39,6 +39,15 @@ static double RoadTypeAltOffset(int nRoadType)
 }
 
 /**
+ * @brief GPS 신호가 차단되는 음영구간 ROAD_TYPE 인지 — 터널(002)·지하(004)만 해당.
+ *        고가(003)·교량(001)은 개활지라 GPS 수신에 영향 없음 (2026-07-21 최정우 추가)
+*/
+static bool IsDeadZoneRoadType(int nRoadType)
+{
+	return (nRoadType == 2) || (nRoadType == 4);
+}
+
+/**
  * @brief 보조 GPS 필드(속도·방위각·고도·수평오차·배터리) 간헐적 누락 시뮬레이션
  * @remark 좌표(GPS_LAT/LON)는 유지. MapMatchSvr 은 NULL → NO_SPEED/NO_ANGLE/NO_ACCURACY 등으로 처리
 */
@@ -299,12 +308,6 @@ void CVehicle::Tick(const char *pszGpsDt, vector<GPS_SAMPLE>& vtOut)
 	if (nEvent == SIM_TRIP_EVENT_START)
 		m_strTripId = m_strDeviceKey + "_" + string(pszGpsDt);
 
-	// GPS_SEQ: 운행마다 초기화, START(첫 표본)=1, 이후 표본마다 +1 (2026-07-10 최정우 추가)
-	if (nEvent == SIM_TRIP_EVENT_START)
-		m_qwGpsSeq = 1;
-	else
-		++m_qwGpsSeq;
-
 	// 현재 위치 재계산 (진행 반영)
 	// 진행 반영 후 위치·방위·ROAD_TYPE 재보간 (2026-07-08 최정우 주석 추가, 2026-07-20 최정우 수정)
 	Interpolate(m_dfPos, stTrue, dfBearing, nSegSpd, nSegRoadType);
@@ -317,6 +320,19 @@ void CVehicle::Tick(const char *pszGpsDt, vector<GPS_SAMPLE>& vtOut)
 	if (dfAltOffsetDiff > dfMaxAltStep) dfAltOffsetDiff = dfMaxAltStep;
 	if (dfAltOffsetDiff < -dfMaxAltStep) dfAltOffsetDiff = -dfMaxAltStep;
 	m_dfAltRoadOffset += dfAltOffsetDiff;
+
+	// GPS 음영구간(터널·지하) — 일정 확률로 표본 자체를 미생성(신호 두절 흉내). 차량 위치·고도
+	//   오프셋은 계속 진행시키고(위 두 블록), 리포트만 건너뜀. START/END 는 트립 라이프사이클
+	//   보존을 위해 예외로 항상 생성한다 (2026-07-21 최정우 추가)
+	bool bDeadZoneRoad = IsDeadZoneRoadType(nSegRoadType);
+	if (bDeadZoneRoad && (nEvent == SIM_TRIP_EVENT_NONE) && (dist01(m_rng) < m_stConfig.dfDeadZoneProb))
+		return;		// GPS_SEQ 도 증가시키지 않음 — 미수신 GPS 는 seq 자체가 없음
+
+	// GPS_SEQ: 운행마다 초기화, START(첫 표본)=1, 이후 표본마다 +1 (2026-07-10 최정우 추가)
+	if (nEvent == SIM_TRIP_EVENT_START)
+		m_qwGpsSeq = 1;
+	else
+		++m_qwGpsSeq;
 
 	// 도로 이탈 노이즈 (정규분포 거리 + 임의 방향) — 현실적 GPS 수준(대부분 ≤10m) (2026-07-16 최정우 수정)
 	normal_distribution<double> distNoise(0.0, m_stConfig.dfNoiseSigmaM);

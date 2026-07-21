@@ -26,7 +26,7 @@ void FillMatchTraceCtx(MATCH_TRACE_CTX& stTraceCtx, int nThreadId, const sRawLog
 	stTraceCtx.nMatchedStep = 0;
 	if (pstAltCtx != nullptr && pstAltCtx->bHasPrevAlt)
 	{
-		stTraceCtx.nPrevAltitudeM = pstAltCtx->nPrevAltitudeM;
+		stTraceCtx.nPrevAltitude = pstAltCtx->nPrevAltitude;
 		stTraceCtx.nPrevRoadType = pstAltCtx->nPrevRoadType;
 	}
 }
@@ -84,9 +84,9 @@ bool CProcessManager::Initialize(const int nThreadId, CDataLoader *pcDataLoader,
 		const uint8& nCoordinateType, const sint16& nRadius, const uint32& dwMaxDistance,
 		const double& dfRadiusScale, const sint16& nRadiusMin, const sint16& nRadiusMax,
 		const ALTITUDE_SCORE_CONFIG& stAltitudeConfig,
-		const double& dfReversePenaltyWeight,
-		const double& dfReverseSpeedGateKmh,
-		const double& dfReverseDeadZoneM)
+		const double& dfReverseWeight,
+		const double& dfReverseSpeed,
+		const double& dfReverseMargin)
 {
 	m_nThreadId = nThreadId;					// 쓰레드 ID
 
@@ -131,9 +131,9 @@ bool CProcessManager::Initialize(const int nThreadId, CDataLoader *pcDataLoader,
 	m_pcMapMatch->SetAltitudeConfig(m_stAltitudeConfig);
 
 	// 연속 맵매칭 역행 페널티 가중치 config 적용 (2026-07-20 최정우 추가)
-	m_pcMapMatch->SetReversePenaltyWeight((dfReversePenaltyWeight >= 0.0) ? dfReversePenaltyWeight : 1.0,
-		(dfReverseSpeedGateKmh >= 0.0) ? dfReverseSpeedGateKmh : 0.0,
-		(dfReverseDeadZoneM >= 0.0) ? dfReverseDeadZoneM : 0.0);
+	m_pcMapMatch->SetReversePenaltyWeight((dfReverseWeight >= 0.0) ? dfReverseWeight : 1.0,
+		(dfReverseSpeed >= 0.0) ? dfReverseSpeed : 0.0,
+		(dfReverseMargin >= 0.0) ? dfReverseMargin : 0.0);
 
 	return true;
 }
@@ -175,8 +175,8 @@ sint16 CProcessManager::CalcAdaptiveRadius(sint16 nAccuracyM) const
  *   고도 보조 점수(bUseAltScore) 활성 조건 (모두 충족):
  *     1) qwLinkID ≠ 0 (연속 맵매칭)
  *     2) pstAltCtx·bHasPrevAlt (직전 성공 시 GPS 고도 앵커 있음)
- *     3) altitude_weight > 0
- *   예) 직전100m·현재106m·같은 ROAD_TYPE → ContinueMapMatch에서 dfCost −3 가산
+ *     3) alt_weight > 0
+ *   예) 직전100m·현재106m·같은 ROAD_TYPE → ContinueMapMatch에서 dfCost −10 가산
 */
 void CProcessManager::BuildMapMatchInput(const sRawLogInfo& stRawLogInfo,
 		MAP_MATCH_INPUT *pstMapMatchInput, uint64 qwLinkID,
@@ -204,9 +204,9 @@ void CProcessManager::BuildMapMatchInput(const sRawLogInfo& stRawLogInfo,
 		&& m_stAltitudeConfig.dfWeight > 0.0)
 	{
 		pstMapMatchInput->bUseAltScore = true;
-		pstMapMatchInput->nPrevAltitudeM = pstAltCtx->nPrevAltitudeM;
+		pstMapMatchInput->nPrevAltitude = pstAltCtx->nPrevAltitude;
 		pstMapMatchInput->nPrevRoadType = pstAltCtx->nPrevRoadType;
-		pstMapMatchInput->dfHorizMoveM = pstAltCtx->dfHorizMoveM;
+		pstMapMatchInput->dfHorizMove = pstAltCtx->dfHorizMove;
 	}
 
 	// 연속 맵매칭 + 직전 매칭 위치 보유 시 역행 페널티용 위치 전달 (2026-07-20 최정우 추가)

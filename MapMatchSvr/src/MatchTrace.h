@@ -27,7 +27,7 @@ typedef struct sMatchTraceCtx
 	sint16							nSpeed;
 	sint16							nHeading;
 	sint16							nAltitudeM;
-	sint16							nPrevAltitudeM;
+	sint16							nPrevAltitude;
 	uint8							nPrevRoadType;
 	bool							bContinue;
 	uint64							qwPrevLinkId;

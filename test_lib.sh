@@ -333,6 +333,15 @@ web_start() {
 	return 0
 }
 
+# MapMatchSvr 단독 재시작 — config.ini 값 변경을 반영. Simulator/web_viewer 는 건드리지
+#   않는다(engine_start 가 이미 떠있으면 내부적으로 stop→start 처리) (2026-07-21 최정우 추가)
+test_restart_mm() {
+	[ -x "$MM_BIN" ] || { echo "오류: $MM_BIN 없음 — MapMatchSvr/src 에서 make install"; return 1; }
+	[ -f "$TEST_LIB_ROOT/MapMatchSvr/bin/config.ini" ] || { echo "오류: MapMatchSvr/bin/config.ini 없음"; return 1; }
+	echo "=== MapMatchSvr 재시작 (설정 반영) ==="
+	engine_start "$MM_BIN"
+}
+
 test_require_bins() {
 	[ -x "$MM_BIN" ] || { echo "오류: $MM_BIN 없음 — MapMatchSvr/src 에서 make"; return 1; }
 	[ -x "$SIM_BIN" ] || { echo "오류: $SIM_BIN 없음 — Simulator/src 에서 make install"; return 1; }
@@ -404,7 +413,7 @@ test_start_all() {
 	local rc=0
 	test_require_bins || return 1
 	echo "=== RUC 테스트 시작 ==="
-	clear_rawgps_data || true
+	# clear_rawgps_data || true	# 기존 데이터 유지 위해 비활성화 (2026-07-21 최정우 수정)
 	echo "[1/3] MapMatchSvr"
 	engine_start "$MM_BIN" || rc=1
 	if [ "$rc" -eq 0 ]; then

@@ -102,7 +102,6 @@ private:
 	string							m_strRawLogSelectSQL;				// 조회·예약 SQL (UPDATE RETURNING)
 	string							m_strRawLogUpdateSQL;				// 결과 갱신 SQL
 	string							m_strChargeInsertSQL;				// #10 보류: 로드만, Worker INSERT 미연동
-	string							m_strRawLogSkipSQL;				// 역행(dip) 실시간 판정 재정정 UPDATE SQL (선택, 비어 있으면 비활성) (2026-07-20 최정우 추가)
 	int								m_nFetchLimit;						// 1회 조회·예약 최대 건수 (건)
 	int								m_nFetchInterval;					// 큐 여유 시 DB 조회 간격 (ms)
 	int								m_nQueuePauseCount;					// 큐 batch 수, 이상이면 DB 조회 중단 (건)
@@ -123,16 +122,16 @@ private:
 	int								m_nRadiusMin;						// config radius_min — 적응형 검색 반경 하한 (m) (2026-07-08 최정우)
 	int								m_nRadiusMax;						// config radius_max — 적응형 검색 반경 상한 (m) (2026-07-08 최정우)
 	int								m_nRadiusSkip;						// config radius_skip — ACCURACY_M 초과 시 SKIP (m). 0=비활성 (2026-07-08 최정우)
-	int								m_nAltitudeGap;						// config altitude_gap — 직전 매칭 고도와 허용 차이(m)
-	int								m_nAltitudeBonus;					// config altitude_bonus — 차이 안·같은 ROAD_TYPE 비용 감산(m)
-	int								m_nAltitudePenalty;					// config altitude_penalty — 차이 안·ROAD_TYPE 불일치 추가 비용(m)
-	double							m_dfAltitudeWeight;					// config altitude_weight — 차이 초과 시 고도차 가중. 0=비활성
-	double							m_dfAltitudeSlope;					// altitude_slope
-	double							m_dfReversePenaltyWeight;			// config reverse_penalty_weight — 역행 1m당 비용 가중 (2026-07-20 최정우 추가)
-	double							m_dfReverseSpeedGateKmh;			// config reverse_speed_gate_kmh — 저속 데드존 적용 속도 상한 (2026-07-20 최정우 추가)
-	double							m_dfReverseDeadZoneM;				// config reverse_dead_zone_m — 저속 시 역행 허용거리(m) (2026-07-20 최정우 추가)
-	double							m_dfSpeedDiffFactor;				// config speed_diff_factor (2026-07-20 최정우 추가)
-	int								m_nSpeedDiffMargin;					// config speed_diff_margin (km/h) (2026-07-20 최정우 추가)
+	int								m_nAltGap;							// config alt_gap — 직전 매칭 고도와 허용 차이(m)
+	int								m_nAltPenalty;						// config alt_penalty — 양수=ROAD_TYPE 불일치 비용 가산·음수=같은 ROAD_TYPE 비용 감산(m)
+	double							m_dfAltWeight;						// config alt_weight — 차이 초과 시 고도차 가중. 0=비활성
+	double							m_dfAltSlope;						// config alt_slope
+	double							m_dfReverseWeight;			// config reverse_weight — 역행 1m당 비용 가중 (2026-07-20 최정우 추가)
+	double							m_dfReverseSpeed;			// config reverse_speed — 저속 데드존 적용 속도 상한 (2026-07-20 최정우 추가)
+	double							m_dfReverseMargin;				// config reverse_margin — 저속 시 역행 허용거리(m) (2026-07-20 최정우 추가)
+	int								m_nReverseConfirm;					// config reverse_confirm — 연속 역행 확정 포인트 수 (2026-07-21 최정우 추가)
+	double							m_dfSpeedFactor;				// config speed_factor (2026-07-20 최정우 추가)
+	int								m_nSpeedMargin;					// config speed_margin (km/h) (2026-07-20 최정우 추가)
 
 	time_t							m_dtLastMonitorLog;					// 마지막 모니터링 시각
 	int								m_nLastQueueCount;					// 이전 큐 적재량

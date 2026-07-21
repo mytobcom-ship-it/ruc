@@ -51,7 +51,6 @@ CREATE TABLE IF NOT EXISTS roadnet.prim_rawgps (
     battery         smallint        DEFAULT NULL,
     recv_dt         char(14)        NOT NULL DEFAULT to_char(now(), 'YYYYMMDDHH24MISS'),
     match_link_id   varchar(20)     DEFAULT NULL,
-    reverse_fit     boolean         DEFAULT NULL,
     match_status    smallint        NOT NULL DEFAULT 0,
     CONSTRAINT pk_prim_rawgps PRIMARY KEY (trip_id, gps_seq),
     CONSTRAINT ck_prim_rawgps_trip_event CHECK (trip_event IN (0, 1, 2)),
@@ -69,12 +68,9 @@ COMMENT ON COLUMN roadnet.prim_rawgps.drive_status IS '0:ON_ROAD, 1:IDLE, 2:PARK
 COMMENT ON COLUMN roadnet.prim_rawgps.match_status IS '0:PENDING, 1:MATCHED, 2:PROCESSING, 3:SKIP, 4:ERROR';
 COMMENT ON COLUMN roadnet.prim_rawgps.intersect_len IS 'GPS 좌표와 세그먼트 교차점까지 거리(m)';
 COMMENT ON COLUMN roadnet.prim_rawgps.match_link_id IS '맵매칭된 링크 ID. 매칭前/ERROR NULL';
-COMMENT ON COLUMN roadnet.prim_rawgps.reverse_fit IS
-    'TRUE=세그먼트 역방향이 정방향보다 더 잘 맞아 채택됨(역주행 의심 신호, 단정 아님). MATCHED 시에만 유효 (2026-07-18 최정우 추가)';
 
 -- 기존 테스트 DB 마이그레이션 (CREATE TABLE IF NOT EXISTS 는 기존 테이블에 컬럼을 추가하지 않음) (2026-07-18 최정우 추가)
 ALTER TABLE roadnet.prim_rawgps ADD COLUMN IF NOT EXISTS match_link_id varchar(20) DEFAULT NULL;
-ALTER TABLE roadnet.prim_rawgps ADD COLUMN IF NOT EXISTS reverse_fit boolean DEFAULT NULL;
 
 -- ---------------------------------------------------------------------------
 -- [3] 인덱스 (위치검증서버 PENDING 폴링 최적화)

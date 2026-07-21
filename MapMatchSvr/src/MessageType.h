@@ -93,22 +93,22 @@ typedef vector<sRawLogInfo> RAW_LOG_BATCH;
  * @brief 연속 맵매칭 고도 보조 점수용 세션 컨텍스트 (trip_id 세션 → ProcessManager 전달)
  * @remark
  *   직전 매칭 성공 시 RawLogWorker가 GPS ALTITUDE_M·ROAD_TYPE을 기억.
- *   Δalt = 현재 nAltitudeM − nPrevAltitudeM, dfHorizMoveM로 경사(altitude_slope) 검사.
+ *   Δalt = 현재 nAltitudeM − nPrevAltitude, dfHorizMove로 경사(alt_slope) 검사.
 */
 typedef struct sAltMatchCtx
 {
-	sint16							nPrevAltitudeM;						// 직전 매칭 성공 시 GPS 고도(m). NO_ALTITUDE=없음
+	sint16							nPrevAltitude;						// 직전 매칭 성공 시 GPS 고도(m). NO_ALTITUDE=없음
 	uint8							nPrevRoadType;						// 직전 성공 링크 ROAD_TYPE
 	bool							bHasPrevAlt;						// 직전 고도·도로유형 보유 여부
-	double							dfHorizMoveM;						// 직전 매칭점→현재 GPS 수평거리(m)
+	double							dfHorizMove;						// 직전 매칭점→현재 GPS 수평거리(m)
 	double							dfPrevLinkPos;						// 직전 매칭 위치 — 링크 시작점부터 거리(m), 역행 페널티용 (2026-07-20 최정우 추가)
 	bool							bHasPrevLinkPos;					// dfPrevLinkPos 보유 여부 (2026-07-20 최정우 추가)
 
 	sAltMatchCtx() :
-		nPrevAltitudeM(NO_ALTITUDE),
+		nPrevAltitude(NO_ALTITUDE),
 		nPrevRoadType(ROAD_TYPE_NORMAL),
 		bHasPrevAlt(false),
-		dfHorizMoveM(0.0),
+		dfHorizMove(0.0),
 		dfPrevLinkPos(0.0),
 		bHasPrevLinkPos(false)
 	{}
@@ -130,10 +130,10 @@ typedef struct sMapMatchInput
 	uint8							nRoadRank;							// (미사용, 0 유지) 구 도로등급 힌트 필드
 	sint16							nSearchStep;						// 연속 측위시 탐색할 단계 (연속 측위, 기본:0, 0~최대검색단계)
 	sint16							nAltitudeM;							// 현재 GPS 고도(m). NO_ALTITUDE=없음
-	sint16							nPrevAltitudeM;						// 직전 매칭 GPS 고도(m). NO_ALTITUDE=없음
+	sint16							nPrevAltitude;						// 직전 매칭 GPS 고도(m). NO_ALTITUDE=없음
 	uint8							nPrevRoadType;						// 직전 성공 링크 ROAD_TYPE
 	sint16							nDriveStatus;						// DRIVE_STATUS (터널 시 고도 무시)
-	double							dfHorizMoveM;						// 직전 매칭점→현재 GPS 수평거리(m)
+	double							dfHorizMove;						// 직전 매칭점→현재 GPS 수평거리(m)
 	bool							bUseAltScore;						// 연속 맵매칭 고도 보조 점수 적용 여부
 	uint64							qwBiasLinkID;						// 연속실패 Begin 재검색용: 직전 성공 링크(연결성 편향, 0=미적용) (2026-07-15 최정우 추가)
 	double							dfPrevLinkPos;						// 직전 매칭 위치 — 링크 시작점부터 거리(m), 역행 페널티용 (2026-07-20 최정우 추가)
@@ -150,10 +150,10 @@ typedef struct sMapMatchInput
 		nRoadRank(0),
 		nSearchStep(2),
 		nAltitudeM(NO_ALTITUDE),
-		nPrevAltitudeM(NO_ALTITUDE),
+		nPrevAltitude(NO_ALTITUDE),
 		nPrevRoadType(ROAD_TYPE_NORMAL),
 		nDriveStatus(DRIVE_STATUS_ON_ROAD),
-		dfHorizMoveM(0.0),
+		dfHorizMove(0.0),
 		bUseAltScore(false),
 		qwBiasLinkID(0),
 		dfPrevLinkPos(0.0),
@@ -179,7 +179,6 @@ typedef struct sMatchLinkInfo
 	double                          dfIntersectLenSgmt;					// GPS 좌표와 세그먼트 교차점까지 거리(m) — DB INTERSECT_LEN
 	sint16							nDirAngleDiff;						// 매핑 각도 차이
 	uint64							qwLinkID;							// 링크 ID
-	bool							bReverseFit;						// 세그먼트 역방향이 정방향보다 더 잘 맞아 채택됨 — 역주행 의심 신호 (2026-07-18 최정우 추가)
 	uint16							wLenFromLink;						// 링크의 시작점부터 세그먼트 시작점까지 거리 (m)
 	uint8							nMaxSpeed;							// 제한 속도 (km/h)
 	double							dfLen;								// 링크 길이 (m)
@@ -197,6 +196,8 @@ typedef struct sMatchLinkInfo
 	double							dfEdNodeY;							// 종료 노드 Y
 	uint8							nEdNodeType;						// 종료 노드 속성[3]
 	bool							bOutOfRadius;						// 반경 밖·진단반경 초과 최근접 — SKIP 참고용 좌표·거리 유효, 정식 MATCHED 아님 (2026-07-10 최정우 수정)
+	bool							bReverseHit;						// 같은 링크 역행 페널티(dfReversePenalty>0)가 붙은 채로 최종 선택됨 — SKIP 격리용 (2026-07-21 최정우 추가)
+	bool							bReverseSuspect;					// 위치 역행 + heading 도 역방향 일치(margin 무관) — 연속역행(reverse_confirm) 스트릭 판정 전용 (2026-07-21 최정우 추가)
 } MATCH_LINK_INFO, *PMATCH_LINK_INFO;
 
 #define MATCH_LINK_INFO_SIZE											sizeof(MATCH_LINK_INFO)

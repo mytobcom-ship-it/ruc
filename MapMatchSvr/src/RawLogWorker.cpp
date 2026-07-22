@@ -842,8 +842,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 	// 반경 밖·진단반경 초과 최근접 — MATCHED 아님, SKIP(3)·세션 미갱신·MATCH_LAT/LON·INTERSECT_LEN 저장 (2026-07-10 최정우 수정)
 	const bool bOut = (!bMatched) && stMatchLinkInfo.bOutOfRadius;
 	// 연속 역행 미확정(reverse_confirm 미만) — SKIP·세션 앵커 고정. RunMapMatch 가 이미 nReverseStreak 갱신.
-	//   bReverseSuspect(위치+heading 둘 다 역행) 기준 — bReverseHit(비용 페널티 적용됨, margin 관대)
-	//   대신 사용해 GPS 노이즈로 인한 오탐을 줄임 (2026-07-21 최정우 수정)
+	//   bReverseSuspect(위치+heading 둘 다 역행) 기준으로 GPS 노이즈로 인한 오탐을 줄임 (2026-07-21 최정우 수정)
 	const bool bReverseSkip = bMatched && stMatchLinkInfo.bReverseSuspect
 		&& (stSession.nReverseStreak < m_stConfig.nReverseConfirm);
 
@@ -1120,10 +1119,9 @@ bool CRawLogWorker::RunMapMatch(int nThreadId, const sRawLogInfo& stRawLogInfo,
 		double dfNewLinkPos = static_cast<double>(pstMatchLinkInfo->wLenFromLink)
 			+ pstMatchLinkInfo->dfSgmtMatchLen;
 
-		// 연속 역행 스트릭 갱신 — bReverseSuspect(위치 역행 + heading 도 역방향 일치, margin 무관)
-		//   연속 횟수를 센다. bReverseHit(비용 페널티, margin 관대) 대신 이 신호를 써서, GPS 노이즈성
-		//   흔들림(heading은 여전히 정방향)은 스트릭에 안 잡히고 실제 역행(heading도 반대)만 잡히게 함
-		//   (2026-07-21 최정우 수정 — heading 대조 결합)
+		// 연속 역행 스트릭 갱신 — bReverseSuspect(위치 역행 + heading 도 역방향 일치) 연속 횟수를 센다.
+		//   GPS 노이즈성 흔들림(heading은 여전히 정방향)은 스트릭에 안 잡히고 실제 역행(heading도 반대)만
+		//   잡히게 함 (2026-07-21 최정우 수정 — heading 대조 결합)
 		//   reverse_confirm 미만이면 노이즈로 보고 앵커(dfLastMatchLinkPos) 고정 — 다음 포인트도
 		//   같은 기준점과 비교돼 판정이 안 흔들린다. reverse_confirm 이상이면 실제 이동으로 확정하고
 		//   앵커를 지금 위치로 재설정해 정상 추적을 재개한다 (2026-07-21 최정우 추가 — dip 판정 대체)

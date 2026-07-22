@@ -83,10 +83,7 @@ CProcessManager::~CProcessManager()
 bool CProcessManager::Initialize(const int nThreadId, CDataLoader *pcDataLoader,
 		const uint8& nCoordinateType, const sint16& nRadius, const uint32& dwMaxDistance,
 		const double& dfRadiusScale, const sint16& nRadiusMin, const sint16& nRadiusMax,
-		const ALTITUDE_SCORE_CONFIG& stAltitudeConfig,
-		const double& dfReverseWeight,
-		const double& dfReverseSpeed,
-		const double& dfReverseMargin)
+		const ALTITUDE_SCORE_CONFIG& stAltitudeConfig)
 {
 	m_nThreadId = nThreadId;					// 쓰레드 ID
 
@@ -129,11 +126,6 @@ bool CProcessManager::Initialize(const int nThreadId, CDataLoader *pcDataLoader,
 
 	// 연속 맵매칭 고도 보조 점수 config 적용 (2026-07-08 최정우 주석 추가)
 	m_pcMapMatch->SetAltitudeConfig(m_stAltitudeConfig);
-
-	// 연속 맵매칭 역행 페널티 가중치 config 적용 (2026-07-20 최정우 추가)
-	m_pcMapMatch->SetReversePenaltyWeight((dfReverseWeight >= 0.0) ? dfReverseWeight : 1.0,
-		(dfReverseSpeed >= 0.0) ? dfReverseSpeed : 0.0,
-		(dfReverseMargin >= 0.0) ? dfReverseMargin : 0.0);
 
 	return true;
 }

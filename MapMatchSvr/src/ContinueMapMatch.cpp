@@ -8,10 +8,7 @@
  * @brief 생성자
 */
 CContinueMapMatch::CContinueMapMatch() :
-	m_pcDataLoader(nullptr),
-	m_dfReverseWeight(1.0),
-	m_dfReverseSpeed(0.0),
-	m_dfReverseMargin(0.0)
+	m_pcDataLoader(nullptr)
 {
 }
 
@@ -30,26 +27,6 @@ CContinueMapMatch::~CContinueMapMatch()
 void CContinueMapMatch::SetAltitudeConfig(const ALTITUDE_SCORE_CONFIG& stAltConfig)
 {
 	m_stAltitudeConfig = stAltConfig;
-}
-
-/**
- * @brief 연속 맵매칭 역행 페널티 설정 (config reverse_weight/reverse_speed/reverse_margin)
- * @param[in] dfWeight 역행 1m당 비용 가중치 (음수 입력 시 무시, 기존값 유지)
- * @param[in] dfSpeed 저속 데드존 적용 속도 상한(km/h) — SPEED_KMH 가 이 미만일 때만 데드존 적용 (2026-07-20 최정우 추가)
- * @param[in] dfMargin 저속 시 페널티 없이 허용하는 역행 거리(m) — 그 이상 초과분만 페널티 (2026-07-20 최정우 추가)
- * @return void
- * @remark 저속(정차 직전 등)에서는 실제 이동거리가 GPS 노이즈와 비슷해져 짧은 역행과 노이즈를 구분할 수
- *   없다 — 데드존 이하는 페널티 없이 허용해, 불필요하게 더 나쁜(예: INTERSECT_LEN 큰) 후보를 강제로
- *   선택하지 않도록 한다. 고속에서는 역행이 실제 오매칭일 가능성이 높아 데드존을 적용하지 않는다.
-*/
-void CContinueMapMatch::SetReversePenaltyWeight(double dfWeight, double dfSpeed, double dfMargin)
-{
-	if (dfWeight >= 0.0)
-		m_dfReverseWeight = dfWeight;
-	if (dfSpeed >= 0.0)
-		m_dfReverseSpeed = dfSpeed;
-	if (dfMargin >= 0.0)
-		m_dfReverseMargin = dfMargin;
 }
 
 /**
@@ -318,11 +295,8 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
 		stMatchEntry.dfEdNodeY = static_cast<double>(pstLinkInfo->dwEdNodeY);
 		stMatchEntry.nEdNodeType = pstLinkInfo->nEdNodeType;
 
-		// 직전 매칭 위치보다 뒤로 가는 후보에 역행 거리(m)만큼 비용 페널티 가산 — 같은 링크 위 GPS
-		//   노이즈로 인한 역행 스냅(오락가락) 억제. 링크가 바뀌면(정상 전진) 비교 대상 아님 (2026-07-20 최정우 추가)
-		//   저속(정차 직전 등, SPEED_KMH < reverse_speed)에서는 실제 이동거리가 GPS 노이즈와
-		//   비슷해져 구분이 어려우므로, reverse_margin 이하 역행은 페널티 없이 허용한다 (2026-07-20 최정우 추가)
-		//   dfReversePenalty 는 match trace formula 표시 전용 — dfCost 에는 이미 가산됨 (2026-07-20 최정우 추가)
+		// 직전 매칭 위치보다 뒤로 가는 후보 감지 — 같은 링크 위 GPS 노이즈로 인한 역행 스냅(오락가락)
+		//   구분용. 링크가 바뀌면(정상 전진) 비교 대상 아님 (2026-07-20 최정우 추가)
 		if (stSgmtMatchInput.bHasPrevLinkPos && (stMatchEntry.qwLinkID == stSgmtMatchInput.qwPrevLinkID))
 		{
 			double dfCurPos = static_cast<double>(stMatchEntry.wLenFromLink) + stMatchEntry.dfSgmtMatchLen;
@@ -330,9 +304,8 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
 			{
 				double dfBackward = stSgmtMatchInput.dfPrevLinkPos - dfCurPos;
 
-				// 역행 의심(bReverseSuspect) — margin/reverse_speed 와 무관하게, 위치가 조금이라도
-				//   뒤로 갔고 heading 도 세그먼트 역방향에 더 가까울 때만 표시. dfReversePenalty(위치만
-				//   기준, margin 관대) 와 별도 신호로 두어 RawLogWorker 의 연속역행(reverse_confirm)
+				// 역행 의심(bReverseSuspect) — 위치가 조금이라도 뒤로 갔고 heading 도 세그먼트
+				//   역방향에 더 가까울 때만 표시. RawLogWorker 의 연속역행(reverse_confirm)
 				//   판정이 GPS 노이즈에 흔들리지 않고 heading 이 뒷받침되는 경우만 스트릭에 반영하게 함
 				//   (2026-07-21 최정우 추가)
 				if ((dfBackward > MM_REVERSE_SUSPECT_EPS) && stSgmtMatchRes.bReverseFit)
@@ -383,16 +356,6 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
 						stMatchEntry.bAmbiguousReverse = true;
 					}
 				}
-
-				double dfMargin = 0.0;
-				if ((stSgmtMatchInput.nSpeed >= 0) && (stSgmtMatchInput.nSpeed < m_dfReverseSpeed))
-					dfMargin = m_dfReverseMargin;
-				double dfPenalized = dfBackward - dfMargin;
-				if (dfPenalized > 0.0)
-				{
-					stMatchEntry.dfReversePenalty = dfPenalized * m_dfReverseWeight;
-					stMatchEntry.dfCost += stMatchEntry.dfReversePenalty;
-				}
 			}
 		}
 		// 링크가 바뀌는 후보 — 진입/진출 노드 판정 (2026-07-21 최정우 추가 — 진입링크 역행 감지)
@@ -410,31 +373,10 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
 			&& (stMatchEntry.qwStNodeID != stSgmtMatchInput.qwPrevEdNodeID)
 			&& (stMatchEntry.qwEdNodeID == stSgmtMatchInput.qwPrevEdNodeID))
 		{
-			// 위상적으로 확실한 역행이므로 의심 신호는 무조건 세팅(거리·margin 무관) — 기존과 동일.
-			//   다만 "몇 m나 역행했는지"도 same-link 케이스처럼 수치로 내기 위해, 직전 링크의
-			//   남은 거리(끝까지) + 진입링크 안쪽으로 들어간 깊이(끝→매칭점)를 이어붙인
-			//   "확장 역행거리"를 계산해 same-link 와 동일한 margin 기반 비용 페널티를 적용한다.
-			//   (링크가 달라도 두 링크 모두 같은 노드에서 만나므로 거리를 이어붙일 수 있음)
-			//   (2026-07-22 최정우 추가)
+			// 위상적으로 확실한 역행이므로 의심 신호는 무조건 세팅(거리·margin 무관) — 후보의
+			//   "종료" 노드가 직전 링크의 종료 노드와 같다면, 그 후보는 같은 노드로 들어가는
+			//   방향(진입)이라는 뜻 — heading/거리와 무관하게 표시한다 (2026-07-22 최정우 추가)
 			stMatchEntry.bReverseSuspect = true;
-
-			if (stSgmtMatchInput.dfPrevLinkLen > 0.0)
-			{
-				double dfRemainInPrev = stSgmtMatchInput.dfPrevLinkLen - stSgmtMatchInput.dfPrevLinkPos;
-				double dfPenetrateIntoCand = stMatchEntry.dfLen
-					- (static_cast<double>(stMatchEntry.wLenFromLink) + stMatchEntry.dfSgmtMatchLen);
-				double dfBackward = dfRemainInPrev + dfPenetrateIntoCand;
-
-				double dfMargin = 0.0;
-				if ((stSgmtMatchInput.nSpeed >= 0) && (stSgmtMatchInput.nSpeed < m_dfReverseSpeed))
-					dfMargin = m_dfReverseMargin;
-				double dfPenalized = dfBackward - dfMargin;
-				if (dfPenalized > 0.0)
-				{
-					stMatchEntry.dfReversePenalty = dfPenalized * m_dfReverseWeight;
-					stMatchEntry.dfCost += stMatchEntry.dfReversePenalty;
-				}
-			}
 		}
 
 		plistMatchEntryList->push_back(stMatchEntry);

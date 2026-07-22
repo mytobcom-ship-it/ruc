@@ -73,9 +73,6 @@ typedef struct sConfig
 	int								nAltPenalty;						// alt_penalty (양수=페널티·음수=보너스)
 	double							dfAltWeight;						// alt_weight
 	double							dfAltSlope;							// alt_slope
-	double							dfReverseWeight;				// reverse_weight (2026-07-20 최정우 추가)
-	double							dfReverseSpeed;				// reverse_speed (2026-07-20 최정우 추가)
-	double							dfReverseMargin;					// reverse_margin (2026-07-20 최정우 추가)
 	int								nReverseConfirm;					// reverse_confirm — 연속 역행 확정 포인트 수 (2026-07-21 최정우 추가)
 	double							dfSpeedFactor;					// speed_factor (2026-07-20 최정우 추가)
 	int								nSpeedMargin;					// speed_margin (km/h) (2026-07-20 최정우 추가)

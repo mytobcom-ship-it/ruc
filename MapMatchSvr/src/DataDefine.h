@@ -216,8 +216,7 @@ typedef struct sMatchEntry
 	double							dfCost;								// 소프트 비용 = INTERSECT_LEN(m) + w_a·|방위각차| (링크 선택 기준) (2026-07-08 최정우 추가)
 	double							dfAngleCost;						// 방위각 비용(m) — match trace formula용
 	double							dfAltAdj;							// 고도 보조 비용(m) — Continue 만, match trace formula용
-	double							dfReversePenalty;					// 역행 페널티(m) — match trace formula용 (2026-07-20 최정우 추가)
-	bool							bReverseSuspect;					// 위치 역행 + heading 도 역방향 일치 — margin 과 무관, 연속역행(reverse_confirm) 판정 전용 신호 (2026-07-21 최정우 추가)
+	bool							bReverseSuspect;					// 위치 역행 + heading 도 역방향 일치 — 연속역행(reverse_confirm) 판정 전용 신호 (2026-07-21 최정우 추가)
 	bool							bSgmtClamped;						// 세그먼트 끝점(꺾임점) 스냅 — 클램프 저신뢰 SKIP 판정용 (2026-07-21 최정우 추가)
 	bool							bHasHeading;						// heading 값 존재 여부 — 같은 링크 역행 판정 시 노이즈/판단불가 구분용 (2026-07-22 최정우 추가)
 	bool							bAmbiguousReverse;					// 같은 링크 역행인데 heading 없음/애매해 노이즈 단정 불가 — SKIP 처리용 (2026-07-22 최정우 추가)
@@ -248,7 +247,6 @@ typedef struct sMatchEntry
 		dfCost(-1.0), 
 		dfAngleCost(0.0), 
 		dfAltAdj(0.0),
-		dfReversePenalty(0.0),
 		bReverseSuspect(false),
 		bSgmtClamped(false),
 		bHasHeading(false),

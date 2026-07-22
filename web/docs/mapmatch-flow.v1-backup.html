@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MapMatchSvr 알고리즘 플로우차트</title>
+<script src="https://unpkg.com/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  :root {
+    --bg: #f8fafc; --panel: #ffffff; --text: #1e293b; --muted: #64748b;
+    --border: #e2e8f0; --accent: #1e88e5; --code-bg: #f1f5f9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a; --panel: #1e293b; --text: #e2e8f0; --muted: #94a3b8;
+      --border: #334155; --accent: #60a5fa; --code-bg: #0b1220;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", sans-serif;
+    line-height: 1.6;
+  }
+  #layout { display: flex; min-height: 100vh; }
+  nav {
+    width: 260px; flex: none; background: var(--panel); border-right: 1px solid var(--border);
+    padding: 20px 14px; position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  }
+  nav h2 { font-size: 14px; margin: 0 0 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  nav a { display: block; font-size: 13px; color: var(--text); text-decoration: none; padding: 5px 8px; border-radius: 5px; }
+  nav a:hover { background: var(--code-bg); }
+  nav .grp { margin-top: 14px; font-size: 11px; color: var(--muted); font-weight: 700; padding: 0 8px; }
+  main { flex: 1; padding: 28px 36px 80px; max-width: 1180px; }
+  h1 { font-size: 24px; margin: 0 0 6px; }
+  .subtitle { color: var(--muted); font-size: 14px; margin-bottom: 24px; }
+  section { margin-bottom: 48px; scroll-margin-top: 16px; }
+  section h2 { font-size: 18px; border-bottom: 2px solid var(--accent); padding-bottom: 6px; margin-bottom: 4px; }
+  section h3 { font-size: 14px; color: var(--muted); font-weight: 600; margin: 2px 0 14px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; overflow-x: auto; margin-bottom: 12px;
+  }
+  .note {
+    background: var(--code-bg); border-left: 3px solid var(--accent); border-radius: 4px;
+    padding: 10px 14px; font-size: 13px; margin: 10px 0; color: var(--text);
+  }
+  .note b { color: var(--accent); }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { border: 1px solid var(--border); padding: 6px 9px; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin: 6px 0 18px; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .top { text-align: right; }
+  .top a { font-size: 11px; color: var(--muted); text-decoration: none; }
+  .top a:hover { text-decoration: underline; }
+  footer { color: var(--muted); font-size: 12px; padding: 20px 36px 40px; }
+  .src { font-size: 11.5px; color: var(--muted); margin-top: -4px; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+<div id="layout">
+<nav>
+  <h2>MapMatchSvr Flow</h2>
+  <a href="#overview">0. 전체 구성 (프로세스/스레드)</a>
+  <a href="#fetcher">1. Fetcher 폴링 + backpressure</a>
+  <a href="#worker-batch">2. Worker 배치 처리 루프</a>
+  <a href="#gate-chain">3. ProcessRawLog 게이트 체인</a>
+  <a href="#attempt-match">4. RunMapMatch / Begin·Continue 분기</a>
+  <a href="#continue-depth">5. ContinueMapMatch depth 루프</a>
+  <a href="#begin-grid">6. BeginMapMatch 그리드 스캔</a>
+  <a href="#sgmt-match">7. SgmtMatch 비용함수 (공용)</a>
+  <a href="#reverse">8. 역행(reverse) 판정 상세</a>
+  <a href="#verdict">9. 최종 판정 (MATCHED/SKIP/ERROR)</a>
+  <a href="#feedback">10. 세션 피드백 루프</a>
+  <a href="#config-map">11. config.ini → 코드 매핑</a>
+  <div class="grp">참고</div>
+  <a href="/">← 웹 뷰어로</a>
+</nav>
+<main>
+  <h1>MapMatchSvr 알고리즘 플로우차트</h1>
+  <p class="subtitle">
+    <code>MapMatchSvr/bin/config.ini</code> 및 소스(<code>RawLogFetcher/Worker</code>,
+    <code>MapMatch</code>, <code>BeginMapMatch</code>, <code>ContinueMapMatch</code>,
+    <code>GISUtil::SgmtMatch</code>)를 근거로 재구성한 실제 제어흐름입니다.
+    순차 나열이 아니라 분기(◇)·루프·피드백을 포함한 개발용 flowchart입니다. (2026-07-22 기준 소스)
+  </p>
+
+  <div class="legend">
+    <span><span class="sw" style="background:#1e88e5"></span> MATCHED / 성공</span>
+    <span><span class="sw" style="background:#fb8c00"></span> SKIP / 저신뢰</span>
+    <span><span class="sw" style="background:#e53935"></span> ERROR / 완전실패 / 배제</span>
+    <span><span class="sw" style="background:#94a3b8"></span> 중간 처리 단계</span>
+  </div>
+
+  <section id="overview">
+    <h2>0. 전체 구성 — 프로세스/스레드 관계</h2>
+    <h3>서버 기동(AppMain→Server::Initialize) 및 폴링스레드·워커스레드풀 관계</h3>
+    <div class="card">
+<pre class="mermaid">
+flowchart TB
+    Main(["AppMain.cpp: main()"]) --> Init["CServer::Initialize()"]
+    Init --> InitOK{"DB풀 · link.psf 로드 ·&lt;br/&gt;ProcessManager[N] · RawLogWorker&lt;br/&gt;모두 성공?"}
+    InitOK -->|실패| Rollback(["Uninitialize() 후 exit"])
+    InitOK -->|성공| ThreadPool["CThreadPool(threads.count)&lt;br/&gt;워커 스레드 N개 기동"]
+    ThreadPool --> Recover["RunRecover() 최대 3회&lt;br/&gt;PROCESSING(2)→PENDING(0) 좀비 복구"]
+    Recover --> RecoverOK{"복구 성공?"}
+    RecoverOK -->|3회 모두 실패| Rollback
+    RecoverOK -->|성공| FetcherStart["RawLogFetcher::start()&lt;br/&gt;폴링 스레드 시작"]
+    FetcherStart --> Mon["CServer::run()&lt;br/&gt;모니터링 루프 (SIGINT/SIGTERM 대기)"]
+
+    subgraph FETCH["폴링 스레드 × 1 — RawLogFetcher"]
+        direction TB
+        F1["PENDING GPS 배치 fetch"] --> F2["device_key 해시로&lt;br/&gt;워커ID 고정 라우팅"]
+        F2 --> F3["해당 워커 큐에 enqueue"]
+    end
+
+    subgraph WORKERS["워커 스레드 × threads.count"]
+        direction TB
+        W1["자기 큐에서 batch pop"] --> W2["batch 내 GPS 순차 처리&lt;br/&gt;(ProcessRawLog)"]
+        W2 --> W3["BulkUpdate / BulkRelease"]
+        W3 --> W1
+    end
+
+    FetcherStart -.-> FETCH
+    FetcherStart -.-> WORKERS
+    F3 -.->|"enqueue"| W1
+
+    classDef fail fill:#e53935,color:#fff,stroke:#b71c1c;
+    classDef ok fill:#1e88e5,color:#fff,stroke:#0d47a1;
+    class Rollback fail;
+    class FetcherStart,Mon ok;
+</pre>
+    </div>
+    <div class="note">
+      동일 <code>device_key</code>는 항상 같은 워커로 고정 라우팅됩니다 (세션 정합성 보장을 위한 device 단위 파티셔닝).
+      워커 수만큼 세션 맵(<code>mapSessions</code>)이 독립적으로 존재합니다.
+    </div>
+  </section>
+
+  <section id="fetcher">
+    <h2>1. Fetcher 폴링 루프 + backpressure</h2>
+    <div class="src">RawLogFetcher.cpp:165-219 · config: [feeder] limit/fetch_interval/queue_pause_count/queue_max_count/queue_busy_min/queue_busy_max</div>
+    <div class="card">
+<pre class="mermaid">
+flowchart TD
+    Start(("폴링 루프&lt;br/&gt;while 서버 실행중")) --> Q["전체 워커 큐 합계 조회"]
+    Q --> P1{"큐합계가 queue_pause_count(400) 미만?"}
+    P1 -->|Yes| Fetch["FetchAndDispatch()&lt;br/&gt;DB조회→예약→워커큐 적재"]
+    P1 -->|"No, 혼잡"| SkipFetch["DB 조회 건너뜀 (로그만)"]
+    Fetch --> Stop1{"서버 종료 신호?"}
+    SkipFetch --> Stop1
+    Stop1 -->|Yes| End(("루프 종료"))
+    Stop1 -->|No| Sleep["ComputeFetchSleepMs()"]
+    Sleep --> S1{"큐 400 미만?"}
+    S1 -->|Yes| S1a["sleep = fetch_interval(500ms)"]
+    S1 -->|No| S2{"큐 >= queue_max_count(800)?"}
+    S2 -->|Yes| S2a["sleep = queue_busy_max(10000ms)"]
+    S2 -->|No| S3["sleep = 2000~10000ms 선형보간&lt;br/&gt;(queue_busy_min~max)"]
+    S1a --> Loop["usleep"]
+    S2a --> Loop
+    S3 --> Loop
+    Loop -.->|"루프백"| Start
+
+    classDef warn fill:#fb8c00,color:#fff,stroke:#e65100;
+    class S2,S2a warn;
+</pre>
+    </div>
+    <div class="note">
+      3단 backpressure: <b>정상(&lt;400)</b> 500ms 고정폴링 · <b>준혼잡(400~800)</b> 2~10초 선형증가 ·
+      <b>과부하(≥800)</b> 10초로 사실상 정지. <code>CServer::LogMonitorStatus()</code>(30초 주기)는
+      이 상태를 로그로만 남기고 제어에는 관여하지 않음.
+    </div>
+  </section>
+
+  <section id="worker-batch">
+    <h2>2. Worker 배치 처리 루프</h2>
+    <div class="src">RawLogWorker.cpp:489-649 (CRawLogWorker::run)</div>
+    <div class="card">
+<pre class="mermaid">
+flowchart TD
+    RunStart(["Worker::run(batch) 시작"]) --> Conn{"DB 커넥션 획득 성공?&lt;br/&gt;(conn_retry_max 재시도)"}
+    Conn -->|실패| Orphan1(["batch 그대로 반환&lt;br/&gt;다음 fetch에서 재시도"])
+    Conn -->|성공| Sess["세션 임시복사본&lt;br/&gt;stWorkSession 로드"]
+    Sess --> Loop{{"batch 내 GPS 순차 반복"}}
+    Loop --> PRL["ProcessRawLog() 1건 처리&lt;br/&gt;(§3 게이트체인 참고)"]
+    PRL --> Loop
+    Loop -->|모두 처리| Bulk["BulkUpdateRawLogs() 실행"]
+    Bulk --> BulkOK{"성공?"}
+    BulkOK -->|성공| TripEnd{"TRIP_EVENT=END&lt;br/&gt;발생한 GPS 있었음?"}
+    TripEnd -->|Yes| EraseSess["세션 완전삭제&lt;br/&gt;mapSessions.erase(device_key)"]
+    TripEnd -->|No| CommitSess["세션 커밋&lt;br/&gt;mapSessions[device_key]=stWorkSession"]
+    BulkOK -->|실패| Revert["BulkReleaseRawLogs()&lt;br/&gt;PROCESSING→PENDING 되돌림&lt;br/&gt;★세션 폐기(커밋 안함)"]
+    EraseSess --> TTL["ExpireTtlSessions(ttl_sec)"]
+    CommitSess --> TTL
+    Revert --> TTL
+    TTL --> Release(["커넥션 반환, run() 종료"])
+
+    classDef fail fill:#e53935,color:#fff,stroke:#b71c1c;
+    class Orphan1,Revert fail;
+</pre>
+    </div>
+    <div class="note">
+      세션은 <b>DB bulk update가 성공했을 때만</b> 커밋됩니다. 실패하면 이 batch의 맵매칭 결과(마지막
+      링크·앵커 등)는 전부 버려지고, 다음 poll에서 <i>이전</i> 세션 기준으로 재시도됩니다.
+    </div>
+  </section>
+
+  <section id="gate-chain">
+    <h2>3. ProcessRawLog 게이트 체인 (GPS 1건)</h2>
+    <div class="src">RawLogWorker.cpp:277-826 · config: [mapmatch] radius_skip/speed_factor/speed_margin, [worker] ttl_sec</div>
+    <div class="card">
+<pre class="mermaid">
+flowchart TD
+    In(["GPS 1건 입력"]) --> V1{"ValidateRawLog&lt;br/&gt;device_key/trip_id 형식/&lt;br/&gt;trip_event∈{0,1,2}?"}
+    V1 -->|무효| SkipA(["AppendUpdateRow(SKIP)&lt;br/&gt;세션 미갱신, return"])
+    V1 -->|유효| B1{"NeedsBeginReset?&lt;br/&gt;START이벤트 OR trip_id변경&lt;br/&gt;OR seq역전/중복"}
+    B1 -->|Yes| Reset["ResetTripSessionForBegin&lt;br/&gt;qwLinkID=0, 앵커 전부 초기화&lt;br/&gt;★다음 RunMapMatch는 Begin 경로"]
+    B1 -->|No| NoReset["변화없음 (필요시 WARN 로그만)"]
+    Reset --> V2
+    NoReset --> V2
+    V2{"ShouldSkipGpsInput?&lt;br/&gt;gps_lat/lon NULL&lt;br/&gt;OR raw_vld=false"}
+    V2 -->|Yes| SkipB(["AppendUpdateRow(SKIP, 좌표없음)&lt;br/&gt;맵매칭 자체 미시도, return"])
+    V2 -->|No| V3{"accuracy_m > radius_skip(50m)?"}
+    V3 -->|Yes| SkipC["FindNearestSegment로&lt;br/&gt;참고좌표 시도"]
+    SkipC --> SkipC2(["AppendUpdateRow(SKIP)&lt;br/&gt;맵매칭 진입 안함, return"])
+    V3 -->|No| V4{"ShouldSkipImplausibleSpeed?&lt;br/&gt;환산속도 > 신고속도×speed_factor&lt;br/&gt;+speed_margin"}
+    V4 -->|Yes| SkipD["참고좌표 시도"]
+    SkipD --> SkipD2(["AppendUpdateRow(SKIP), return"])
+    V4 -->|No| V5{"세션 gap >&lt;br/&gt;MM_SESSION_RESET_GAP_SEC(30초)?"}
+    V5 -->|Yes| GapReset["Continue 앵커 강제초기화&lt;br/&gt;qwLinkID=0 등&lt;br/&gt;★다음도 Begin 경로"]
+    V5 -->|No| Keep["앵커 유지"]
+    GapReset --> RMM["RunMapMatch() 실행 → §4"]
+    Keep --> RMM
+    RMM --> Verdict["최종판정 → §9"]
+
+    classDef fail fill:#fb8c00,color:#fff,stroke:#e65100;
+    class SkipA,SkipB,SkipC2,SkipD2 fail;
+</pre>
+    </div>
+  </section>
+
+  <section id="attempt-match">
+    <h2>4. RunMapMatch — Continue 우선 / Begin 폴백 / 반경확장 / 진단폴백</h2>
+    <div class="src">RawLogWorker.cpp:1036-1143 · ProcessManager.cpp:156-391 · MapMatch.cpp:169-266</div>
+    <div class="card">
+<pre class="mermaid">
+flowchart TD
+    Start(["RunMapMatch 시작"]) --> Corr["heading/speed 보정&lt;br/&gt;(DB값 NULL이면 직전매칭좌표로 역산)"]
+    Corr --> Adapt["CalcAdaptiveRadius&lt;br/&gt;ACCURACY_M×radius_scale,&lt;br/&gt;clamp[radius_min, radius_max]"]
+    Adapt --> HasLink{"직전 성공 링크&lt;br/&gt;qwLinkID != 0 ?"}
+    HasLink -->|Yes| Cont["ContinueMapMatch 시도 → §5"]
+    Cont --> ContOK{"성공?"}
+    ContOK -->|Yes| PostCheck
+    ContOK -->|No| BiasSet["qwLinkID=0&lt;br/&gt;qwBiasLinkID=직전링크&lt;br/&gt;(연결성 편향 유지)"]
+    HasLink -->|No| BiasNone["qwBiasLinkID=0 (편향없음)"]
+    BiasSet --> Begin1["BeginMapMatch 시도 → §6"]
+    BiasNone --> Begin1
+    Begin1 --> Begin1OK{"성공?"}
+    Begin1OK -->|Yes| Success1(["매칭 성공&lt;br/&gt;qwLinkID 갱신"])
+    Begin1OK -->|No| Widen{"적응형반경이&lt;br/&gt;max(radius, radius_max) 미만?"}
+    Widen -->|Yes| WidenRetry["반경 확장 재시도"]
+    WidenRetry --> WidenOK{"성공?"}
+    WidenOK -->|Yes| Success1
+    WidenOK -->|No| Diag1
+    Widen -->|No| Diag1
+    Diag1["FindNearestSegment&lt;br/&gt;진단반경 250m, 방위각무시"]
+    Diag1 --> Diag1OK{"후보 발견?"}
+    Diag1OK -->|Yes| OutOfRadius(["실패 확정 + bOutOfRadius=true&lt;br/&gt;(좌표는 참고용으로 기록)"])
+    Diag1OK -->|No| Diag2["FindGeomNearestSegment&lt;br/&gt;반경 완전무시, 기하최근접"]
+    Diag2 --> Diag2OK{"후보 발견?"}
+    Diag2OK -->|Yes| OutOfRadius
+    Diag2OK -->|No| TotalFail(["완전 실패&lt;br/&gt;좌표도 없음"])
+
+    PostCheck{"Continue 결과의&lt;br/&gt;방위각비용 >= 14.99?&lt;br/&gt;(방향이 심하게 안맞음)"}
+    PostCheck -->|Yes| BeginCompare["BeginMapMatch 별도 재실행&lt;br/&gt;(편향없음 — 갈림길 형제링크 확인)"]
+    BeginCompare --> Compare{"Begin성공 &&&lt;br/&gt;Begin비용이 Continue비용보다 작음?"}
+    Compare -->|Yes| Replace["Continue결과 → Begin결과로 교체"]
+    Compare -->|No| KeepCont["Continue 결과 유지"]
+    PostCheck -->|No| KeepCont2["Continue 결과 그대로"]
+    Replace --> Success1
+    KeepCont --> Success1
+    KeepCont2 --> Success1
+    Success1 --> Streak["역행 스트릭 갱신&lt;br/&gt;(bReverseSuspect 여부 → §10)"]
+
+    classDef ok fill:#1e88e5,color:#fff,stroke:#0d47a1;
+    classDef fail fill:#e53935,color:#fff,stroke:#b71c1c;
+    classDef warn fill:#fb8c00,color:#fff,stroke:#e65100;
+    class Success1 ok;
+    class TotalFail fail;
+    class OutOfRadius warn;
+</pre>
+    </div>
+    <div class="note">
+      <b>핵심 분기</b>: <code>qwLinkID != 0</code>(직전 매칭 보유) → Continue 우선, 실패 시 Begin 폴백
+      (<code>qwBiasLinkID</code>로 연결성 편향 전달). <code>qwLinkID == 0</code> → 처음부터 Begin만 시도.<br/>
+      <b>PostCheck</b>(갈림길 보정)는 Continue 경로를 탄 경우에만 적용됩니다 — Begin 단독 성공 시엔 해당 없음.
+    </div>
+  </section>
+
+  <section id="continue-depth">
+    <h2>5. ContinueMapMatch — depth(maxstep) 위상 확장 루프</h2>
+    <div class="src">ContinueMapMatch.cpp:65-234 · config: [mapmatch] maxstep, distance</div>
+    <div class="card">
+<pre class="mermaid">
+flowchart TD
+    Start(["depth=0: 직전링크 1개로 시작"]) --> Scan["현재 depth 링크들의&lt;br/&gt;전 세그먼트 SgmtMatch 스캔 → §7"]
+    Scan --> HasCand{"이번 depth 후보 있음?"}
+    HasCand -->|Yes| Merge["누적후보에 병합&lt;br/&gt;nBestStep=depth"]
+    HasCand -->|No| NoMerge["병합 안함"]
+    Merge --> AccCheck
+    NoMerge --> AccCheck
+    AccCheck{"누적후보 비어있지 않음?"}
+    AccCheck -->|No| DepthLimit1{"depth==maxstep?"}
+    AccCheck -->|Yes| Front["최소비용 후보 확인"]
+    Front --> GoodEnough{"(경계클램프 아님 &&&lt;br/&gt;방향적합) OR depth==maxstep?"}
+    GoodEnough -->|Yes| Confirmed(["확정: return true"])
+    GoodEnough -->|No| DepthLimit2{"depth==maxstep?"}
+    DepthLimit2 -->|Yes| BreakLoop["루프 탈출"]
+    DepthLimit2 -->|No| Expand
+    DepthLimit1 -->|Yes| BreakLoop
+    DepthLimit1 -->|No| Expand
+    Expand["GetLinkDepthInfo&lt;br/&gt;회전정보로 다음 depth 링크 구성&lt;br/&gt;(이미 탐색한 링크 제외)"]
+    Expand --> NextEmpty{"다음 depth 링크&lt;br/&gt;목록 비어있음?"}
+    NextEmpty -->|Yes| AccCheck2{"누적후보 있음?"}
+    AccCheck2 -->|Yes| Confirmed
+    AccCheck2 -->|No| Fail(["MAP_MATCH_FAIL&lt;br/&gt;return false"])
+    NextEmpty -->|No| Incr["depth += 1"]
+    Incr -.->|"루프백"| Scan
+    BreakLoop --> AccCheck3{"누적후보 있음?"}
+    AccCheck3 -->|Yes| Confirmed
+    AccCheck3 -->|No| Fail
+
+    classDef ok fill:#1e88e5,color:#fff,stroke:#0d47a1;
+    classDef fail fill:#e53935,color:#fff,stroke:#b71c1c;
+    class Confirmed ok;
+    class Fail fail;
+</pre>
+    </div>
+    <div class="note">
+      depth 확장은 <b>조기확정(early-exit) 최적화</b>입니다: 최적후보가 링크 끝점에 스냅됐거나(<code>IsBoundaryClamped</code>)
+      방위각이 매우 나쁠 때(<code>IsPoorAngleFit</code>, 방향비용≥14.99)만, depth 여유가 있으면 진출 링크까지 넓혀 비교합니다.
+      <code>maxstep</code>은 공백구간 이동거리가 크면 <code>MM_STEP_EXTEND_DIST(50m)</code>당 +1, 최대 +3까지 가산됩니다.
+      <code>MAP_MATCH_FAIL</code>은 오직 "후보 링크 자체가 하나도 없을 때"만 발생합니다.
+    </div>
+  </section>
+
+  <section id="begin-grid">
+    <h2>6. BeginMapMatch — 반경/그리드 기반 후보 탐색</h2>
+    <div class="src">BeginMapMatch.cpp:30-227 · config: [mapmatch] radius, radius_scale/min/max</div>
+    <div class="card">
+<pre class="mermaid">
+flowchart TD
+    Start(["BeginMapMatch 시작"]) --> Grid["소속 GRID 조회"]
+    Grid --> GridOK{"그리드정보 존재?"}
+    GridOK -->|No| Fail1(["NOT_FOUND_GRIDINFO&lt;br/&gt;실패"])
+    GridOK -->|Yes| Bias{"qwBiasLinkID != 0?&lt;br/&gt;(Continue 실패 후 폴백)"}
+    Bias -->|Yes| ConnSet["연결세트 구성&lt;br/&gt;{편향링크}∪{편향링크의 회전링크들}"]
+    Bias -->|No| NoConn["연결세트 없음"]
+    ConnSet --> NearGrid
+    NoConn --> NearGrid
+    NearGrid["인접그리드 최대8방향 + 소속그리드"]
+    NearGrid --> EachGrid{{"각 그리드마다 반복"}}
+    EachGrid --> SgmtScan["그리드 내 전 세그먼트&lt;br/&gt;SgmtMatch 호출 → §7"]
+    SgmtScan --> Pass{"반경/각도(120°) 통과?"}
+    Pass -->|No| Skip1["해당 세그먼트 제외"]
+    Pass -->|Yes| ConnPenalty{"연결세트 존재 &&&lt;br/&gt;이 링크가 연결세트에 없음?"}
+    ConnPenalty -->|Yes| AddPenalty["+MM_CONNECT_PENALTY(30m)&lt;br/&gt;(소프트 페널티, 배제 아님)"]
+    ConnPenalty -->|No| NoPenalty["페널티없음"]
+    AddPenalty --> Collect["그리드 내 최소비용 1건 채택"]
+    NoPenalty --> Collect
+    Skip1 --> EachGrid
+    Collect --> EachGrid
+    EachGrid -->|모든 그리드 완료| AllEmpty{"전체 그리드&lt;br/&gt;대표후보 0개?"}
+    AllEmpty -->|Yes| Fail2(["MAP_MATCH_FAIL&lt;br/&gt;실패"])
+    AllEmpty -->|No| SortPick["dfCost 오름차순 정렬&lt;br/&gt;(동률시 dfIntersectLenSgmt) → 최소값 채택"]
+    SortPick --> Success(["매칭 성공: return true"])
+
+    classDef ok fill:#1e88e5,color:#fff,stroke:#0d47a1;
+    classDef fail fill:#e53935,color:#fff,stroke:#b71c1c;
+    class Success ok;
+    class Fail1,Fail2 fail;
+</pre>
+    </div>
+  </section>
+
+  <section id="sgmt-match">
+    <h2>7. SgmtMatch 비용함수 (Begin/Continue 공용 엔진)</h2>
+    <div class="src">GISUtil.cpp:329-478 · config: [mapmatch] geodetic, distance</div>
+    <div class="card">
+<pre class="mermaid">
+flowchart TD
+    Start(["SgmtMatch(GPS, 세그먼트) 시작"]) --> Exact{"GPS == 세그먼트&lt;br/&gt;시작좌표 정확히 일치?"}
+    Exact -->|Yes| Zero(["dfCost=0 즉시 반환"])
+    Exact -->|No| Heading{"heading 값 있음?&lt;br/&gt;(nDirAng != NO_ANGLE)"}
+    Heading -->|Yes| BothDir["정방향/역방향(180°반대)&lt;br/&gt;각각과 차이 계산&lt;br/&gt;더 작은쪽 채택 = bReverseFit"]
+    BothDir --> HardCut{"|heading차이| >&lt;br/&gt;120°(MM_DIR_MAX_DEG)?"}
+    HardCut -->|Yes| Reject(["이 세그먼트 완전배제&lt;br/&gt;return false"])
+    HardCut -->|No| Proj
+    Heading -->|No| ProjNoHead["heading차이=0&lt;br/&gt;bReverseFit=false, 하드컷 없음"]
+    ProjNoHead --> Proj
+    Proj["GPS를 세그먼트에 투영&lt;br/&gt;(수선의 발 계산)"]
+    Proj --> Clamp{"투영점 위치?"}
+    Clamp -->|세그먼트 내부| UseProj["투영점 그대로 사용"]
+    Clamp -->|끝점 밖| SnapEnd["끝점으로 스냅&lt;br/&gt;bSgmtClamped=true"]
+    Clamp -->|시작점 밖| SnapStart["시작점으로 스냅&lt;br/&gt;bSgmtClamped=true"]
+    UseProj --> Dist
+    SnapEnd --> Dist
+    SnapStart --> Dist
+    Dist["GPS↔교차점 거리&lt;br/&gt;dfIntersectLenSgmt 계산"]
+    Dist --> RadCheck{"거리 > 반경(radius)?&lt;br/&gt;(진단모드면 생략)"}
+    RadCheck -->|Yes| RejectR(["반경 밖 배제&lt;br/&gt;return false"])
+    RadCheck -->|No| DirWeight
+    DirWeight["속도기반 방향가중치&lt;br/&gt;속도미상=1.0 고정 / ≤5km/h=0&lt;br/&gt;5~20=선형보간 / ≥20=1.0"]
+    DirWeight --> AnglePenalty["dfAnglePenalty =&lt;br/&gt;min(가중치×|heading차이|, 15.0)"]
+    AnglePenalty --> CostCalc["dfCost = 거리 + 방향비용&lt;br/&gt;(Continue는 +고도비용 +역행비용 추가 → §8)"]
+    CostCalc --> Return(["return true, 결과 채움"])
+
+    classDef fail fill:#e53935,color:#fff,stroke:#b71c1c;
+    class Reject,RejectR fail;
+</pre>
+    </div>
+  </section>
+
+  <section id="reverse">
+    <h2>8. 역행(Reverse) 판정 상세 — 같은 링크 내 / 진입링크 위상</h2>
+    <div class="src">ContinueMapMatch.cpp:243-444 · config: [mapmatch] reverse_weight/reverse_speed/reverse_margin</div>
+    <div class="note">
+      <b>참고:</b> 이 로직의 원 취지는 "GPS 노이즈로 매칭점이 앞뒤로 튀는 것"을 억제·구분하는 것이며,
+      일방통행 역주행 자체를 판정하는 기능은 아닙니다(2026-07-22 앞선 대화 참고 — 도로 데이터에
+      일방통행 여부 필드가 없음).
+    </div>
+    <div class="card">
+<pre class="mermaid">
+flowchart TD
+    Cand(["SgmtMatch 통과한 후보 1개"]) --> AltAdj["CalcAltRoadPenalty 가산&lt;br/&gt;(고도보조비용, alt_gap/alt_weight/alt_slope/alt_penalty)"]
+    AltAdj --> SameLink{"이 후보 링크 ==&lt;br/&gt;직전 매칭 링크?"}
+
+    SameLink -->|"Yes (경로A: 동일링크 역행)"| CurPos["dfCurPos = 후보의 링크상 위치"]
+    CurPos --> Backward{"dfCurPos가 dfPrevLinkPos 미만?&lt;br/&gt;(직전 위치보다 뒤로 감)"}
+    Backward -->|"No, 전진"| NoPenaltyA["역행 아님, 처리없음"]
+    Backward -->|Yes| HeadingRev{"역행거리 > 0.1m &&&lt;br/&gt;heading도 역방향에 가까움&lt;br/&gt;(bReverseFit)?"}
+    HeadingRev -->|Yes| SuspectA["bReverseSuspect = true"]
+    HeadingRev -->|"No, heading은 정방향"| NoiseCheck{"heading있음 && 방향적합 &&&lt;br/&gt;GPS거리 ≤ 10m?&lt;br/&gt;(bDefiniteNoise)"}
+    NoiseCheck -->|Yes| Nudge["좌표를 직전위치+1m로 보정&lt;br/&gt;MATCHED 유지(SKIP 아님)"]
+    NoiseCheck -->|No| Ambiguous["bAmbiguousReverse = true&lt;br/&gt;(판단불가 → 나중에 SKIP)"]
+    SuspectA --> Margin
+
+    SameLink -->|"No (경로B: 진입링크 위상체크)"| NodeCheck{"후보.시작노드 != 직전종료노드&lt;br/&gt;&& 후보.종료노드 == 직전종료노드?&lt;br/&gt;(같은 노드로 '들어가는' 링크)"}
+    NodeCheck -->|Yes| SuspectB["bReverseSuspect = true&lt;br/&gt;(위상적으로 확실한 역행,&lt;br/&gt;heading/거리 무관 무조건 세팅)"]
+    NodeCheck -->|No| Normal["정상 진출, 역행 아님"]
+    SuspectB --> Margin
+
+    Margin["dfMargin = 저속(reverse_speed 미만)이면&lt;br/&gt;reverse_margin, 아니면 0"]
+    Margin --> PenCheck{"역행거리 - dfMargin > 0?"}
+    PenCheck -->|Yes| ApplyPen["dfReversePenalty =&lt;br/&gt;초과분 × reverse_weight&lt;br/&gt;dfCost에 가산"]
+    PenCheck -->|No| FreePass["저속 데드존 내 → 페널티 없음"]
+
+    classDef warn fill:#fb8c00,color:#fff,stroke:#e65100;
+    class SuspectA,SuspectB,Ambiguous warn;
+</pre>
+    </div>
+  </section>
+
+  <section id="verdict">
+    <h2>9. 최종 판정 — MATCHED / SKIP / ERROR 결정</h2>
+    <div class="src">RawLogWorker.cpp:842-935 · config: [mapmatch] timeout, reverse_confirm</div>
+    <div class="card">
+<pre class="mermaid">
+flowchart TD
+    Start(["RunMapMatch 반환"]) --> M1{"!bMatched && bOutOfRadius?"}
+    M1 -->|Yes| SKIP1(["SKIP: 반경밖 최근접&lt;br/&gt;(참고좌표 있음)"])
+    M1 -->|No| M2{"!bMatched?"}
+    M2 -->|Yes| ERROR1(["ERROR: 완전실패&lt;br/&gt;(좌표없음)"])
+    M2 -->|"No, bMatched=true"| Flags["① timeout 초과? ② bReverseSuspect&&streak가 reverse_confirm 미만?&lt;br/&gt;③ bClampLowConf? ④ bAmbiguousReverse?&lt;br/&gt;— 4개 모두 독립적으로 평가됨(else-if 아님)"]
+    Flags --> Decide{"코드 순서대로 대입&lt;br/&gt;→ 나중에 참인 조건이 앞선 값을 덮어씀"}
+    Decide -->|"④ 참"| SKIP4(["SKIP: 역행 판단불가&lt;br/&gt;(bAmbiguousReverse)"])
+    Decide -->|"④거짓, ③참"| SKIP3(["SKIP: 경계클램프 저신뢰&lt;br/&gt;(bClampLowConf, 거리>10m)"])
+    Decide -->|"③④거짓, ②참"| SKIP2(["SKIP: 연속역행 미확정&lt;br/&gt;(streak가 reverse_confirm=3 미만)"])
+    Decide -->|"②③④거짓, ①참"| ERROR2(["ERROR: 처리시간 초과&lt;br/&gt;강제격리 (bMatched→false 전환)"])
+    Decide -->|"모두 거짓"| MATCHED1(["MATCHED: 정상 저장"])
+
+    classDef ok fill:#1e88e5,color:#fff,stroke:#0d47a1;
+    classDef warn fill:#fb8c00,color:#fff,stroke:#e65100;
+    classDef fail fill:#e53935,color:#fff,stroke:#b71c1c;
+    class MATCHED1 ok;
+    class SKIP1,SKIP2,SKIP3,SKIP4 warn;
+    class ERROR1,ERROR2 fail;
+</pre>
+    </div>
+    <div class="note">
+      <b>세션 앵커 갱신</b>(RawLogWorker.cpp:937-960): <code>bMatched && !bUntrustedMatch</code>(=MATCHED 확정)일 때만
+      좌표·시각·고도 앵커가 전진합니다. SKIP/ERROR면 직전 성공 값을 그대로 유지합니다.
+      단 <b>엔진 내부 <code>qwLinkID</code> 추적은 SKIP이어도 계속 전진</b>합니다(§10 참고) —
+      DB 저장값(신뢰도 표시)과 엔진 내부 연속매칭 추적은 별개로 관리됩니다.
+    </div>
+  </section>
+
+  <section id="feedback">
+    <h2>10. 세션 피드백 루프 — "순차 진행이 아닌" 진짜 루프 구조</h2>
+    <div class="card">
+<pre class="mermaid">
+flowchart LR
+    subgraph N["GPS(n) 처리"]
+        direction TB
+        P1["RunMapMatch / ProcessRawLog&lt;br/&gt;(§3~§9)"] --> P2["세션 앵커 조건부 갱신"]
+    end
+    subgraph N1["GPS(n+1) 처리"]
+        direction TB
+        Q1["Begin/Continue 분기&lt;br/&gt;heading·speed 보정&lt;br/&gt;역행판정 기준점&lt;br/&gt;이상속도 검사 기준&lt;br/&gt;고도앵커 · NeedsBeginReset 판단"]
+    end
+    P2 -->|"세션 상태 전달&lt;br/&gt;(같은 batch: stWorkSession /&lt;br/&gt;batch 경계: mapSessions)"| Q1
+    Q1 -.-> Next(("GPS(n+2) …&lt;br/&gt;동일 구조로 반복"))
+
+    classDef fb fill:#1e88e5,color:#fff,stroke:#0d47a1;
+    classDef loop fill:none,stroke:#94a3b8,stroke-dasharray: 3 3,color:#64748b;
+    class P2 fb;
+    class Next loop;
+</pre>
+    </div>
+    <table>
+      <tr><th>세션 필드</th><th>이번 처리 갱신 조건</th><th>다음 처리 사용처</th></tr>
+      <tr><td><code>qwLinkID</code></td><td>매칭 성공 시 항상 전진 (SKIP이어도 전진)</td><td>Continue 우선 시도 여부 결정</td></tr>
+      <tr><td><code>dfLastMatchLinkPos</code></td><td><code>!bReverseSuspect || bConfirmed</code>일 때만 전진</td><td>같은 링크 역행 페널티 기준점</td></tr>
+      <tr><td><code>dfLastMatchX/Y, dtLastMatchGps, bHasLastMatch</code></td><td><code>bMatched && !bUntrustedMatch</code>일 때만</td><td>heading/speed 역산 기준점, 이상속도 검사 기준</td></tr>
+      <tr><td><code>nPrevAltitude, nPrevRoadType</code></td><td>위와 동일 + ALTITUDE_M 유효할 때</td><td>고도 보조 점수(CalcAltRoadPenalty) 앵커</td></tr>
+      <tr><td><code>nReverseStreak</code></td><td>bReverseSuspect면 +1, 아니면 0으로 리셋</td><td>bReverseSkip 판정 (streak &lt; reverse_confirm)</td></tr>
+      <tr><td><code>bLastPointOk</code></td><td><code>bMatched && !bUntrustedMatch</code></td><td>ShouldSkipImplausibleSpeed 전제조건</td></tr>
+      <tr><td><code>dwLastGpsSeq</code></td><td>거의 모든 경로에서 매번 갱신</td><td>NeedsBeginReset의 역전/중복 판단 기준</td></tr>
+      <tr><td><code>szTripId</code></td><td>매 처리마다 갱신</td><td>trip_id 변경(END 누락) 감지 기준</td></tr>
+    </table>
+    <div class="note">
+      GPS 포인트는 독립적으로 처리되지 않습니다. 매칭 성공 여부·역행 여부·신뢰도에 따라 세션 앵커가
+      <b>조건부로 전진하거나 고정</b>되며, 이 앵커 상태가 다음 포인트의 Begin/Continue 분기·역행 판정·SKIP 판정을
+      전부 좌우하는 <b>피드백 루프</b>입니다.
+    </div>
+  </section>
+
+  <section id="config-map">
+    <h2>11. config.ini → 코드 매핑</h2>
+    <table>
+      <tr><th>섹션.키</th><th>코드 변수</th><th>정확한 사용 위치</th></tr>
+      <tr><td><code>feeder.limit</code></td><td>m_nFetchLimit</td><td>ReserveFetchBatch() SQL LIMIT (RawLogFetcher.cpp:283)</td></tr>
+      <tr><td><code>feeder.fetch_interval</code></td><td>m_nFetchInterval</td><td>큐 여유 시 sleep (RawLogFetcher.cpp:206)</td></tr>
+      <tr><td><code>feeder.queue_pause_count</code></td><td>m_nQueuePauseCount</td><td>fetch 여부 분기 [176], sleep 하한 [205]</td></tr>
+      <tr><td><code>feeder.queue_max_count</code></td><td>m_nQueueMaxCount</td><td>sleep 상한 [208]</td></tr>
+      <tr><td><code>feeder.queue_busy_min/max</code></td><td>m_nQueueBusyMin/Max</td><td>선형보간 sleep 범위 [211-218]</td></tr>
+      <tr><td><code>worker.ttl_sec</code></td><td>nTtlSec</td><td>ExpireTtlSessions() 세션 만료 [143-180]</td></tr>
+      <tr><td><code>worker.shutdown_wait</code></td><td>m_nShutdownWait</td><td>Uninitialize() graceful drain 대기 (Server.cpp:527)</td></tr>
+      <tr><td><code>worker.retry_max</code></td><td>nRetryMax</td><td>BulkReleaseRawLogs() 재시도 상한 → 초과시 강제 ERROR (RawLogWorker.cpp:1484-1495)</td></tr>
+      <tr><td><code>threads.count</code></td><td>nWorkerThreads</td><td>ThreadPool 워커 수, ProcessManager[] 크기 (AppMain.cpp:220-224)</td></tr>
+      <tr><td><code>mapmatch.radius</code></td><td>m_nRadius</td><td>CalcAdaptiveRadius ACCURACY_M NULL 폴백, widen 상한 (ProcessManager.cpp:158,251)</td></tr>
+      <tr><td><code>mapmatch.radius_scale</code></td><td>m_dfRadiusScale</td><td>CalcAdaptiveRadius 배율 [161]</td></tr>
+      <tr><td><code>mapmatch.radius_min/max</code></td><td>m_nRadiusMin/Max</td><td>CalcAdaptiveRadius clamp [162-163], widen 상한 [251]</td></tr>
+      <tr><td><code>mapmatch.radius_skip</code></td><td>nRadiusSkip</td><td>ProcessRawLog ACCURACY_M 초과 SKIP (RawLogWorker.cpp:760-762)</td></tr>
+      <tr><td><code>mapmatch.alt_gap/penalty/weight/slope</code></td><td>ALTITUDE_SCORE_CONFIG</td><td>CalcAltRoadPenalty() (GISUtil.cpp:552-585)</td></tr>
+      <tr><td><code>mapmatch.reverse_weight/speed/margin</code></td><td>m_dfReverseWeight/Speed/Margin</td><td>LinkSgmtMapMatch() 역행 페널티 (ContinueMapMatch.cpp:326-437)</td></tr>
+      <tr><td><code>mapmatch.reverse_confirm</code></td><td>nReverseConfirm</td><td>bReverseSkip 판정, bConfirmed (RawLogWorker.cpp:848,1135)</td></tr>
+      <tr><td><code>mapmatch.speed_factor/margin</code></td><td>dfSpeedFactor/nSpeedMargin</td><td>ShouldSkipImplausibleSpeed 상한식 (RawLogWorker.cpp:393-395)</td></tr>
+      <tr><td><code>mapmatch.maxstep</code></td><td>nMaxStep → GetSearchStep()</td><td>ContinueMapMatch depth 루프 상한 (+ 공백적응 가산) (MapMatch.cpp:180-190)</td></tr>
+      <tr><td><code>mapmatch.distance</code></td><td>m_dwMaxDistance / nHeadingMaxDist</td><td>heading 계산 유효 이동거리 상한 (RawLogWorker.cpp:1074-1077)</td></tr>
+      <tr><td><code>mapmatch.timeout</code></td><td>nMatchTimeoutMs</td><td>1건 처리시간 초과 시 강제 ERROR (RawLogWorker.cpp:885-896)</td></tr>
+      <tr><td><code>mapmatch.geodetic</code></td><td>nCoordinateType</td><td>좌표계 변환 기준</td></tr>
+      <tr><td><code>database.conn_retry_max/wait</code></td><td>nConnRetryMax/Wait</td><td>AcquirePoolConnection() (RawLogWorker.cpp:73-94)</td></tr>
+    </table>
+  </section>
+
+  <footer>
+    이 문서는 <code>MapMatchSvr/src</code> 소스와 <code>MapMatchSvr/bin/config.ini</code>를 근거로 생성된 정적 문서입니다.
+    소스가 바뀌면(특히 <code>ContinueMapMatch.cpp</code>/<code>RawLogWorker.cpp</code>) 내용이 어긋날 수 있으니,
+    재컴파일 후에는 이 문서도 함께 갱신하는 것을 권장합니다.
+  </footer>
+</main>
+</div>
+<script>
+  // startOnLoad(mermaid.run 내부 병렬처리)가 다이어그램 개수가 많을 때 간헐적으로
+  // 특정 다이어그램을 "Syntax error"로 오판하는 현상이 있어, 순차 렌더링으로 직접 처리한다.
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default',
+    flowchart: { curve: 'basis', useMaxWidth: true }
+  });
+  (async function renderAllSequential() {
+    const blocks = Array.from(document.querySelectorAll('pre.mermaid'));
+    for (let i = 0; i < blocks.length; i++) {
+      const el = blocks[i];
+      const src = el.textContent;
+      try {
+        const { svg } = await mermaid.render('flowdiagram-' + i, src);
+        el.innerHTML = svg;
+      } catch (e) {
+        el.innerHTML = '<p style="color:#e53935">다이어그램 렌더링 실패: ' + e.message + '</p>';
+      }
+    }
+  })();
+</script>
+</body>
+</html>

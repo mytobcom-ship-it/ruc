@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MapMatchSvr 알고리즘 플로우차트</title>
+<script src="https://unpkg.com/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  :root {
+    --bg: #f8fafc; --panel: #ffffff; --text: #1e293b; --muted: #64748b;
+    --border: #e2e8f0; --accent: #1e88e5; --code-bg: #f1f5f9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a; --panel: #1e293b; --text: #e2e8f0; --muted: #94a3b8;
+      --border: #334155; --accent: #60a5fa; --code-bg: #0b1220;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", sans-serif;
+    line-height: 1.65; font-size: 18px;
+  }
+  #layout { display: flex; min-height: 100vh; }
+  nav {
+    width: 280px; flex: none; background: var(--panel); border-right: 1px solid var(--border);
+    padding: 22px 16px; position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  }
+  nav h2 { font-size: 15px; margin: 0 0 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  nav a { display: block; font-size: 15.5px; color: var(--text); text-decoration: none; padding: 7px 9px; border-radius: 6px; line-height: 1.4; }
+  nav a:hover { background: var(--code-bg); }
+  nav .grp { margin-top: 18px; font-size: 12.5px; color: var(--muted); font-weight: 700; padding: 0 9px; }
+  main { flex: 1; padding: 32px 40px 90px; max-width: 1280px; }
+  h1 { font-size: 32px; margin: 0 0 8px; }
+  .subtitle { color: var(--muted); font-size: 16.5px; margin-bottom: 26px; }
+  section { margin-bottom: 50px; scroll-margin-top: 16px; }
+  section h2 { font-size: 24px; border-bottom: 3px solid var(--accent); padding-bottom: 8px; margin-bottom: 8px; }
+  .easy-name {
+    display: inline-block; font-size: 15.5px; font-weight: 700; color: var(--accent);
+    background: var(--code-bg); border: 1px solid var(--accent); border-radius: 20px;
+    padding: 4px 14px; margin-bottom: 14px;
+  }
+  .intro {
+    background: var(--code-bg); border-radius: 8px;
+    padding: 10px 16px; margin: 0 0 14px; font-size: 15.5px; color: var(--text);
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px; overflow-x: auto; margin-bottom: 14px;
+  }
+  .note {
+    background: var(--code-bg); border-left: 4px solid var(--accent); border-radius: 4px;
+    padding: 12px 16px; font-size: 15px; margin: 12px 0; color: var(--text);
+  }
+  .note b { color: var(--accent); }
+  code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 14.5px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+  th, td { border: 1px solid var(--border); padding: 8px 11px; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 15px; color: var(--muted); margin: 8px 0 20px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { width: 13px; height: 13px; border-radius: 3px; display: inline-block; }
+  footer { color: var(--muted); font-size: 14px; padding: 22px 40px 44px; }
+  .src { font-size: 13.5px; color: var(--muted); margin-top: -4px; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+<div id="layout">
+<nav>
+  <h2>MapMatchSvr Flow</h2>
+  <a href="#overview">0. 서버 시작</a>
+  <a href="#collect-process">1. 수집 → 배치처리</a>
+  <a href="#match-pipeline">2. 맵매칭 판정 파이프라인</a>
+  <a href="#score-candidate">3. 후보 탐색·채점·역행판정</a>
+  <a href="#verdict">4. 최종 판정</a>
+  <a href="#feedback">5. 세션 피드백 루프</a>
+  <a href="#config-map">6. config.ini → 코드 매핑</a>
+  <div class="grp">참고</div>
+  <a href="/">← 웹 뷰어로</a>
+</nav>
+<main>
+  <h1>MapMatchSvr 알고리즘 플로우차트</h1>
+  <p class="subtitle">
+    <code>MapMatchSvr/bin/config.ini</code> 및 실제 소스를 근거로 재구성한 제어흐름입니다.
+    함수명 대신 우리말 설명으로 표현했고, 합칠 수 있는 단계는 하나로 묶었습니다. (2026-07-22 기준 소스)
+  </p>
+
+  <div class="legend">
+    <span><span class="sw" style="background:#1e88e5"></span> MATCHED / 성공</span>
+    <span><span class="sw" style="background:#fb8c00"></span> SKIP / 저신뢰</span>
+    <span><span class="sw" style="background:#e53935"></span> ERROR / 완전실패 / 배제</span>
+    <span><span class="sw" style="background:#94a3b8"></span> 중간 처리 단계</span>
+  </div>
+
+  <section id="overview">
+    <h2>0. 서버 시작</h2>
+    <div class="card">
+<pre class="mermaid">
+flowchart TB
+    Main(["서버 시작"]) --> Init["초기 설정 로딩&lt;br/&gt;(DB 연결·도로데이터·처리기 준비)"]
+    Init --> InitOK{"모두 성공?"}
+    InitOK -->|실패| Rollback(["종료"])
+    InitOK -->|성공| Recover["미완료 건 복구&lt;br/&gt;(최대 3회 재시도)"]
+    Recover --> RecoverOK{"복구 성공?"}
+    RecoverOK -->|실패| Rollback
+    RecoverOK -->|성공| Running(["정상 운영 시작&lt;br/&gt;(수집·처리 흐름은 §1)"])
+
+    classDef fail fill:#e53935,color:#fff,stroke:#b71c1c;
+    classDef ok fill:#1e88e5,color:#fff,stroke:#0d47a1;
+    class Rollback fail;
+    class Running ok;
+</pre>
+    </div>
+  </section>
+
+  <section id="collect-process">
+    <h2>1. 수집 → 배치처리</h2>
+    <div class="src">config: [feeder] limit/fetch_interval/queue_pause_count/queue_max_count/queue_busy_min/queue_busy_max, [threads] count</div>
+    <div class="easy-name">쉬운 이름: 큐 크기 따라 수집 + 배치로 묶어 일괄 처리·저장</div>
+    <div class="card">
+<pre class="mermaid">
+flowchart TD
+    Start(("주기적으로 확인")) --> Q["대기 건수 확인"]
+    Q --> P1{"대기건수 400 미만?"}
+    P1 -->|Yes| Fetch["새 GPS 가져와서&lt;br/&gt;담당 처리기 대기열에 배분"]
+    P1 -->|"No, 혼잡"| Wait1["이번엔 건너뜀"]
+    Fetch --> NextPoll
+    Wait1 --> NextPoll
+    NextPoll["대기건수 따라&lt;br/&gt;0.5초~10초 후 재확인"]
+    NextPoll -.->|반복| Start
+    Fetch -.->|쌓임| WStart
+
+    subgraph W["처리기(워커) — 여러 명 동시에"]
+        direction TB
+        WStart["대기열에서 GPS 묶음 하나 꺼냄"] --> WLoop["묶음 안 GPS를 한 건씩&lt;br/&gt;순서대로 판정 (§2)"]
+        WLoop --> WSave["결과를 한 번에 저장 시도"]
+        WSave --> WOK{"저장 성공?"}
+        WOK -->|성공| WCommit["진행상태 확정&lt;br/&gt;(다음 묶음이 이어받음)"]
+        WOK -->|실패| WRevert["이번 묶음 통째로 무효화"]
+        WCommit --> WStart
+        WRevert --> WStart
+    end
+
+    classDef warn fill:#fb8c00,color:#fff,stroke:#e65100;
+    class P1 warn;
+</pre>
+    </div>
+    <div class="note">
+      같은 차량(device)의 GPS는 항상 같은 처리기로 감 — 진행상태를 한 곳에서만 관리하기 위함입니다.
+      묶음(batch) 저장은 <b>전부 성공 또는 전부 무효화</b> — 건별로 나눠 저장하지 않습니다.
+    </div>
+  </section>
+
+  <section id="match-pipeline">
+    <h2>2. 맵매칭 판정 파이프라인</h2>
+    <div class="src">config: [mapmatch] radius_skip/speed_factor/speed_margin/maxstep/distance, [worker] ttl_sec</div>
+    <div class="easy-name">쉬운 이름: 사전검증 → 방식선택 → 탐색</div>
+    <div class="card">
+<pre class="mermaid">
+flowchart TD
+    In(["GPS 1건 입력"]) --> Gate{"사전검증 통과?&lt;br/&gt;(형식·좌표·오차·이상속도)"}
+    Gate -->|불통과| SkipEarly(["SKIP: 판정 진입 안 함"])
+    Gate -->|통과| ModeCheck{"직전에 이어갈&lt;br/&gt;링크가 있나?"}
+
+    ModeCheck -->|있음| Chain["이어찾기:&lt;br/&gt;그 주변부터 탐색"]
+    Chain --> ChainLoop{"이번 범위 후보가&lt;br/&gt;충분히 좋은가?"}
+    ChainLoop -->|"아니오(범위 더 넓힐 수 있음)"| ChainExpand["탐색범위 한 단계 확장"]
+    ChainExpand -.->|반복| Chain
+    ChainLoop -->|"예 / 한계 도달"| ChainOK{"성공?"}
+
+    ChainOK -->|성공| Success(["매칭 성공"])
+    ChainOK -->|실패| Fresh["새로찾기:&lt;br/&gt;반경 안 전체에서 처음부터"]
+    ModeCheck -->|없음| Fresh
+
+    Fresh --> FreshOK{"성공?"}
+    FreshOK -->|성공| Success
+    FreshOK -->|실패| Wider{"반경을 더&lt;br/&gt;넓힐 수 있나?"}
+    Wider -->|있음| WiderTry["넓혀찾기:&lt;br/&gt;반경만 키워 재시도"]
+    WiderTry --> WiderOK{"성공?"}
+    WiderOK -->|성공| Success
+    WiderOK -->|실패| RefOnly
+    Wider -->|없음| RefOnly
+    RefOnly["참고만찾기:&lt;br/&gt;방향·반경 무시하고 근처 좌표만 확보"]
+    RefOnly --> Fail(["매칭 실패&lt;br/&gt;(좌표는 참고용으로 남을 수 있음)"])
+
+    classDef ok fill:#1e88e5,color:#fff,stroke:#0d47a1;
+    classDef fail fill:#e53935,color:#fff,stroke:#b71c1c;
+    class Success ok;
+    class Fail fail;
+</pre>
+    </div>
+    <div class="note">
+      "이어찾기"의 탐색범위 확장은 <b>조기확정 최적화</b>입니다 — 후보가 도로 끝점에 걸리거나 방향이
+      많이 어긋날 때만, 여유가 있으면 한 단계 더 넓혀 비교합니다(<code>maxstep</code> 설정이 상한).
+      성공 후에도 방향이 심하게 안 맞으면 "새로찾기"로 한 번 더 대조해 더 나은 갈림길 후보가 있는지 확인합니다.
+    </div>
+  </section>
+
+  <section id="score-candidate">
+    <h2>3. 후보 탐색·채점·역행판정</h2>
+    <div class="src">config: [mapmatch] radius/radius_scale/min/max, alt_gap/penalty/weight/slope, reverse_weight/speed/margin</div>
+    <div class="easy-name">쉬운 이름: 후보 찾기 → 점수 매기기 → 역행 감점</div>
+    <div class="intro">
+      "새로찾기"는 주변 여러 방향을 뒤져 후보를 모으고, 모인 후보 하나하나를 아래 기준으로 채점합니다.
+      "이어찾기"도 매 단계마다 같은 채점 기준을 씁니다.
+    </div>
+    <div class="card">
+<pre class="mermaid">
+flowchart TD
+    Cand(["후보 지점 하나 검토"]) --> Dir{"진행방향이 도로와&lt;br/&gt;120도 넘게 다른가?"}
+    Dir -->|예| Excl(["제외"])
+    Dir -->|아니오| Proj["도로 위 가장 가까운&lt;br/&gt;지점까지 거리 계산"]
+    Proj --> RadCheck{"그 거리가&lt;br/&gt;탐색반경보다 먼가?"}
+    RadCheck -->|예| Excl
+    RadCheck -->|아니오| Score["기본점수 = 거리 + 방향차이 + 고도차이"]
+
+    Score --> Rev1{"같은 도로에서&lt;br/&gt;직전보다 뒤로 갔나?"}
+    Rev1 -->|예| Pen1["되돌아간 거리만큼 감점&lt;br/&gt;(저속이면 약간 봐줌)"]
+    Rev1 -->|아니오| Rev2{"직전 도로 끝점으로&lt;br/&gt;거꾸로 들어가는 도로인가?"}
+    Rev2 -->|예| Pen1
+    Rev2 -->|아니오| Collect
+    Pen1 --> Collect["후보 목록에 추가"]
+    Collect --> Pick["가장 점수 낮은 후보 채택"]
+
+    classDef warn fill:#fb8c00,color:#fff,stroke:#e65100;
+    class Pen1 warn;
+</pre>
+    </div>
+    <div class="note">
+      역행 감점은 "GPS 노이즈로 매칭점이 앞뒤로 튀는 것"을 억제·구분하려는 목적이며, 일방통행
+      역주행 자체를 판정하는 기능은 아닙니다 — 도로 데이터에 일방통행 여부 필드가 없기 때문입니다.
+      고도차이 채점은 터널 구간이거나 GPS 고도가 비현실적일 땐 적용하지 않습니다.
+    </div>
+  </section>
+
+  <section id="verdict">
+    <h2>4. 최종 판정</h2>
+    <div class="src">config: [mapmatch] timeout, reverse_confirm</div>
+    <div class="easy-name">쉬운 이름: MATCHED / SKIP / ERROR 결정</div>
+    <div class="card">
+<pre class="mermaid">
+flowchart TD
+    Start(["판정 시작"]) --> M1{"매칭 실패했지만&lt;br/&gt;근처 참고좌표는 있음?"}
+    M1 -->|예| SKIP1(["SKIP: 반경밖 최근접"])
+    M1 -->|아니오| M2{"매칭 완전 실패?"}
+    M2 -->|예| ERROR1(["ERROR: 완전실패"])
+    M2 -->|"아니오(매칭 성공)"| Check["아래 4가지를 확인&lt;br/&gt;(나중 해당 항목이 결과를 덮어씀)"]
+    Check --> Decide{"해당하는 것 중&lt;br/&gt;가장 나중 항목은?"}
+    Decide -->|"④ 역행 판단 애매"| SKIP4(["SKIP: 판단불가"])
+    Decide -->|"③ 도로끝 저신뢰"| SKIP3(["SKIP: 저신뢰 매칭"])
+    Decide -->|"② 연속역행 미확정"| SKIP2(["SKIP: 역행 미확정"])
+    Decide -->|"① 처리시간 초과"| ERROR2(["ERROR: 시간초과"])
+    Decide -->|해당없음| MATCHED1(["MATCHED: 정상 저장"])
+
+    classDef ok fill:#1e88e5,color:#fff,stroke:#0d47a1;
+    classDef warn fill:#fb8c00,color:#fff,stroke:#e65100;
+    classDef fail fill:#e53935,color:#fff,stroke:#b71c1c;
+    class MATCHED1 ok;
+    class SKIP1,SKIP2,SKIP3,SKIP4 warn;
+    class ERROR1,ERROR2 fail;
+</pre>
+    </div>
+    <div class="note">
+      MATCHED로 확정될 때만 위치·시각·고도 기준점이 다음 GPS 처리에 쓰일 값으로 전진합니다.
+      다만 도로(링크) 자체를 따라가는 내부 추적은 SKIP이어도 계속 이어집니다 — 저장값(신뢰도 표시)과
+      내부 추적은 따로 관리됩니다.
+    </div>
+  </section>
+
+  <section id="feedback">
+    <h2>5. 세션 피드백 루프 — "순차 진행이 아닌" 진짜 루프 구조</h2>
+    <div class="card">
+<pre class="mermaid">
+flowchart LR
+    subgraph N["GPS(n) 처리"]
+        direction TB
+        P1["GPS 1건 판정 (§2~§4)"] --> P2["진행상태 조건부 갱신"]
+    end
+    subgraph N1["GPS(n+1) 처리"]
+        direction TB
+        Q1["방식선택·보정·역행판정·&lt;br/&gt;이상속도 검사의 기준점으로 사용"]
+    end
+    P2 -->|"진행상태 전달"| Q1
+    Q1 -.-> Next(("GPS(n+2) …&lt;br/&gt;동일 구조로 반복"))
+
+    classDef fb fill:#1e88e5,color:#fff,stroke:#0d47a1;
+    classDef loop fill:none,stroke:#94a3b8,stroke-dasharray: 3 3,color:#64748b;
+    class P2 fb;
+    class Next loop;
+</pre>
+    </div>
+    <table>
+      <tr><th>진행상태</th><th>이번 처리 갱신 조건</th><th>다음 처리 사용처</th></tr>
+      <tr><td>마지막 매칭 도로</td><td>매칭 성공 시 항상 전진 (SKIP이어도 전진)</td><td>이어찾기 시도 여부 결정</td></tr>
+      <tr><td>도로 위 마지막 위치</td><td>역행 의심 없거나 확정됐을 때만 전진</td><td>같은 도로 역행 감점 기준점</td></tr>
+      <tr><td>마지막 매칭 좌표·시각</td><td>신뢰할 수 있는 매칭일 때만</td><td>다음 GPS 방향/속도 보정 기준점</td></tr>
+      <tr><td>직전 고도·도로유형</td><td>위와 동일 + 고도값 유효할 때</td><td>고도차이 채점 기준점</td></tr>
+      <tr><td>연속 역행 횟수</td><td>역행 의심이면 +1, 아니면 0으로 리셋</td><td>"역행 미확정 SKIP" 판정 기준</td></tr>
+      <tr><td>직전 처리 신뢰 여부</td><td>신뢰할 수 있는 매칭일 때만 참</td><td>이상속도 검사의 전제조건</td></tr>
+      <tr><td>trip 식별자</td><td>매 처리마다 갱신</td><td>trip 종료 누락 감지 기준</td></tr>
+    </table>
+    <div class="note">
+      GPS 포인트는 독립적으로 처리되지 않습니다. 매칭 성공 여부·역행 여부·신뢰도에 따라 진행상태가
+      <b>조건부로 전진하거나 고정</b>되며, 이 상태가 다음 포인트의 판정을 전부 좌우하는 <b>피드백 루프</b>입니다.
+    </div>
+  </section>
+
+  <section id="config-map">
+    <h2>6. config.ini → 코드 매핑</h2>
+    <table>
+      <tr><th>섹션.키</th><th>코드 변수</th><th>정확한 사용 위치</th></tr>
+      <tr><td><code>feeder.limit</code></td><td>m_nFetchLimit</td><td>ReserveFetchBatch() SQL LIMIT (RawLogFetcher.cpp:283)</td></tr>
+      <tr><td><code>feeder.fetch_interval</code></td><td>m_nFetchInterval</td><td>큐 여유 시 sleep (RawLogFetcher.cpp:206)</td></tr>
+      <tr><td><code>feeder.queue_pause_count</code></td><td>m_nQueuePauseCount</td><td>fetch 여부 분기 [176], sleep 하한 [205]</td></tr>
+      <tr><td><code>feeder.queue_max_count</code></td><td>m_nQueueMaxCount</td><td>sleep 상한 [208]</td></tr>
+      <tr><td><code>feeder.queue_busy_min/max</code></td><td>m_nQueueBusyMin/Max</td><td>선형보간 sleep 범위 [211-218]</td></tr>
+      <tr><td><code>worker.ttl_sec</code></td><td>nTtlSec</td><td>ExpireTtlSessions() 세션 만료 [143-180]</td></tr>
+      <tr><td><code>worker.shutdown_wait</code></td><td>m_nShutdownWait</td><td>Uninitialize() graceful drain 대기 (Server.cpp:527)</td></tr>
+      <tr><td><code>worker.retry_max</code></td><td>nRetryMax</td><td>BulkReleaseRawLogs() 재시도 상한 → 초과시 강제 ERROR (RawLogWorker.cpp:1484-1495)</td></tr>
+      <tr><td><code>threads.count</code></td><td>nWorkerThreads</td><td>ThreadPool 워커 수, ProcessManager[] 크기 (AppMain.cpp:220-224)</td></tr>
+      <tr><td><code>mapmatch.radius</code></td><td>m_nRadius</td><td>CalcAdaptiveRadius ACCURACY_M NULL 폴백, widen 상한 (ProcessManager.cpp:158,251)</td></tr>
+      <tr><td><code>mapmatch.radius_scale</code></td><td>m_dfRadiusScale</td><td>CalcAdaptiveRadius 배율 [161]</td></tr>
+      <tr><td><code>mapmatch.radius_min/max</code></td><td>m_nRadiusMin/Max</td><td>CalcAdaptiveRadius clamp [162-163], widen 상한 [251]</td></tr>
+      <tr><td><code>mapmatch.radius_skip</code></td><td>nRadiusSkip</td><td>ProcessRawLog ACCURACY_M 초과 SKIP (RawLogWorker.cpp:760-762)</td></tr>
+      <tr><td><code>mapmatch.alt_gap/penalty/weight/slope</code></td><td>ALTITUDE_SCORE_CONFIG</td><td>CalcAltRoadPenalty() (GISUtil.cpp:552-585)</td></tr>
+      <tr><td><code>mapmatch.reverse_weight/speed/margin</code></td><td>m_dfReverseWeight/Speed/Margin</td><td>LinkSgmtMapMatch() 역행 페널티 (ContinueMapMatch.cpp:326-437)</td></tr>
+      <tr><td><code>mapmatch.reverse_confirm</code></td><td>nReverseConfirm</td><td>bReverseSkip 판정, bConfirmed (RawLogWorker.cpp:848,1135)</td></tr>
+      <tr><td><code>mapmatch.speed_factor/margin</code></td><td>dfSpeedFactor/nSpeedMargin</td><td>ShouldSkipImplausibleSpeed 상한식 (RawLogWorker.cpp:393-395)</td></tr>
+      <tr><td><code>mapmatch.maxstep</code></td><td>nMaxStep → GetSearchStep()</td><td>ContinueMapMatch depth 루프 상한 (+ 공백적응 가산) (MapMatch.cpp:180-190)</td></tr>
+      <tr><td><code>mapmatch.distance</code></td><td>m_dwMaxDistance / nHeadingMaxDist</td><td>heading 계산 유효 이동거리 상한 (RawLogWorker.cpp:1074-1077)</td></tr>
+      <tr><td><code>mapmatch.timeout</code></td><td>nMatchTimeoutMs</td><td>1건 처리시간 초과 시 강제 ERROR (RawLogWorker.cpp:885-896)</td></tr>
+      <tr><td><code>mapmatch.geodetic</code></td><td>nCoordinateType</td><td>좌표계 변환 기준</td></tr>
+      <tr><td><code>database.conn_retry_max/wait</code></td><td>nConnRetryMax/Wait</td><td>AcquirePoolConnection() (RawLogWorker.cpp:73-94)</td></tr>
+    </table>
+  </section>
+
+  <footer>
+    이 문서는 <code>MapMatchSvr/src</code> 소스와 <code>MapMatchSvr/bin/config.ini</code>를 근거로 생성된 정적 문서입니다.
+    다이어그램은 함수명 없이 우리말로 단순화했고, 정확한 코드 위치는 §6 매핑표를 참고하세요.
+    소스가 바뀌면 이 문서도 함께 갱신하는 것을 권장합니다.
+  </footer>
+</main>
+</div>
+<script>
+  // startOnLoad(mermaid.run 내부 병렬처리)가 다이어그램 개수가 많을 때 간헐적으로
+  // 특정 다이어그램을 "Syntax error"로 오판하는 현상이 있어, 순차 렌더링으로 직접 처리한다.
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default',
+    themeVariables: { fontSize: '17px' },
+    flowchart: { curve: 'basis', useMaxWidth: true, padding: 8, nodeSpacing: 22, rankSpacing: 32 }
+  });
+  (async function renderAllSequential() {
+    const blocks = Array.from(document.querySelectorAll('pre.mermaid'));
+    for (let i = 0; i < blocks.length; i++) {
+      const el = blocks[i];
+      const src = el.textContent;
+      try {
+        const { svg } = await mermaid.render('flowdiagram-' + i, src);
+        el.innerHTML = svg;
+      } catch (e) {
+        el.innerHTML = '<p style="color:#e53935">다이어그램 렌더링 실패: ' + e.message + '</p>';
+      }
+    }
+  })();
+</script>
+</body>
+</html>

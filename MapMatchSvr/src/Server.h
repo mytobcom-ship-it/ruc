@@ -126,9 +126,6 @@ private:
 	int								m_nAltPenalty;						// config alt_penalty — 양수=ROAD_TYPE 불일치 비용 가산·음수=같은 ROAD_TYPE 비용 감산(m)
 	double							m_dfAltWeight;						// config alt_weight — 차이 초과 시 고도차 가중. 0=비활성
 	double							m_dfAltSlope;						// config alt_slope
-	double							m_dfReverseWeight;			// config reverse_weight — 역행 1m당 비용 가중 (2026-07-20 최정우 추가)
-	double							m_dfReverseSpeed;			// config reverse_speed — 저속 데드존 적용 속도 상한 (2026-07-20 최정우 추가)
-	double							m_dfReverseMargin;				// config reverse_margin — 저속 시 역행 허용거리(m) (2026-07-20 최정우 추가)
 	int								m_nReverseConfirm;					// config reverse_confirm — 연속 역행 확정 포인트 수 (2026-07-21 최정우 추가)
 	double							m_dfSpeedFactor;				// config speed_factor (2026-07-20 최정우 추가)
 	int								m_nSpeedMargin;					// config speed_margin (km/h) (2026-07-20 최정우 추가)

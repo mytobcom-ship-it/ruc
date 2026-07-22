@@ -32,7 +32,13 @@ typedef struct sConfig
 
 	// [sim] 시뮬레이션 파라미터
 	int			nVehicles;			// 동시 운행 차량 수
-	int			nFlushSec;			// DB INSERT 주기 (초)
+	double		dfTickSec;			// GPS 표본 생성 주기 (초) — CVehicle 이 실제 사용하는 값.
+	//   SimServer::Initialize 가 차량마다 [tick_sec_min,tick_sec_max] 범위에서 랜덤으로 뽑아
+	//   이 필드에 채운 뒤 그 차량 전용 config 사본을 넘김 — 실제 단말마다 보고 간격이 다른 것을
+	//   흉내낸다 (2026-07-22 최정우 추가, 2026-07-22 최정우 수정 — 차량별 랜덤화로 확장)
+	double		dfTickSecMin;		// tick_sec 랜덤 범위 하한 (초)
+	double		dfTickSecMax;		// tick_sec 랜덤 범위 상한 (초, min 과 같으면 전 차량 고정값)
+	int			nFlushSec;			// DB INSERT 주기 (초) — 차량들과 무관한 서버 공용 배치, tick_sec 과 독립
 	int			nReportSec;			// 통계 로그 출력 주기 (초)
 	int			nMaxSamples;		// 총 GPS 생성 상한 (0=무제한). 도달 시 flush 후 자동 종료
 	double		dfIdleProb;			// 매 tick 정차(IDLE) 확률 (0~1)
@@ -67,7 +73,8 @@ typedef struct sConfig
 	double		dfDeadZoneProb;		// 터널(002)·지하(004) 구간 tick 당 표본 미생성(신호 두절) 확률 (0~1)
 
 	sConfig() :
-		nLogLevel(2), nDBPort(5432), nVehicles(10), nFlushSec(3),
+		nLogLevel(2), nDBPort(5432), nVehicles(10), dfTickSec(1.0),
+		dfTickSecMin(3.0), dfTickSecMax(8.0), nFlushSec(3),
 		nReportSec(30), nMaxSamples(0), dfIdleProb(0.05),
 		dfOmitAllProb(0.005), dfOmitPartialProb(0.08),
 		dfMinLon(126.90), dfMinLat(37.48), dfMaxLon(127.10), dfMaxLat(37.62),

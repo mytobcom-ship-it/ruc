@@ -281,18 +281,6 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	if (pstConfig->dfAltSlope < 0.0)
 		pstConfig->dfAltSlope = CFG_DEF_ALT_SLOPE;
 
-	// [mapmatch] reverse_weight — 직전 매칭 위치보다 역행하는 후보 1m당 비용 가중 (2026-07-20 최정우 추가)
-	cIniReader.GetProfileDouble("mapmatch", "reverse_weight", CFG_DEF_REVERSE_WEIGHT, pstConfig->dfReverseWeight);
-	if (pstConfig->dfReverseWeight < 0.0)
-		pstConfig->dfReverseWeight = CFG_DEF_REVERSE_WEIGHT;
-
-	// [mapmatch] reverse_speed/reverse_margin — 저속 역행 데드존 (2026-07-20 최정우 추가)
-	cIniReader.GetProfileDouble("mapmatch", "reverse_speed", CFG_DEF_REVERSE_SPEED, pstConfig->dfReverseSpeed);
-	if (pstConfig->dfReverseSpeed < 0.0)
-		pstConfig->dfReverseSpeed = CFG_DEF_REVERSE_SPEED;
-	cIniReader.GetProfileDouble("mapmatch", "reverse_margin", CFG_DEF_REVERSE_MARGIN, pstConfig->dfReverseMargin);
-	if (pstConfig->dfReverseMargin < 0.0)
-		pstConfig->dfReverseMargin = CFG_DEF_REVERSE_MARGIN;
 	// [mapmatch] reverse_confirm — 연속 역행 확정 포인트 수. 미만이면 노이즈로 보고 SKIP·앵커 고정 (2026-07-21 최정우 추가)
 	cIniReader.GetProfileInt("mapmatch", "reverse_confirm", CFG_DEF_REVERSE_CONFIRM, pstConfig->nReverseConfirm);
 	if (pstConfig->nReverseConfirm <= 0)

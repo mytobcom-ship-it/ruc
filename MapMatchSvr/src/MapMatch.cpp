@@ -64,18 +64,6 @@ void CMapMatch::SetAltitudeConfig(const ALTITUDE_SCORE_CONFIG& stAltConfig)
 }
 
 /**
- * @brief 연속 맵매칭 역행 페널티 설정 (config reverse_weight/reverse_speed/reverse_margin)
- * @param[in] dfWeight 역행 1m당 비용 가중치
- * @param[in] dfSpeed 저속 데드존 적용 속도 상한(km/h) (2026-07-20 최정우 추가)
- * @param[in] dfMargin 저속 시 페널티 없이 허용하는 역행 거리(m) (2026-07-20 최정우 추가)
- * @return void
-*/
-void CMapMatch::SetReversePenaltyWeight(double dfWeight, double dfSpeed, double dfMargin)
-{
-	m_cContinueMapMatch.SetReversePenaltyWeight(dfWeight, dfSpeed, dfMargin);
-}
-
-/**
  * @brief 초기 맵매칭
  * @param[in] stMapMatchInput 초기 맵매칭 입력 정보
  * @param[out] pstMatchLinkInfo 초기 맵매칭 응답 정보
@@ -386,9 +374,7 @@ bool CMapMatch::SetResponseValue(uint16 wErrorCode, MATCH_ENTRY stMatchEntry,
 		pstMatchLinkInfo->dfEdNodeX			= stMatchEntry.dfEdNodeX / 360000.0;
 		pstMatchLinkInfo->dfEdNodeY			= stMatchEntry.dfEdNodeY / 360000.0;
 		pstMatchLinkInfo->nEdNodeType		= stMatchEntry.nEdNodeType;
-		// 같은 링크 역행 페널티가 붙은 채로 최종 선택된 후보 — RawLogWorker SKIP 격리용 (2026-07-21 최정우 추가)
-		pstMatchLinkInfo->bReverseHit		= (stMatchEntry.dfReversePenalty > 0.0);
-		// 위치 역행 + heading 역방향 일치(margin 무관) — 연속역행(reverse_confirm) 스트릭 판정 전용 (2026-07-21 최정우 추가)
+		// 위치 역행 + heading 역방향 일치 — 연속역행(reverse_confirm) 스트릭 판정 전용 (2026-07-21 최정우 추가)
 		pstMatchLinkInfo->bReverseSuspect	= stMatchEntry.bReverseSuspect;
 		// 최종 확정 후보가 세그먼트 끝점(꺾임점)에 스냅됐고 GPS와 거리가 먼 경우 — 여러 GPS_SEQ 가
 		//   같은 꺾임점으로 뭉개져 MATCH_LAT/LON 이 실제로는 계속 이동 중인데도 정지한 것처럼 보이는

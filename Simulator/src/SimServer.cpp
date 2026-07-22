@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <random>
 #include <unistd.h>
 #include <libpq-fe.h>
 
@@ -67,22 +68,34 @@ bool CSimServer::Initialize(const SIM_CONFIG& stConfig)
 		return false;
 	}
 
-	// 차량 생성 (겹치지 않는 임시 인증키)
+	// 차량 생성 (겹치지 않는 임시 인증키). 차량마다 [tick_sec_min,tick_sec_max] 범위에서
+	//   자기만의 GPS 생성 주기를 뽑아 고정 사용하고, 첫 tick 까지 남은 시간도 그 범위 내에서
+	//   랜덤 산포시켜 차량마다 최초 표본 시점이 조금씩 어긋나게 한다 (2026-07-22 최정우 추가)
 	unsigned int nBase = (unsigned int)(time(nullptr) ^ ((unsigned int)getpid() << 16));
+	mt19937 rngTick(nBase ^ 0x9E3779B9u);
+	uniform_real_distribution<double> distTickSec(m_stConfig.dfTickSecMin, m_stConfig.dfTickSecMax);
 	for (int i = 0; i < m_stConfig.nVehicles; ++i)
 	{
 		char szKey[37];
 		snprintf(szKey, sizeof(szKey), "SIM%08X%04d", nBase, i);
 
+		double dfThisTickSec = distTickSec(rngTick);
+		SIM_CONFIG stVehicleConfig = m_stConfig;
+		stVehicleConfig.dfTickSec = dfThisTickSec;		// CVehicle 은 이 필드만 봄(범위는 모름)
+
 		CVehicle *pcVeh = new (std::nothrow) CVehicle();
 		if (!pcVeh) { LOGFMTE("vehicle alloc fail"); return false; }
 		// 차량 시뮬레이터 초기화 (2026-07-08 최정우 주석 추가)
-		pcVeh->Initialize(szKey, m_pcRoute, m_stConfig, nBase + (unsigned int)i * 2654435761u);
+		pcVeh->Initialize(szKey, m_pcRoute, stVehicleConfig, nBase + (unsigned int)i * 2654435761u);
 		m_vtVehicles.push_back(pcVeh);
+		m_vtVehicleTickSec.push_back(dfThisTickSec);
+		// 첫 tick 시점 산포 — [0, dfThisTickSec) 랜덤 (2026-07-22 최정우 추가)
+		uniform_real_distribution<double> distFirst(0.0, dfThisTickSec);
+		m_vtVehicleCountdown.push_back(distFirst(rngTick));
 	}
 
-	LOGFMTI("simulator initialized. vehicles=[%d] flush=[%ds] area=[%.5f,%.5f ~ %.5f,%.5f]",
-		m_stConfig.nVehicles, m_stConfig.nFlushSec,
+	LOGFMTI("simulator initialized. vehicles=[%d] tick_sec=[%.2f~%.2f] flush=[%ds] area=[%.5f,%.5f ~ %.5f,%.5f]",
+		m_stConfig.nVehicles, m_stConfig.dfTickSecMin, m_stConfig.dfTickSecMax, m_stConfig.nFlushSec,
 		m_stConfig.dfMinLon, m_stConfig.dfMinLat, m_stConfig.dfMaxLon, m_stConfig.dfMaxLat);
 	return true;
 }
@@ -93,6 +106,8 @@ void CSimServer::Uninitialize()
 		// 차량 객체 메모리 해제 (2026-07-08 최정우 주석 추가)
 		delete m_vtVehicles[i];
 	m_vtVehicles.clear();
+	m_vtVehicleTickSec.clear();
+	m_vtVehicleCountdown.clear();
 
 	if (m_pcRoute) { delete m_pcRoute; m_pcRoute = nullptr; }
 	if (m_pcSQL) { delete m_pcSQL; m_pcSQL = nullptr; }
@@ -111,11 +126,21 @@ void CSimServer::MakeNowKst(char *pszOut, size_t nSize)
 	strftime(pszOut, nSize, "%Y%m%d%H%M%S", &stTm);
 }
 
+namespace {
+	// 메인루프 기본 해상도(초) — GPS_DT 문자열 자체가 초 단위라 이보다 잘게 쪼개도 의미가
+	//   없다. 차량별 실제 tick 주기는 이 값보다 커지도록(AppMain.cpp 하한 0.1은 세밀 조정용
+	//   여지) m_vtVehicleCountdown 으로 개별 스케줄링한다 (2026-07-22 최정우 추가)
+	const double BASE_LOOP_SEC = 1.0;
+}
+
 void CSimServer::Run()
 {
-	LOGFMTI("simulator run start.");
-	int nTick = 0;
+	LOGFMTI("simulator run start. tick_sec range=[%.2f~%.2f]",
+		m_stConfig.dfTickSecMin, m_stConfig.dfTickSecMax);
 	time_t dtLastReport = time(nullptr);
+	// flush 는 차량 tick 과 무관하게 실제 경과시간 기준 — flush_sec(초) 값이 그대로 실제 시간
+	//   간격으로 유지되게 함 (2026-07-22 최정우 수정)
+	time_t dtLastFlush = time(nullptr);
 
 	while (!g_nSimStop)
 	{
@@ -128,8 +153,15 @@ void CSimServer::Run()
 
 		size_t nBufBefore = m_vtBuffer.size();
 		for (size_t i = 0; i < m_vtVehicles.size(); ++i)
-			// 차량 1초 tick — GPS 샘플 버퍼 적재 (2026-07-08 최정우 주석 추가)
+		{
+			// 차량마다 자기 tick_sec 만큼 카운트다운 — 0 이하가 될 때만 그 차량을 실제로
+			//   tick 한다(=차량별로 다른 주기에 GPS 표본 생성) (2026-07-22 최정우 추가)
+			m_vtVehicleCountdown[i] -= BASE_LOOP_SEC;
+			if (m_vtVehicleCountdown[i] > 0.0)
+				continue;
+			m_vtVehicleCountdown[i] += m_vtVehicleTickSec[i];
 			m_vtVehicles[i]->Tick(szDt, m_vtBuffer);
+		}
 		m_ullTotalGenerated += (m_vtBuffer.size() - nBufBefore);
 
 		// max_samples 도달 시 이번 tick까지만 반영하고 종료 (2026-07-20 최정우 추가)
@@ -140,13 +172,15 @@ void CSimServer::Run()
 			g_nSimStop = 1;
 		}
 
-		++nTick;
-		if (m_stConfig.nFlushSec > 0 && (nTick % m_stConfig.nFlushSec) == 0)
+		time_t dtNow = time(nullptr);
+		if (m_stConfig.nFlushSec > 0 && (dtNow - dtLastFlush) >= m_stConfig.nFlushSec)
+		{
 			// 버퍼 GPS 샘플 DB 일괄 INSERT (2026-07-08 최정우 주석 추가)
 			Flush();
+			dtLastFlush = dtNow;
+		}
 
 		// 주기 통계 로그
-		time_t dtNow = time(nullptr);
 		if (m_stConfig.nReportSec > 0 && (dtNow - dtLastReport) >= m_stConfig.nReportSec)
 		{
 			LOGFMTI("[stat] inserted=[%llu] fail=[%llu] buffer=[%zu] vehicles=[%zu]",
@@ -154,18 +188,18 @@ void CSimServer::Run()
 			dtLastReport = dtNow;
 		}
 
-		// 1초 주기 맞추기 (tick 처리 시간 보정)
+		// 메인루프 기본 해상도(BASE_LOOP_SEC) 맞추기 (처리 시간 보정)
 		struct timespec stEnd;
 		clock_gettime(CLOCK_MONOTONIC, &stEnd);
 		double dfElapsed = (stEnd.tv_sec - stStart.tv_sec) +
 			(stEnd.tv_nsec - stStart.tv_nsec) / 1e9;
-		double dfSleep = 1.0 - dfElapsed;
+		double dfSleep = BASE_LOOP_SEC - dfElapsed;
 		if (dfSleep > 0.0 && !g_nSimStop)
 		{
 			struct timespec stReq;
 			stReq.tv_sec = (time_t)dfSleep;
 			stReq.tv_nsec = (long)((dfSleep - stReq.tv_sec) * 1e9);
-			// 1초 tick 주기 맞추기 위해 대기 (2026-07-08 최정우 주석 추가)
+			// 기본 루프 해상도 맞추기 위해 대기 (2026-07-08 최정우 주석 추가, 2026-07-22 최정우 수정)
 			nanosleep(&stReq, nullptr);
 		}
 	}

@@ -36,7 +36,7 @@ typedef struct sVehicleTripSession
 	bool							bHasPrevAlt;						// 직전 고도 앵커 보유 — true일 때만 연속 맵매칭 고도 점수 적용
 	double							dfLastMatchLinkPos;					// 직전 매칭 위치 — 링크 시작점부터 거리(m), 역행 페널티용 (2026-07-20 최정우 추가)
 	bool							bHasPrevLinkPos;					// dfLastMatchLinkPos 보유 여부 (2026-07-20 최정우 추가)
-	int								nReverseStreak;						// 연속 역행(bReverseHit) 포인트 수 — reverse_confirm 미만이면 SKIP·앵커 고정 (2026-07-21 최정우 추가)
+	int								nReverseStreak;						// 연속 역행(bReverseSuspect) 포인트 수 — reverse_confirm 미만이면 SKIP·앵커 고정 (2026-07-21 최정우 추가)
 	bool							bLastPointOk;						// 직전 처리 포인트가 정상 매칭(앵커 갱신)이었는지 — false 면 이상속도 검사 신뢰 못함 (2026-07-21 최정우 추가)
 
 	char							szTripId[60+1];						// 현재 세션의 TRIP_ID — 신규 trip 감지(END/START 누락 대비) (2026-07-08 최정우 추가)
@@ -100,8 +100,6 @@ typedef struct sRawLogWorkerConfig
 	int								nHeadingMaxDist;					// (단위: m) 연속매칭 heading 계산 이동거리 상한. 초과 시 heading 미사용, 0=비활성 ([mapmatch] distance) (2026-07-15 최정우 추가)
 	double							dfSpeedFactor;					// config speed_factor — 이동거리 환산속도/SPEED_KMH 배율 상한. 0=비활성 (2026-07-20 최정우 추가)
 	int								nSpeedMargin;					// config speed_margin (km/h) — 노이즈 허용 여유분 (2026-07-20 최정우 추가)
-	double							dfReverseMargin;					// config reverse_margin — 저속 시 역행 허용거리(m) (2026-07-20 최정우 추가)
-	double							dfReverseSpeed;				// config reverse_speed — 이 속도 미만이면 데드존 적용 (2026-07-20 최정우 추가)
 	int								nReverseConfirm;					// config reverse_confirm — 연속 역행 확정 포인트 수 (2026-07-21 최정우 추가)
 	// int								nRadiusSkipM;						// (구) config radius_skip_m (2026-07-08 최정우)
 	// int								nAccuracySkip;						// (구) config accuracy_skip (2026-07-08 최정우)

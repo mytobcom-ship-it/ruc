@@ -204,8 +204,7 @@ typedef struct sMatchLinkInfo
 	double							dfEdNodeY;							// 종료 노드 Y
 	uint8							nEdNodeType;						// 종료 노드 속성[3]
 	bool							bOutOfRadius;						// 반경 밖·진단반경 초과 최근접 — SKIP 참고용 좌표·거리 유효, 정식 MATCHED 아님 (2026-07-10 최정우 수정)
-	bool							bReverseHit;						// 같은 링크 역행 페널티(dfReversePenalty>0)가 붙은 채로 최종 선택됨 — SKIP 격리용 (2026-07-21 최정우 추가)
-	bool							bReverseSuspect;					// 위치 역행 + heading 도 역방향 일치(margin 무관) — 연속역행(reverse_confirm) 스트릭 판정 전용 (2026-07-21 최정우 추가)
+	bool							bReverseSuspect;					// 위치 역행 + heading 도 역방향 일치 — 연속역행(reverse_confirm) 스트릭 판정 전용 (2026-07-21 최정우 추가)
 	bool							bClampLowConf;						// 경계 클램프 + INTERSECT_LEN 초과 — 신뢰도 낮은 매칭 SKIP 처리용 (2026-07-21 최정우 추가)
 	bool							bAmbiguousReverse;					// 같은 링크 역행인데 heading 없음/애매해 노이즈 단정 불가 — SKIP 처리용 (2026-07-22 최정우 추가)
 } MATCH_LINK_INFO, *PMATCH_LINK_INFO;

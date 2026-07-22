@@ -1,6 +1,6 @@
 /**
  * @file SimServer.h
- * @brief 시뮬레이터 본체 - 차량 생성, 1초 tick, 3초 배치 INSERT
+ * @brief 시뮬레이터 본체 - 차량 생성, 차량별 랜덤 tick 주기, N초 배치 INSERT
 */
 #ifndef __SIM_SERVER_H__
 #define __SIM_SERVER_H__
@@ -44,6 +44,11 @@ private:
 	CSQLAccessor			*m_pcSQL;
 	CRouteProvider			*m_pcRoute;
 	vector<CVehicle *>		m_vtVehicles;
+	// 차량별 GPS 표본 생성 주기(초, [tick_sec_min,tick_sec_max]에서 차량마다 랜덤 고정) 및
+	// 다음 tick 까지 남은 시간(초) — 메인루프는 항상 1초 단위로 돌되, 차량마다 이 카운트다운이
+	// 0 이하가 될 때만 그 차량의 Tick() 을 실제로 호출한다 (2026-07-22 최정우 추가)
+	vector<double>			m_vtVehicleTickSec;
+	vector<double>			m_vtVehicleCountdown;
 
 	string					m_strInsertSQL;
 	vector<GPS_SAMPLE>		m_vtBuffer;

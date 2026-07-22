@@ -12,9 +12,11 @@
 
 using namespace zsummer::log4z;
 
-static const double TICK_SEC = 1.0;		// tick 간격 (초)
-static const double ACCEL_MPS = 2.0;	// 가속 한계 (m/s per tick)
-static const double DECEL_MPS = 3.5;	// 감속 한계 (m/s per tick)
+// tick 간격(TICK_SEC)은 하드코딩하지 않고 config(tick_sec)를 씀 — 아래 가속도·고도램프는
+//   전부 "초당" 비율이라 실제 사용 시 m_stConfig.dfTickSec 를 곱해 그 tick 만큼의 변화량으로
+//   환산한다. tick_sec 이 바뀌어도 물리적 가감속 속도 자체는 동일하게 유지하기 위함 (2026-07-22 최정우 수정)
+static const double ACCEL_MPS2 = 2.0;	// 가속 한계 (m/s²)
+static const double DECEL_MPS2 = 3.5;	// 감속 한계 (m/s²)
 
 // ROAD_TYPE 연동 고도 오프셋 — MapMatchSvr altitude_gap(8m) 대비 뚜렷이 구분되도록 설정 (2026-07-20 최정우 추가)
 static const double ALT_RAMP_MPS = 3.0;		// 초당 고도 변화 한계(m) — 고가 진입/지하 진입 램프
@@ -288,14 +290,16 @@ void CVehicle::Tick(const char *pszGpsDt, vector<GPS_SAMPLE>& vtOut)
 		dfTargetMps = dfLimit * distF(m_rng) / 3.6;
 	}
 
+	double dfMaxAccelStep = ACCEL_MPS2 * m_stConfig.dfTickSec;
+	double dfMaxDecelStep = DECEL_MPS2 * m_stConfig.dfTickSec;
 	double dfDiff = dfTargetMps - m_dfSpeedMps;
-	if (dfDiff > ACCEL_MPS) dfDiff = ACCEL_MPS;
-	if (dfDiff < -DECEL_MPS) dfDiff = -DECEL_MPS;
+	if (dfDiff > dfMaxAccelStep) dfDiff = dfMaxAccelStep;
+	if (dfDiff < -dfMaxDecelStep) dfDiff = -dfMaxDecelStep;
 	m_dfSpeedMps += dfDiff;
 	if (m_dfSpeedMps < 0.0) m_dfSpeedMps = 0.0;
 
 	// 진행
-	m_dfPos += m_dfSpeedMps * TICK_SEC;
+	m_dfPos += m_dfSpeedMps * m_stConfig.dfTickSec;
 	double dfTotal = m_vtCum.back();
 	bool bEnd = false;
 	if (m_dfPos >= dfTotal)
@@ -321,7 +325,7 @@ void CVehicle::Tick(const char *pszGpsDt, vector<GPS_SAMPLE>& vtOut)
 	// ROAD_TYPE 고도 오프셋 — 목표치로 초당 ALT_RAMP_MPS 한도 내 점진 수렴(고가/지하 진입 램프 표현) (2026-07-20 최정우 추가)
 	double dfTargetAltOffset = RoadTypeAltOffset(nSegRoadType);
 	double dfAltOffsetDiff = dfTargetAltOffset - m_dfAltRoadOffset;
-	double dfMaxAltStep = ALT_RAMP_MPS * TICK_SEC;
+	double dfMaxAltStep = ALT_RAMP_MPS * m_stConfig.dfTickSec;
 	if (dfAltOffsetDiff > dfMaxAltStep) dfAltOffsetDiff = dfMaxAltStep;
 	if (dfAltOffsetDiff < -dfMaxAltStep) dfAltOffsetDiff = -dfMaxAltStep;
 	m_dfAltRoadOffset += dfAltOffsetDiff;

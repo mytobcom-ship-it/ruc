@@ -42,6 +42,11 @@
       font-size: 11px; font-weight: 700; color: #0f172a; background: #fef9c3;
       border: 1px solid #94a3b8; border-radius: 3px; padding: 2px 6px;
     }
+    /* GPS 연결(직선거리) 빨간 점선 마우스오버 좌표간 거리(m) 툴팁 (2026-07-22 추가) */
+    .tip-gpstrail {
+      font-size: 11px; font-weight: 700; color: #7f1d1d; background: #fee2e2;
+      border: 1px solid #e53935; border-radius: 3px; padding: 2px 6px;
+    }
     /* 마우스 커서를 손모양이 아닌 화살표(기본)로 (2026-07-15 최정우 추가) */
     .leaflet-grab,
     .leaflet-interactive,
@@ -92,12 +97,15 @@
 </head>
 <body>
   <div id="toolbar">
+    <label title="신규테스트 클릭 시 이 대수로 Simulator 를 재시작 — Simulator/bin/config.ini [sim] vehicles= 에 반영됨">차량
+      <select id="vehicleCount"></select>
+    </label>
     <label>Trip
       <select id="tripSelect"><option value="">로딩…</option></select>
     </label>
     <button id="btnReload" type="button">Trip 조회</button>
     <button id="btnResetMap" type="button" title="지도에 그려진 내용을 초기화하고 초기 화면만 표시">지도초기화</button>
-    <button id="btnStartEngines" type="button" title="MapMatchSvr → Simulator 순서로 1초 확인 + 최대 3회 재시도 기동 (웹 자신은 제외) — Simulator 재시작 시 새 trip 시작됨">신규테스트</button>
+    <button id="btnStartEngines" type="button" title="MapMatchSvr → Simulator 순서로 1초 확인 + 최대 3회 재시도 기동 (웹 자신은 제외) — 왼쪽 '차량' 대수로 Simulator 재시작, 새 trip 시작됨">신규테스트</button>
     <button id="btnRetest" type="button" title="선택된 Trip의 기존 수신 GPS로 맵매칭 재테스트">재테스트</button>
     <button id="btnDelete" type="button" title="선택된 Trip을 DB에서 완전히 삭제 (되돌릴 수 없음)">삭제</button>
     <label><input type="checkbox" id="chkPoll" /> 자동 갱신</label>
@@ -121,6 +129,6 @@
   </div>
   <div id="ctxMenu"><div class="ctx-item" id="ctxCopy">복사하기</div></div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="/app.js?v=20260722_layout_v19"></script>
+  <script src="/app.js?v=20260722_vehicle_combo"></script>
 </body>
 </html>

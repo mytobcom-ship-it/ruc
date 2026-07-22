@@ -89,6 +89,12 @@ static bool LoadConfig(const string& strFile, SIM_CONFIG& stConfig, int& nLogLev
 
 	// [sim]
 	cIni.GetProfileInt("sim", "vehicles", 10, stConfig.nVehicles);
+	// tick_sec_min/max — 차량별 GPS 표본 생성(보고) 주기 랜덤 범위(초). 차량마다 이 범위에서
+	//   독립적으로 뽑아 고정 사용 — 실제 단말마다 다른 보고 간격(3/5/8초 등)과, 그로 인한
+	//   차량별 최초 표본 시점 미세 어긋남을 흉내낸다. flush_sec(DB 적재 배치 주기, 서버 공용)와는
+	//   독립적으로 설정 가능 (2026-07-22 최정우 추가, 2026-07-22 최정우 수정 — 차량별 랜덤화)
+	stConfig.dfTickSecMin = GetProfileDouble(cIni, "sim", "tick_sec_min", 3.0);
+	stConfig.dfTickSecMax = GetProfileDouble(cIni, "sim", "tick_sec_max", 8.0);
 	cIni.GetProfileInt("sim", "flush_sec", 3, stConfig.nFlushSec);
 	cIni.GetProfileInt("sim", "report_sec", 30, stConfig.nReportSec);
 	cIni.GetProfileInt("sim", "max_samples", 0, stConfig.nMaxSamples);
@@ -100,6 +106,10 @@ static bool LoadConfig(const string& strFile, SIM_CONFIG& stConfig, int& nLogLev
 	if (stConfig.dfOmitPartialProb < 0.0) stConfig.dfOmitPartialProb = 0.0;
 	if (stConfig.dfOmitPartialProb > 1.0) stConfig.dfOmitPartialProb = 1.0;
 	if (stConfig.nVehicles <= 0) stConfig.nVehicles = 1;
+	if (stConfig.nVehicles > 50) stConfig.nVehicles = 50;
+	if (stConfig.dfTickSecMin < 0.1) stConfig.dfTickSecMin = 0.1;
+	if (stConfig.dfTickSecMax < stConfig.dfTickSecMin) stConfig.dfTickSecMax = stConfig.dfTickSecMin;
+	if (stConfig.dfTickSecMax > 60.0) stConfig.dfTickSecMax = 60.0;
 	if (stConfig.nFlushSec <= 0) stConfig.nFlushSec = 3;
 	if (stConfig.nMaxSamples < 0) stConfig.nMaxSamples = 0;
 

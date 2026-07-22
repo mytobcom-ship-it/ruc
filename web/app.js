@@ -18,8 +18,10 @@
   const RETEST_POLL_MS = 1500;
   const RETEST_TIMEOUT_MS = 60000;
   // 신규테스트: Simulator 가 GPS 를 생성(최대 수십 초)한 뒤 MapMatchSvr 가 매칭하므로
-  //   재테스트보다 완료까지 여유를 더 둔다 (2026-07-22 최정우 추가)
-  const NEWTEST_TIMEOUT_MS = 90000;
+  //   재테스트보다 완료까지 여유를 더 둔다. route.min_m=2000/max_links=20 조합은 실제로
+  //   운행 1건이 2분 이상 걸리는 경우도 있어(2026-07-22 vehicles=3 전환 후 실측: 129초 시점에도
+  //   미완주) 90초는 부족했다 — 5분으로 상향 (2026-07-22 최정우 수정)
+  const NEWTEST_TIMEOUT_MS = 300000;
   // ROAD_TYPE(prim_link_info) — 시설 유형. 잠수교 등 특정 교량명은 별도 코드 없이 교량(1)에 포함, name 으로 구분 (2026-07-21 최정우 추가)
   const ROAD_TYPE_LABELS = { 0: "일반도로", 1: "교량", 2: "터널", 3: "고가도로", 4: "지하차도" };
   const ARROW_ZOOM_MIN = 14;
@@ -37,14 +39,14 @@
   // 점(gps_seq)별로 이미 그려진 마커/연결선을 추적 → 폴링·줌마다 전체 재생성하지 않고
   //   변경분만 갱신해 깜빡임·포커스 흔들림을 줄인다 (2026-07-21 최정우 추가)
   let pointLayerBySeq = new Map();
-  let gpsTrailLine = null;
-  let lastGpsTrailSig = "";
+  let gpsTrailSegments = new Map();
   let showLabelState = null;
   let arrowsVisibleState = null;
   let lastTripsSig = "";
 
   const statusEl = document.getElementById("status");
   const tripSelect = document.getElementById("tripSelect");
+  const vehicleCountSelect = document.getElementById("vehicleCount");
   const chkPoll = document.getElementById("chkPoll");
   const chkFollow = document.getElementById("chkFollow");
   const ctxMenu = document.getElementById("ctxMenu");
@@ -150,8 +152,7 @@
     layerMatched.clearLayers();
     layerSkip.clearLayers();
     pointLayerBySeq = new Map();
-    gpsTrailLine = null;
-    lastGpsTrailSig = "";
+    gpsTrailSegments = new Map();
   }
 
   function clearRoadLayers() {
@@ -457,41 +458,55 @@
     return entry;
   }
 
-  // GPS 궤적 점선 — 매번 새로 만들지 않고 좌표만 갱신, 좌표가 실제로 안 바뀌면
-  //   setLatLngs 조차 호출하지 않음(불필요한 SVG path 재작성 방지) (2026-07-21 최정우 수정)
+  // GPS 궤적 점선 — 인접한 두 GPS 점 사이 구간마다 개별 polyline(가시용 점선 + 투명 히트라인)을
+  //   그려서, 구간 위에 마우스오버하면 두 좌표간 직선거리(m)를 툴팁으로 보여준다. seq 쌍을 key로
+  //   구간 단위 diff 해서 바뀐 구간만 다시 그림(불필요한 SVG path 재작성 방지).
+  //   가시용 선(dash)은 interactive:false — 실제 마우스오버는 굵은 투명 히트라인(hit)이 받는다.
+  //   반드시 마커보다 먼저 그려야 한다: 같은 pane(panePoints) 안에서는 나중에 그린 도형이
+  //   마우스오버 우선순위를 가져가므로, 히트라인을 먼저 그려야 GPS점 정중앙에서는 마커가,
+  //   구간 중간(마커가 없는 곳)에서는 히트라인이 정상적으로 우선순위를 갖는다 (2026-07-22 최정우 수정)
   function rebuildGpsTrail(points) {
-    const gpsLatLngs = [];
-    points.forEach(function (p) {
-      if (p.gps_lat != null && p.gps_lon != null) gpsLatLngs.push([p.gps_lat, p.gps_lon]);
-    });
-    if (gpsLatLngs.length < 2) {
-      if (gpsTrailLine) {
-        layerGpsLine.removeLayer(gpsTrailLine);
-        gpsTrailLine = null;
+    const validPoints = points.filter(function (p) { return p.gps_lat != null && p.gps_lon != null; });
+    const seen = new Set();
+    for (let i = 0; i < validPoints.length - 1; i++) {
+      const a = validPoints[i], b = validPoints[i + 1];
+      const key = a.gps_seq + "-" + b.gps_seq;
+      seen.add(key);
+      const sig = a.gps_lat + "," + a.gps_lon + "|" + b.gps_lat + "," + b.gps_lon;
+      const existing = gpsTrailSegments.get(key);
+      if (existing && existing.sig === sig) continue;
+      if (existing) {
+        layerGpsLine.removeLayer(existing.dash);
+        layerGpsLine.removeLayer(existing.hit);
       }
-      lastGpsTrailSig = "";
-      return;
-    }
-    const sig = gpsLatLngs.join(";");
-    if (sig === lastGpsTrailSig && gpsTrailLine) return;
-    lastGpsTrailSig = sig;
-    if (gpsTrailLine) {
-      gpsTrailLine.setLatLngs(gpsLatLngs);
-    } else {
-      // interactive:false — 각 GPS점 정중앙을 지나가므로, 상호작용 가능하면(기본값 true)
-      //   같은 pane 안에서 가장 나중에 그려져 그 지점의 마커·연결선 히트테스트를 가로챈다.
-      //   이 선 자체는 툴팁이 없어 상호작용이 필요 없음 (2026-07-22 최정우 수정)
-      gpsTrailLine = L.polyline(gpsLatLngs, {
+      const aLl = [a.gps_lat, a.gps_lon], bLl = [b.gps_lat, b.gps_lon];
+      const distM = Math.round(map.distance(aLl, bLl));
+      const tipText = "seq " + a.gps_seq + " → " + b.gps_seq + " · " + distM + " m (GPS 연결 직선거리)";
+      const dash = L.polyline([aLl, bLl], {
         pane: "panePoints", color: "#e53935", weight: 2, opacity: 0.55, dashArray: "4,6",
         interactive: false,
       }).addTo(layerGpsLine);
+      const hit = L.polyline([aLl, bLl], {
+        pane: "panePoints", color: "#000000", weight: 12, opacity: 0,
+      })
+        .bindTooltip(tipText, { sticky: true, direction: "top", className: "tip-gpstrail", opacity: 0.98 })
+        .addTo(layerGpsLine);
+      gpsTrailSegments.set(key, { dash: dash, hit: hit, sig: sig });
     }
+    gpsTrailSegments.forEach(function (seg, key) {
+      if (seen.has(key)) return;
+      layerGpsLine.removeLayer(seg.dash);
+      layerGpsLine.removeLayer(seg.hit);
+      gpsTrailSegments.delete(key);
+    });
   }
 
   // gps_seq 별로 이전 렌더링과 비교해 바뀐 점만 다시 그림 — 폴링마다 전체 재생성하던 깜빡임 제거 (2026-07-21 최정우 수정)
   function updatePoints(points) {
     const showLabel = map.getZoom() >= SEQ_ZOOM_MIN;
     showLabelState = showLabel;
+    // 마커보다 먼저 그린다 — z-order 우선순위 규칙(위 rebuildGpsTrail 주석 참고) (2026-07-22 최정우 수정)
+    rebuildGpsTrail(points);
     const seen = new Set();
     points.forEach(function (p) {
       seen.add(p.gps_seq);
@@ -507,7 +522,6 @@
       removePointEntry(entry);
       pointLayerBySeq.delete(seq);
     });
-    rebuildGpsTrail(points);
   }
 
   // 줌 변경 시 라벨 표시/숨김만 토글 — 마커 재생성 없음 (2026-07-21 최정우 추가)
@@ -853,12 +867,15 @@
 
   // 신규테스트: 엔진 기동 확인만으로는 화면에 반영되지 않는다 — Simulator 의 GPS 생성과
   //   MapMatchSvr 의 매칭이 모두 비동기 백그라운드 작업이라, 기동 확인 시점엔 새 trip 이
-  //   아직 DB에 한 건도 없을 수 있다. 새 trip_id 가 실제로 나타나고(prevTripId 와 달라짐)
-  //   그 trip 의 PENDING 이 0이 될 때까지 짧은 간격으로 Trip 목록·지도를 계속 갱신해,
-  //   생성·매칭되는 과정이 지도에 실시간으로 반영되게 한다 (2026-07-22 최정우 추가)
-  //   반환값: 새 trip 이 100% 매칭 완료됐는지(true)
-  async function waitForNewTestData(prevTripId, timeoutMs) {
+  //   아직 DB에 한 건도 없을 수 있다. 차량이 여러 대(vehicleCount)면 동시에 여러 trip 이
+  //   새로 시작되므로, 그중 하나만 보고 "완료"로 판단하면 안 된다 — 재시작 전 존재하던
+  //   trip_id 목록과 비교해 새로 나타난 device_key 마다 첫 trip 을 찾아 전부 END+매칭완료
+  //   될 때까지 같이 추적한다 (2026-07-22 최정우 추가, 2026-07-22 최정우 수정 — 차량 여러대 대응)
+  //   반환값: expectedVehicles 대 전부 100% 매칭 완료됐는지(true)
+  async function waitForNewTestData(prevTripIds, expectedVehicles, timeoutMs) {
     const deadline = Date.now() + timeoutMs;
+    const newTripByDevice = new Map();		// device_key -> trip_id (첫 등장한 것만 고정)
+    const doneTripIds = new Set();
     // 새 trip 이 처음 나타난 시점에 딱 한 번만 그 범위로 이동·확대하고, 그 이후엔
     // refreshTrips 를 forceFit 없이 호출한다 — 매 폴링마다 강제로 fitBounds 하면
     // 매칭이 끝날 때까지 사용자가 확대·이동해도 계속 원래 범위로 되돌아가 버려
@@ -866,32 +883,66 @@
     // (2026-07-22 최정우 수정)
     let fittedOnce = false;
     for (;;) {
-      await refreshTrips(false);
-      if (currentTripId && currentTripId !== prevTripId) {
-        let points;
-        try {
-          points = await fetchJson("/api/trip/" + encodeURIComponent(currentTripId) + "/points");
-        } catch (err) {
-          points = null;
+      let trips;
+      try {
+        trips = await fetchTrips();
+      } catch (err) {
+        trips = [];
+      }
+      trips.forEach(function (t) {
+        if (!prevTripIds.has(t.trip_id) && !newTripByDevice.has(t.device_key)) {
+          newTripByDevice.set(t.device_key, t.trip_id);
         }
-        if (points && points.length > 0) {
-          if (!fittedOnce) {
-            fitToContent(points);
-            fittedOnce = true;
+      });
+
+      // 지도에 실제로 표시되는 trip 은 기존 "최신 Trip" 팔로우 로직에 맡기고, 여기서는
+      // 완료 판정·진행률 집계만 전 차량에 걸쳐 따로 수행한다
+      await refreshTrips(false);
+
+      if (newTripByDevice.size > 0) {
+        const allPoints = [];
+        let sumRatio = 0;
+        for (const tripId of newTripByDevice.values()) {
+          if (doneTripIds.has(tripId)) { sumRatio += 1; continue; }
+          let points;
+          try {
+            points = await fetchJson("/api/trip/" + encodeURIComponent(tripId) + "/points");
+          } catch (err) {
+            points = null;
           }
+          if (!points || points.length === 0) continue;
+          allPoints.push.apply(allPoints, points);
           const pending = points.filter(function (p) { return p.match_status === MATCH_STATUS_PENDING; }).length;
-          showProgressPercent(((points.length - pending) / points.length) * 100);
           // Simulator 가 분할 삽입 중이면 지금까지 들어온 몇 건만 빠르게 매칭돼도
           // 아직 끝난 게 아니다 — 마지막 샘플(END 이벤트)까지 들어와서 매칭됐을 때만 완료로 본다
           const hasEndEvent = points.some(function (p) { return p.trip_event === TRIP_EVENT_END; });
           if (pending === 0 && hasEndEvent) {
-            setStatus("신규테스트 완료: " + currentTripId + " (" + points.length + "건)");
-            return true;
+            doneTripIds.add(tripId);
+            sumRatio += 1;
+          } else {
+            sumRatio += (points.length - pending) / points.length;
           }
+        }
+        if (!fittedOnce && allPoints.length > 0) {
+          fitToContent(allPoints);
+          fittedOnce = true;
+        }
+        showProgressPercent((sumRatio / expectedVehicles) * 100);
+        setStatus(
+          "신규테스트 진행 중… " + doneTripIds.size + "/" + expectedVehicles + "대 완주" +
+          " (" + newTripByDevice.size + "대 시작됨)"
+        );
+
+        if (doneTripIds.size >= expectedVehicles && newTripByDevice.size >= expectedVehicles) {
+          setStatus("신규테스트 완료: " + expectedVehicles + "대 모두 완주");
+          return true;
         }
       }
       if (Date.now() >= deadline) {
-        setStatus("신규테스트 진행 시간 초과 — 자동 갱신을 켜면 이후 계속 반영됩니다", true);
+        setStatus(
+          "신규테스트 진행 시간 초과 — " + doneTripIds.size + "/" + expectedVehicles +
+          "대 완주 (자동 갱신을 켜면 이후 계속 반영됩니다)", true
+        );
         return false;
       }
       await new Promise(function (resolve) { setTimeout(resolve, RETEST_POLL_MS); });
@@ -907,20 +958,35 @@
     if (!btn) return;
     btn.addEventListener("click", async function () {
       btn.disabled = true;
-      const prevTripId = currentTripId;			// 재시작 전 trip — 새 trip 등장 판별용
+      // 재시작 전 존재하던 trip_id 전부 — 재시작 후 여기 없는 trip_id 가 나타나면 "신규"로 판별
+      // (차량 대수만큼 동시에 새 trip 이 시작되므로, 예전처럼 currentTripId 하나만으로는
+      // 판별 불가) (2026-07-22 최정우 수정 — 차량 여러대 대응)
+      let prevTripIds;
+      try {
+        prevTripIds = new Set((await fetchTrips()).map(function (t) { return t.trip_id; }));
+      } catch (err) {
+        prevTripIds = new Set();
+      }
+      const vehicleCount = vehicleCountSelect ? parseInt(vehicleCountSelect.value, 10) : NaN;
+      const requestBody = (vehicleCount > 0) ? { vehicles: vehicleCount } : {};
       setStatus("신규테스트 요청 중… (MapMatchSvr → Simulator, 최대 3회 재시도)");
       showProgressIndeterminate();
       try {
-        const res = await fetch("/api/system/start-engines", { method: "POST" });
+        const res = await fetch("/api/system/start-engines", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(requestBody),
+        });
         const data = await res.json();
         if (data.ok) {
-          setStatus("신규테스트 기동 완료 — 새 trip 데이터 생성·매칭 대기 중…");
+          const appliedVehicles = data.vehicles || vehicleCount || 1;
+          setStatus("신규테스트 기동 완료(" + appliedVehicles + "대) — 새 trip 데이터 생성·매칭 대기 중…");
           // "최신 Trip"이 이전에(예: Trip 콤보박스 직접 선택 등으로) 꺼진 채 남아있으면
           // 새로고침해도 브라우저가 체크박스 상태를 그대로 복원해 대기 로직이 아예 동작하지
           // 않는다 — "신규테스트"는 새 trip 을 만들고 지켜보려는 의도이므로 여기서는
           // 무조건 켠다 (2026-07-22 최정우 추가)
           if (chkFollow) chkFollow.checked = true;
-          const completed = await waitForNewTestData(prevTripId, NEWTEST_TIMEOUT_MS);
+          const completed = await waitForNewTestData(prevTripIds, appliedVehicles, NEWTEST_TIMEOUT_MS);
           if (completed) await finishProgress();
         } else {
           // failed_stage 가 없으면(예: 바이너리 자체가 없음) 로그 마지막 줄로 대체 표시 (2026-07-21 최정우 추가)
@@ -953,6 +1019,24 @@
     }, pollSec * 1000);
   }
 
+  // 차량 동시운행 대수 콤보박스 — /api/config 의 sim_vehicles_min/max 로 옵션을 채우고
+  // 현재 Simulator/bin/config.ini 값으로 초기 선택 — "신규테스트" 클릭 시 이 값을 그대로
+  // 전달해 Simulator 재시작 전에 config.ini 에 반영한다 (2026-07-22 최정우 추가)
+  function initVehicleCountSelect(cfg) {
+    if (!vehicleCountSelect) return;
+    const min = cfg.sim_vehicles_min || 1;
+    const max = cfg.sim_vehicles_max || 10;
+    vehicleCountSelect.innerHTML = "";
+    for (let n = min; n <= max; n++) {
+      const opt = document.createElement("option");
+      opt.value = String(n);
+      opt.textContent = n + "대";
+      vehicleCountSelect.appendChild(opt);
+    }
+    const current = cfg.sim_vehicles || min;
+    vehicleCountSelect.value = String(Math.min(max, Math.max(min, current)));
+  }
+
   async function boot() {
     initMap();
     setupTripContextMenu();
@@ -973,6 +1057,7 @@
       const cfg = await fetchJson("/api/config");
       roadBufferM = cfg.road_buffer_m || 1000;
       pollSec = cfg.poll_sec || 0;
+      initVehicleCountSelect(cfg);
       if (chkPoll && chkPoll.checked) startPoll();
       await loadTrips();
     } catch (err) {

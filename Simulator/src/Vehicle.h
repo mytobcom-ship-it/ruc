@@ -1,6 +1,6 @@
 /**
  * @file Vehicle.h
- * @brief 차량 1대의 주행 시뮬레이션 (경로 생성 + 1초 tick + 도로 이탈 노이즈)
+ * @brief 차량 1대의 주행 시뮬레이션 (경로 생성 + tick_sec 주기 tick + 도로 이탈 노이즈)
 */
 #ifndef __VEHICLE_H__
 #define __VEHICLE_H__
@@ -27,7 +27,7 @@ public:
 	void Initialize(const string& strDeviceKey, CRouteProvider *pcRoute,
 		const SIM_CONFIG& stConfig, unsigned int nSeed);
 
-	// 1초 경과 처리. 생성된 표본을 vtOut 에 추가 (경로 준비 실패 시 미생성)
+	// config.tick_sec 만큼 경과 처리. 생성된 표본을 vtOut 에 추가 (경로 준비 실패 시 미생성)
 	void Tick(const char *pszGpsDt, vector<GPS_SAMPLE>& vtOut);
 
 	const string& GetDeviceKey() const { return m_strDeviceKey; }

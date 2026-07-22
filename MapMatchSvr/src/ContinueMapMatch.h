@@ -55,8 +55,6 @@ public:
 	virtual ~CContinueMapMatch();
 
 	void SetAltitudeConfig(const ALTITUDE_SCORE_CONFIG& stAltConfig);
-	// config reverse_weight/reverse_speed/reverse_margin (2026-07-20 최정우 추가)
-	void SetReversePenaltyWeight(double dfWeight, double dfSpeed = 0.0, double dfMargin = 0.0);
 	bool StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& stSgmtMatchInput,
 		uint64& qwLinkID, sint16& nSearchStep, uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry,
 		PMATCH_TRACE_CTX pstTraceCtx = nullptr);
@@ -77,9 +75,6 @@ private:
 	CGISUtil							m_cGISUtil;
 	CDataLoader							*m_pcDataLoader;
 	ALTITUDE_SCORE_CONFIG				m_stAltitudeConfig;					// config altitude_* — 연속 맵매칭 고도 보조 점수
-	double								m_dfReverseWeight;				// config reverse_weight — 역행 1m당 비용 가중 (2026-07-20 최정우 추가)
-	double								m_dfReverseSpeed;				// config reverse_speed — 이 속도 미만일 때만 데드존 적용 (2026-07-20 최정우 추가)
-	double								m_dfReverseMargin;					// config reverse_margin — 저속 시 페널티 없이 허용하는 역행 거리(m) (2026-07-20 최정우 추가)
 };
 
 #endif //__CONTINUEMAPMATCH_H__

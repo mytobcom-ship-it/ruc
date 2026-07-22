@@ -8,6 +8,7 @@ import configparser
 import json
 import math
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -20,6 +21,9 @@ CONFIG_PATH = BASE_DIR / "config.ini"
 REPO_ROOT = BASE_DIR.parent
 MM_CONFIG_PATH = REPO_ROOT / "MapMatchSvr" / "bin" / "config.ini"
 MM_PIDFILE = REPO_ROOT / "MapMatchSvr" / "bin" / "MapMatchSvr.pid"
+SIM_CONFIG_PATH = REPO_ROOT / "Simulator" / "bin" / "config.ini"
+SIM_VEHICLES_MIN = 1
+SIM_VEHICLES_MAX = 10
 
 app = Flask(__name__, static_folder=str(BASE_DIR), static_url_path="")
 
@@ -74,17 +78,49 @@ def index():
     return resp
 
 
+def read_sim_vehicles():
+    """Simulator/bin/config.ini [sim] vehicles= 현재값 조회 — 웹 콤보박스 초기값용
+    (2026-07-22 최정우 추가)"""
+    cfg = configparser.ConfigParser()
+    cfg.read(SIM_CONFIG_PATH, encoding="utf-8-sig")
+    try:
+        return int(cfg["sim"]["vehicles"])
+    except (KeyError, ValueError):
+        return SIM_VEHICLES_MIN
+
+
+def write_sim_vehicles(n):
+    """Simulator/bin/config.ini [sim] vehicles= 값만 라인 단위로 치환 — configparser 로
+    다시 쓰면 주석·서식이 다 날아가므로, 정규식으로 해당 줄만 바꾼다 (2026-07-22 최정우 추가)"""
+    n = max(SIM_VEHICLES_MIN, min(SIM_VEHICLES_MAX, int(n)))
+    text = SIM_CONFIG_PATH.read_text(encoding="utf-8-sig")
+    new_text, count = re.subn(
+        r"(?m)^vehicles\s*=.*$", "vehicles=%d" % n, text, count=1
+    )
+    if count == 0:
+        raise ValueError("config.ini 에서 vehicles= 줄을 찾지 못함")
+    SIM_CONFIG_PATH.write_text(new_text, encoding="utf-8-sig")
+    return n
+
+
 @app.route("/api/config")
 def api_config():
     c = load_config()
     return jsonify({
         "road_buffer_m": c["road_buffer_m"],
         "poll_sec": c["poll_sec"],
+        "sim_vehicles": read_sim_vehicles(),
+        "sim_vehicles_min": SIM_VEHICLES_MIN,
+        "sim_vehicles_max": SIM_VEHICLES_MAX,
     })
 
 
 @app.route("/api/trips")
 def api_trips():
+    # trip 시작 시각(MIN) 기준 정렬 — 동시 운행 차량이 여러 대일 때 갱신 시각(MAX)으로 정렬하면
+    #   각 차량의 flush 타이밍 차이로 폴링마다 1위가 바뀌어, app.js "최신 Trip" 자동추적이
+    #   차량 사이를 계속 튀어다니는 원인이 된다. 시작 시각은 trip 생애 동안 고정값이라, 정말
+    #   새 trip 이 시작될 때만 순위가 바뀐다 (2026-07-22 최정우 수정 — vehicles=3 전환에 대응)
     limit = min(int(request.args.get("limit", 30)), 200)
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -96,7 +132,7 @@ def api_trips():
                        COUNT(*) AS cnt
                 FROM roadnet.prim_rawgps
                 GROUP BY trip_id, device_key
-                  ORDER BY MAX(gps_dt) DESC, trip_id DESC, device_key DESC
+                  ORDER BY MIN(gps_dt) DESC, trip_id DESC, device_key DESC
                 LIMIT %s
                 """,
                 (limit,),
@@ -139,10 +175,22 @@ def restart_mapmatch():
 
 @app.route("/api/system/start-engines", methods=["POST"])
 def api_start_engines():
-    """웹 페이지 "전체기동" 버튼 — MapMatchSvr → Simulator 순서로 1초 확인 + 최대 3회
+    """웹 페이지 "신규테스트" 버튼 — MapMatchSvr → Simulator 순서로 1초 확인 + 최대 3회
     재시도 기동 (test_svr.sh start-mm-sim-retry 위임). 웹 자신은 이미 이 요청을 처리
     중이므로 재기동 대상에서 제외 — 어느 단계에서 실패했는지 stdout 의 FAILED_STAGE= 를
-    파싱해 응답에 포함한다 (2026-07-21 최정우 추가)"""
+    파싱해 응답에 포함한다 (2026-07-21 최정우 추가)
+
+    body(optional): {"vehicles": N} — 동시 운행 차량 대수 콤보박스 값. Simulator 는 설정을
+    기동 시 1회만 읽으므로(핫리로드 없음), 재시작 전에 config.ini 를 먼저 갱신해야 반영된다
+    (2026-07-22 최정우 추가)"""
+    body = request.get_json(silent=True) or {}
+    applied_vehicles = None
+    if "vehicles" in body:
+        try:
+            applied_vehicles = write_sim_vehicles(body["vehicles"])
+        except (ValueError, OSError) as err:
+            return jsonify({"ok": False, "error": "vehicles 설정 반영 실패: %s" % err}), 400
+
     try:
         result = subprocess.run(
             ["./test_svr.sh", "start-mm-sim-retry"],
@@ -164,6 +212,7 @@ def api_start_engines():
         "ok": ok,
         "failed_stage": failed_stage,
         "log": output[-3000:],
+        "vehicles": applied_vehicles,
     })
 
 

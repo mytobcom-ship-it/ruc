@@ -130,9 +130,6 @@ CServer::CServer() :
 	m_nAltPenalty(CFG_DEF_ALT_PENALTY),
 	m_dfAltWeight(CFG_DEF_ALT_WEIGHT),
 	m_dfAltSlope(CFG_DEF_ALT_SLOPE),
-	m_dfReverseWeight(CFG_DEF_REVERSE_WEIGHT),
-	m_dfReverseSpeed(CFG_DEF_REVERSE_SPEED),
-	m_dfReverseMargin(CFG_DEF_REVERSE_MARGIN),
 	m_nReverseConfirm(CFG_DEF_REVERSE_CONFIRM),
 	m_dfSpeedFactor(CFG_DEF_SPEED_FACTOR),
 	m_nSpeedMargin(CFG_DEF_SPEED_MARGIN),
@@ -186,9 +183,6 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	m_nAltPenalty = stConfig.nAltPenalty;
 	m_dfAltWeight = stConfig.dfAltWeight;
 	m_dfAltSlope = stConfig.dfAltSlope;
-	m_dfReverseWeight = stConfig.dfReverseWeight;
-	m_dfReverseSpeed = stConfig.dfReverseSpeed;
-	m_dfReverseMargin = stConfig.dfReverseMargin;
 	m_nReverseConfirm = stConfig.nReverseConfirm;
 	m_dfSpeedFactor = stConfig.dfSpeedFactor;
 	m_nSpeedMargin = stConfig.nSpeedMargin;
@@ -366,8 +360,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 		if (!m_pcProcessManager[i].Initialize(i, m_pcDataLoader,
 				m_nCoordinateType, m_nRadius, m_dwMaxDistance,
 				m_dfRadiusScale, static_cast<sint16>(m_nRadiusMin),
-				static_cast<sint16>(m_nRadiusMax), stAltitudeConfig,
-				m_dfReverseWeight, m_dfReverseSpeed, m_dfReverseMargin))
+				static_cast<sint16>(m_nRadiusMax), stAltitudeConfig))
 		{
 			LOGFMTE("process manager[%d] initialize failed!", i);
 			Uninitialize();
@@ -398,9 +391,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	stWorkerConfig.nRadiusSkip = m_nRadiusSkip;
 	stWorkerConfig.dfSpeedFactor = m_dfSpeedFactor;			// (2026-07-20 최정우 추가)
 	stWorkerConfig.nSpeedMargin = m_nSpeedMargin;				// (2026-07-20 최정우 추가)
-	// 연속 역행 스트릭 판정 — ContinueMapMatch 역행 페널티와 동일 config 재사용 (2026-07-21 최정우 수정 — dip 판정 대체)
-	stWorkerConfig.dfReverseMargin = m_dfReverseMargin;
-	stWorkerConfig.dfReverseSpeed = m_dfReverseSpeed;
+	// 연속 역행 스트릭 판정 (2026-07-21 최정우 수정 — dip 판정 대체)
 	stWorkerConfig.nReverseConfirm = m_nReverseConfirm;
 	stWorkerConfig.nHeadingMaxDist = static_cast<int>(m_dwMaxDistance);	// [mapmatch] distance → live heading 거리 상한 (2026-07-15 최정우 추가)
 	// 워커에 DB pool·ProcessManager·SQL·TTL·conn_retry 등 공유 설정 전달 (2026-07-10 최정우 추가)

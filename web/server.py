@@ -333,6 +333,64 @@ def api_trip_points(trip_id):
     return jsonify(rows)
 
 
+@app.route("/api/trips/points")
+def api_trips_points():
+    """여러 trip 의 GPS/매칭 점을 한 번에 조회 — 다중 차량 동시 지도 표시용
+    (2026-07-23 최정우 추가). /api/trip/<id>/points 와 동일 SQL을 trip_id 배열로 확장.
+    응답: {trip_id: [...points...]} """
+    trip_ids = [t for t in request.args.get("trip_ids", "").split(",") if t]
+    if not trip_ids:
+        return jsonify({"error": "trip_ids required"}), 400
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT g.trip_id, g.gps_seq, g.gps_dt, g.trip_event, g.drive_status, g.match_status,
+                       g.gps_lat, g.gps_lon, g.intersect_len, g.accuracy_m,
+                       g.match_link_id,
+                       l.name AS match_link_name,
+                       CASE
+                         WHEN g.match_lat IS NOT NULL AND l.geom IS NOT NULL
+                         THEN ST_Y(ST_ClosestPoint(l.geom,
+                              ST_SetSRID(ST_MakePoint(g.match_lon::float8, g.match_lat::float8), 4326)))
+                         ELSE g.match_lat
+                       END AS match_lat,
+                       CASE
+                         WHEN g.match_lon IS NOT NULL AND l.geom IS NOT NULL
+                         THEN ST_X(ST_ClosestPoint(l.geom,
+                              ST_SetSRID(ST_MakePoint(g.match_lon::float8, g.match_lat::float8), 4326)))
+                         ELSE g.match_lon
+                       END AS match_lon
+                FROM roadnet.prim_rawgps g
+                LEFT JOIN roadnet.prim_link_info l ON l.link_id = g.match_link_id
+                WHERE g.trip_id = ANY(%s)
+                ORDER BY g.trip_id ASC, g.gps_seq ASC
+                """,
+                (trip_ids,),
+            )
+            result = {t: [] for t in trip_ids}
+            for r in cur.fetchall():
+                match_status = int(r["match_status"])
+                intersect_len = int(r["intersect_len"]) if r["intersect_len"] is not None else None
+                accuracy_m = int(r["accuracy_m"]) if r["accuracy_m"] is not None else None
+                result[r["trip_id"]].append({
+                    "gps_seq": int(r["gps_seq"]),
+                    "gps_dt": r["gps_dt"],
+                    "trip_event": int(r["trip_event"]),
+                    "drive_status": int(r["drive_status"]),
+                    "match_status": match_status,
+                    "gps_lat": float(r["gps_lat"]) if r["gps_lat"] is not None else None,
+                    "gps_lon": float(r["gps_lon"]) if r["gps_lon"] is not None else None,
+                    "match_lat": float(r["match_lat"]) if r["match_lat"] is not None else None,
+                    "match_lon": float(r["match_lon"]) if r["match_lon"] is not None else None,
+                    "intersect_len": intersect_len,
+                    "match_link_id": r["match_link_id"],
+                    "match_link_name": r["match_link_name"],
+                    "match_reason": infer_match_reason(match_status, r["match_link_id"], intersect_len, accuracy_m),
+                })
+    return jsonify(result)
+
+
 def prim_link_feature(link_id, geojson_text, extra=None):
     props = {"link_id": link_id}
     if extra:
@@ -394,6 +452,59 @@ def api_trip_prim_roads(trip_id):
                     "ed_nd_id": row[5],
                     "ed_nd_name": row[6],
                     # 시설 유형 (0=일반, 1=교량, 2=터널, 3=고가, 4=지하) — hover 표시용 (2026-07-21 최정우 추가)
+                    "road_type": int(row[8]) if row[8] is not None else None,
+                }))
+    return jsonify({"type": "FeatureCollection", "features": features})
+
+
+@app.route("/api/trips/prim-roads")
+def api_trips_prim_roads():
+    """여러 trip 의 주변 도로를 한 번에 조회 — 다중 차량 동시 지도 표시용 (2026-07-23 최정우 추가).
+    /api/trip/<id>/prim-roads 와 동일 패턴이나 envelope 를 여러 trip 점의 union 으로 계산 —
+    ST_Buffer(ST_Collect(...))는 점들의 union 을 버퍼링하는 것이라 trip 마다 각각 버퍼링해
+    합친 것과 동일한 "경로를 따라가는 회랑" 모양이 됨(지리적으로 먼 차량이어도 그 사이
+    거대한 영역이 딸려오지 않음). link_id 기준 자연 중복제거된 단일 FeatureCollection 반환."""
+    trip_ids = [t for t in request.args.get("trip_ids", "").split(",") if t]
+    if not trip_ids:
+        return jsonify({"error": "trip_ids required"}), 400
+    cfg = load_config()
+    buffer_m = int(request.args.get("buffer", cfg["road_buffer_m"]))
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                WITH pts AS (
+                    SELECT ST_SetSRID(ST_MakePoint(gps_lon::float8, gps_lat::float8), 4326) AS g
+                    FROM roadnet.prim_rawgps
+                    WHERE trip_id = ANY(%s)
+                      AND gps_lat IS NOT NULL
+                      AND gps_lon IS NOT NULL
+                ),
+                env AS (
+                    SELECT ST_Buffer(ST_Collect(g)::geography, %s)::geometry AS geom4326
+                    FROM pts
+                )
+                SELECT l.link_id, l.name, l.len,
+                       l.st_nd_id, l.st_nd_name, l.ed_nd_id, l.ed_nd_name,
+                       ST_AsGeoJSON(l.geom) AS geojson, l.road_type
+                FROM roadnet.prim_link_info l
+                CROSS JOIN env e
+                WHERE l.geom IS NOT NULL
+                  AND l.geom && e.geom4326
+                  AND ST_Intersects(l.geom, e.geom4326)
+                LIMIT 8000
+                """,
+                (trip_ids, buffer_m),
+            )
+            features = []
+            for row in cur.fetchall():
+                features.append(prim_link_feature(row[0], row[7], {
+                    "name": row[1],
+                    "len": float(row[2]) if row[2] is not None else None,
+                    "st_nd_id": row[3],
+                    "st_nd_name": row[4],
+                    "ed_nd_id": row[5],
+                    "ed_nd_name": row[6],
                     "road_type": int(row[8]) if row[8] is not None else None,
                 }))
     return jsonify({"type": "FeatureCollection", "features": features})

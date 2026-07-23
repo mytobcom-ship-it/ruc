@@ -29,20 +29,26 @@
   const ARROW_MAX_PER_PATH = 6;
   const SEQ_ZOOM_MIN = 13;
 
-  let map, layerRoads, layerRoadsHalo, layerRoadArrows, layerGpsLine, layerGps, layerMatched, layerSkip;
+  let map, layerRoads, layerRoadsHalo, layerRoadArrows;
   let roadBufferM = 1000;
   let pollSec = 0;
   let pollTimer = null;
   let currentTripId = "";
   let lastRoadFc = null;
   let lastRoadSig = "";
-  // 점(gps_seq)별로 이미 그려진 마커/연결선을 추적 → 폴링·줌마다 전체 재생성하지 않고
-  //   변경분만 갱신해 깜빡임·포커스 흔들림을 줄인다 (2026-07-21 최정우 추가)
-  let pointLayerBySeq = new Map();
-  let gpsTrailSegments = new Map();
   let showLabelState = null;
   let arrowsVisibleState = null;
   let lastTripsSig = "";
+  let lastTripsData = [];
+  // trip(차량)별 렌더 컨텍스트 — 여러 trip을 동시에 지도에 겹쳐 표시하기 위해, 예전엔 전역이던
+  //   레이어그룹·gps_seq 추적 Map을 trip마다 따로 둔다. 지도에 실제로 그려지는 trip 집합은
+  //   renderedTripIds() = checkedDisplayTripIds ∪ {포커스 trip(tripSelect.value)} — 포커스 trip은
+  //   재테스트/삭제 대상이라 항상 지도에도 보여야 하므로 체크리스트와 무관하게 항상 포함한다
+  //   (2026-07-23 최정우 추가)
+  let tripCtxById = new Map();
+  let checkedDisplayTripIds = new Set();
+  let tripColorById = new Map();
+  const TRIP_COLOR_PALETTE = ["#2563eb", "#16a34a", "#dc2626", "#9333ea", "#ea580c", "#0891b2", "#65a30d", "#db2777"];
 
   const statusEl = document.getElementById("status");
   const tripSelect = document.getElementById("tripSelect");
@@ -53,6 +59,12 @@
   const ctxCopy = document.getElementById("ctxCopy");
   const progressWrap = document.getElementById("progressBarWrap");
   const progressFill = document.getElementById("progressBarFill");
+  // 다중 차량 동시표시 체크리스트 — 포커스 trip(tripSelect)은 그대로 두고, 지도에 겹쳐 보여줄
+  //   차량을 추가로 고르는 별도 패널 (2026-07-23 최정우 추가)
+  const btnDisplayTrips = document.getElementById("btnDisplayTrips");
+  const displayTripsPanel = document.getElementById("displayTripsPanel");
+  const displayTripsList = document.getElementById("displayTripsList");
+  const legendTrips = document.getElementById("legendTrips");
 
   // 버튼 클릭 진행률 바 — 완료 시점을 알 수 있으면(재테스트) 실제 %, 모르면(신규테스트·삭제·
   //   새로고침) 좌우로 흐르는 불확정 애니메이션으로 표시 (2026-07-22 최정우 추가)
@@ -140,19 +152,46 @@
     layerRoadsHalo = L.layerGroup().addTo(map);
     layerRoads = L.layerGroup().addTo(map);
     layerRoadArrows = L.layerGroup().addTo(map);
-    layerGpsLine = L.layerGroup().addTo(map);
-    layerGps = L.layerGroup().addTo(map);
-    layerMatched = L.layerGroup().addTo(map);
-    layerSkip = L.layerGroup().addTo(map);
   }
 
-  function clearPointLayers() {
-    layerGpsLine.clearLayers();
-    layerGps.clearLayers();
-    layerMatched.clearLayers();
-    layerSkip.clearLayers();
-    pointLayerBySeq = new Map();
-    gpsTrailSegments = new Map();
+  // trip 팔레트 색 — trip이 /api/trips 목록에 처음 등장한 순서로 고정 할당, 목록에서 사라져도
+  //   재등장 시 같은 색을 유지하도록 트립이 사라지지 않는 한 지우지 않는다 (2026-07-23 최정우 추가)
+  function getTripColor(tripId) {
+    if (!tripColorById.has(tripId)) {
+      tripColorById.set(tripId, TRIP_COLOR_PALETTE[tripColorById.size % TRIP_COLOR_PALETTE.length]);
+    }
+    return tripColorById.get(tripId);
+  }
+
+  // trip별 렌더 컨텍스트 생성/파괴 — 레이어그룹은 선택된 동안만 지도에 붙어있음 (2026-07-23 최정우 추가)
+  function ensureTripCtx(tripId) {
+    let ctx = tripCtxById.get(tripId);
+    if (ctx) return ctx;
+    ctx = {
+      color: getTripColor(tripId),
+      gpsLineLayer: L.layerGroup().addTo(map),
+      gpsLayer: L.layerGroup().addTo(map),
+      matchedLayer: L.layerGroup().addTo(map),
+      skipLayer: L.layerGroup().addTo(map),
+      pointLayerBySeq: new Map(),
+      gpsTrailSegments: new Map(),
+    };
+    tripCtxById.set(tripId, ctx);
+    return ctx;
+  }
+
+  function destroyTripCtx(tripId) {
+    const ctx = tripCtxById.get(tripId);
+    if (!ctx) return;
+    map.removeLayer(ctx.gpsLineLayer);
+    map.removeLayer(ctx.gpsLayer);
+    map.removeLayer(ctx.matchedLayer);
+    map.removeLayer(ctx.skipLayer);
+    tripCtxById.delete(tripId);
+  }
+
+  function destroyAllTripCtx() {
+    Array.from(tripCtxById.keys()).forEach(destroyTripCtx);
   }
 
   function clearRoadLayers() {
@@ -313,8 +352,11 @@
     rebuildRoadArrows();
   }
 
-  function popupHtml(p) {
+  function popupHtml(p, tripId) {
     return (
+      // 여러 trip이 동시에 지도에 겹칠 때 이 점이 어느 차량 것인지 구분하기 위해 trip_id 표시
+      // (2026-07-23 최정우 추가)
+      "<b>trip</b> " + tripId + "<br>" +
       "<b>seq</b> " + p.gps_seq + "<br>" +
       "<b>status</b> " + p.match_status +
       // 매칭 LinkID·도로명 (엔진 저장값) 표시 (2026-07-15 최정우 수정)
@@ -366,14 +408,14 @@
     ].join("|");
   }
 
-  function removePointEntry(entry) {
-    if (entry.gpsMarker) layerGps.removeLayer(entry.gpsMarker);
-    if (entry.matchMarker) (entry.isSkip ? layerSkip : layerMatched).removeLayer(entry.matchMarker);
-    if (entry.connDash) layerGpsLine.removeLayer(entry.connDash);
-    if (entry.connHit) layerGpsLine.removeLayer(entry.connHit);
+  function removePointEntry(entry, ctx) {
+    if (entry.gpsMarker) ctx.gpsLayer.removeLayer(entry.gpsMarker);
+    if (entry.matchMarker) (entry.isSkip ? ctx.skipLayer : ctx.matchedLayer).removeLayer(entry.matchMarker);
+    if (entry.connDash) ctx.gpsLineLayer.removeLayer(entry.connDash);
+    if (entry.connHit) ctx.gpsLineLayer.removeLayer(entry.connHit);
   }
 
-  function buildPointEntry(p, showLabel) {
+  function buildPointEntry(p, showLabel, ctx, tripId) {
     const matchFailed = isMatchFailed(p.match_status);
     const entry = { sig: pointSig(p), isSkip: p.match_status === MATCH_STATUS_SKIP };
     const gpsLl = (p.gps_lat != null && p.gps_lon != null) ? [p.gps_lat, p.gps_lon] : null;
@@ -407,7 +449,7 @@
           className: matchFailed ? "tip-intersect tip-fail" : "tip-intersect",
           opacity: 0.98,
         })
-        .addTo(layerGpsLine);
+        .addTo(ctx.gpsLineLayer);
       // 마우스오버 히트영역(투명) — 툴팁 트리거 인식률 보강
       entry.connHit = L.polyline([gpsLl, trueMatchLl], {
         pane: "panePoints", color: "#000000", weight: 12, opacity: 0,
@@ -418,39 +460,41 @@
           className: matchFailed ? "tip-intersect tip-fail" : "tip-intersect",
           opacity: 0.98,
         })
-        .addTo(layerGpsLine);
+        .addTo(ctx.gpsLineLayer);
     }
 
     // 마커는 연결선 다음에 그린다 — 같은 pane 안에서 나중에 그린 도형이 마우스오버를 우선
     // 차지하므로, 마커 중앙에서는 항상 마커(팝업)가 연결선 히트영역보다 우선하게 된다.
+    // 테두리(color)는 trip 팔레트 색으로 통일해 "어느 차량인지"를 나타내고, 채우기(fillColor)는
+    // 기존처럼 매칭상태를 나타낸다 — 이중 인코딩으로 여러 차량이 겹쳐도 구분 가능 (2026-07-23 최정우 추가)
     if (gpsLl) {
       entry.gpsMarker = addPointMarker(
         gpsLl,
-        { radius: 6, color: "#b71c1c", fillColor: "#e53935", fillOpacity: 0.95, weight: 2 },
+        { radius: 6, color: ctx.color, fillColor: "#e53935", fillOpacity: 0.95, weight: 3 },
         "G" + p.gps_seq,
         "tip-gps",
         TIP_DIRS_GPS[p.gps_seq % TIP_DIRS_GPS.length],
-        popupHtml(p),
-        layerGps,
+        popupHtml(p, tripId),
+        ctx.gpsLayer,
         showLabel
       );
     }
 
     if (trueMatchLl) {
-      const layer = entry.isSkip ? layerSkip : layerMatched;
+      const layer = entry.isSkip ? ctx.skipLayer : ctx.matchedLayer;
       entry.matchMarker = addPointMarker(
         trueMatchLl,
         {
           radius: 7,
-          color: entry.isSkip ? "#e65100" : "#0d47a1",
+          color: ctx.color,
           fillColor: entry.isSkip ? "#fb8c00" : "#1e88e5",
           fillOpacity: 0.95,
-          weight: 2,
+          weight: 3,
         },
         "M" + p.gps_seq,
         tipClassName(entry.isSkip ? "tip-skip" : "tip-match", matchFailed),
         TIP_DIRS_MATCH[p.gps_seq % TIP_DIRS_MATCH.length],
-        popupHtml(p),
+        popupHtml(p, tripId),
         layer,
         showLabel
       );
@@ -465,7 +509,7 @@
   //   반드시 마커보다 먼저 그려야 한다: 같은 pane(panePoints) 안에서는 나중에 그린 도형이
   //   마우스오버 우선순위를 가져가므로, 히트라인을 먼저 그려야 GPS점 정중앙에서는 마커가,
   //   구간 중간(마커가 없는 곳)에서는 히트라인이 정상적으로 우선순위를 갖는다 (2026-07-22 최정우 수정)
-  function rebuildGpsTrail(points) {
+  function rebuildGpsTrail(points, ctx) {
     const validPoints = points.filter(function (p) { return p.gps_lat != null && p.gps_lon != null; });
     const seen = new Set();
     for (let i = 0; i < validPoints.length - 1; i++) {
@@ -473,11 +517,11 @@
       const key = a.gps_seq + "-" + b.gps_seq;
       seen.add(key);
       const sig = a.gps_lat + "," + a.gps_lon + "|" + b.gps_lat + "," + b.gps_lon;
-      const existing = gpsTrailSegments.get(key);
+      const existing = ctx.gpsTrailSegments.get(key);
       if (existing && existing.sig === sig) continue;
       if (existing) {
-        layerGpsLine.removeLayer(existing.dash);
-        layerGpsLine.removeLayer(existing.hit);
+        ctx.gpsLineLayer.removeLayer(existing.dash);
+        ctx.gpsLineLayer.removeLayer(existing.hit);
       }
       const aLl = [a.gps_lat, a.gps_lon], bLl = [b.gps_lat, b.gps_lon];
       const distM = Math.round(map.distance(aLl, bLl));
@@ -485,56 +529,60 @@
       const dash = L.polyline([aLl, bLl], {
         pane: "panePoints", color: "#e53935", weight: 2, opacity: 0.55, dashArray: "4,6",
         interactive: false,
-      }).addTo(layerGpsLine);
+      }).addTo(ctx.gpsLineLayer);
       const hit = L.polyline([aLl, bLl], {
         pane: "panePoints", color: "#000000", weight: 12, opacity: 0,
       })
         .bindTooltip(tipText, { sticky: true, direction: "top", className: "tip-gpstrail", opacity: 0.98 })
-        .addTo(layerGpsLine);
-      gpsTrailSegments.set(key, { dash: dash, hit: hit, sig: sig });
+        .addTo(ctx.gpsLineLayer);
+      ctx.gpsTrailSegments.set(key, { dash: dash, hit: hit, sig: sig });
     }
-    gpsTrailSegments.forEach(function (seg, key) {
+    ctx.gpsTrailSegments.forEach(function (seg, key) {
       if (seen.has(key)) return;
-      layerGpsLine.removeLayer(seg.dash);
-      layerGpsLine.removeLayer(seg.hit);
-      gpsTrailSegments.delete(key);
+      ctx.gpsLineLayer.removeLayer(seg.dash);
+      ctx.gpsLineLayer.removeLayer(seg.hit);
+      ctx.gpsTrailSegments.delete(key);
     });
   }
 
   // gps_seq 별로 이전 렌더링과 비교해 바뀐 점만 다시 그림 — 폴링마다 전체 재생성하던 깜빡임 제거 (2026-07-21 최정우 수정)
-  function updatePoints(points) {
+  // trip별 컨텍스트(ctx)를 받아 그 trip의 레이어·추적 Map에만 반영한다 (2026-07-23 최정우 수정 — 다중 trip 대응)
+  function updatePoints(points, ctx, tripId) {
     const showLabel = map.getZoom() >= SEQ_ZOOM_MIN;
     showLabelState = showLabel;
     // 마커보다 먼저 그린다 — z-order 우선순위 규칙(위 rebuildGpsTrail 주석 참고) (2026-07-22 최정우 수정)
-    rebuildGpsTrail(points);
+    rebuildGpsTrail(points, ctx);
     const seen = new Set();
     points.forEach(function (p) {
       seen.add(p.gps_seq);
       const sig = pointSig(p);
-      const existing = pointLayerBySeq.get(p.gps_seq);
+      const existing = ctx.pointLayerBySeq.get(p.gps_seq);
       if (existing && existing.sig === sig) return;
-      if (existing) removePointEntry(existing);
-      pointLayerBySeq.set(p.gps_seq, buildPointEntry(p, showLabel));
+      if (existing) removePointEntry(existing, ctx);
+      ctx.pointLayerBySeq.set(p.gps_seq, buildPointEntry(p, showLabel, ctx, tripId));
     });
     // trip 리셋 등으로 사라진 seq 가 있으면 정리 (평소엔 비어있는 no-op)
-    pointLayerBySeq.forEach(function (entry, seq) {
+    ctx.pointLayerBySeq.forEach(function (entry, seq) {
       if (seen.has(seq)) return;
-      removePointEntry(entry);
-      pointLayerBySeq.delete(seq);
+      removePointEntry(entry, ctx);
+      ctx.pointLayerBySeq.delete(seq);
     });
   }
 
-  // 줌 변경 시 라벨 표시/숨김만 토글 — 마커 재생성 없음 (2026-07-21 최정우 추가)
+  // 줌 변경 시 라벨 표시/숨김만 토글 — 마커 재생성 없음. 현재 지도에 그려진 모든 trip 컨텍스트에
+  //   적용해야 한다 (2026-07-21 최정우 추가, 2026-07-23 최정우 수정 — 다중 trip 대응)
   function setLabelsVisible(visible) {
-    pointLayerBySeq.forEach(function (entry) {
-      if (entry.gpsMarker) {
-        const tt = entry.gpsMarker.getTooltip();
-        if (tt) tt.setOpacity(visible ? 0.9 : 0);
-      }
-      if (entry.matchMarker) {
-        const tt = entry.matchMarker.getTooltip();
-        if (tt) tt.setOpacity(visible ? 0.9 : 0);
-      }
+    tripCtxById.forEach(function (ctx) {
+      ctx.pointLayerBySeq.forEach(function (entry) {
+        if (entry.gpsMarker) {
+          const tt = entry.gpsMarker.getTooltip();
+          if (tt) tt.setOpacity(visible ? 0.9 : 0);
+        }
+        if (entry.matchMarker) {
+          const tt = entry.matchMarker.getTooltip();
+          if (tt) tt.setOpacity(visible ? 0.9 : 0);
+        }
+      });
     });
   }
 
@@ -595,8 +643,10 @@
     lastRoadFc = null;
     lastRoadSig = "";
     lastTripsSig = "";
-    clearPointLayers();
+    checkedDisplayTripIds.clear();
+    destroyAllTripCtx();
     clearRoadLayers();
+    updateLegendTrips();
     tripSelect.innerHTML = '<option value="">(trip 없음)</option>';
     if (statusMsg) setStatus(statusMsg, isError);
   }
@@ -619,9 +669,33 @@
     return fetchJson("/api/trips?limit=50");
   }
 
+  // /api/trips 는 이미 MIN(gps_dt) DESC 로 정렬돼 오므로, device_key 별 첫 등장이 곧 그 차량의
+  //   최신 trip — waitForNewTestData(892~896행 부근)가 진행률 추적에 쓰는 것과 동일한 계산을
+  //   "지도에 표시할 차량 집합"에도 재사용한다 (2026-07-23 최정우 추가)
+  function computeLatestPerDevice(trips) {
+    const seenDevices = new Set();
+    const result = new Set();
+    trips.forEach(function (t) {
+      if (seenDevices.has(t.device_key)) return;
+      seenDevices.add(t.device_key);
+      result.add(t.trip_id);
+    });
+    return result;
+  }
+
+  // 실제 지도에 렌더링할 trip 집합 = 체크리스트로 고른 trip 들 ∪ 포커스 trip(tripSelect 값).
+  //   포커스 trip 은 재테스트·삭제 대상이라 체크리스트와 무관하게 항상 지도에 보여야 한다
+  //   (2026-07-23 최정우 추가)
+  function renderedTripIds() {
+    const ids = new Set(checkedDisplayTripIds);
+    if (currentTripId) ids.add(currentTripId);
+    return ids;
+  }
+
   async function refreshTrips(forceFit) {
     try {
       const trips = await fetchTrips();
+      lastTripsData = trips;
       if (trips.length === 0) {
         clearAllDisplay("DB 데이터 없음 — 삭제 후 정상 (엔진 기동 시 새 데이터 생성)", true);
         return;
@@ -629,10 +703,22 @@
       const prevTripId = currentTripId;
       const followLatest = isFollowLatest();
       const tripId = fillTripSelect(trips, currentTripId, followLatest);
+      currentTripId = tripId;
+      // "최신 Trip" 자동추적 시 체크리스트도 device_key 별 최신 trip으로 동기화. 수동 모드에서는
+      //   목록에서 사라진(삭제된) trip만 체크리스트에서 정리 (2026-07-23 최정우 추가)
+      const validIds = new Set(trips.map(function (t) { return t.trip_id; }));
+      if (followLatest) {
+        checkedDisplayTripIds = computeLatestPerDevice(trips);
+      } else {
+        Array.from(checkedDisplayTripIds).forEach(function (id) {
+          if (!validIds.has(id)) checkedDisplayTripIds.delete(id);
+        });
+      }
+      renderDisplayTripsPanel(trips);
       // trip 이 바뀌었다는 이유만으로는 화면을 이동하지 않음 — "최신 Trip" 체크 상태에서
       //   배경 폴링 중 새 trip 이 뜰 때마다 지도 위치가 튀던 원인. 화면에 아직 아무것도
       //   없던 최초 상태에서만 자동 fit (2026-07-21 최정우 수정)
-      await loadTrip(tripId, false, forceFit || !prevTripId);
+      await syncMapTrips(renderedTripIds(), false, forceFit || !prevTripId);
     } catch (err) {
       setStatus("API 오류: " + err.message + " (웹/DB 기동 확인)", true);
     }
@@ -642,48 +728,63 @@
     await refreshTrips(true);
   }
 
-  async function loadTrip(tripId, manualFit, forceFit) {
-    if (!tripId) return;
-    const prevTripId = currentTripId;
-    currentTripId = tripId;
-    // 백그라운드 폴링(자동 갱신)에서는 "로딩…" 문구를 표시하지 않음 — 변경사항 없이도
-    //   매 폴링마다 상태 텍스트가 깜빡이던 원인 (2026-07-21 최정우 수정)
+  // 여러 trip을 동시에 지도에 렌더링하는 진입점 — 예전 loadTrip(단일 trip) 대체.
+  //   1) tripIds 집합과 현재 tripCtxById 를 diff 해서 사라진 trip은 레이어 파괴, 새 trip은 생성
+  //   2) 결합 API(/api/trips/points, /api/trips/prim-roads)로 한 번에 조회
+  //   3) trip별로 updatePoints, 도로는 공유 레이어 하나로 렌더링 (2026-07-23 최정우 추가)
+  async function syncMapTrips(tripIds, manualFit, forceFit) {
+    const idsArr = Array.from(tripIds);
+    const existingIds = Array.from(tripCtxById.keys());
+    existingIds.forEach(function (id) { if (!tripIds.has(id)) destroyTripCtx(id); });
+    idsArr.forEach(ensureTripCtx);
+    updateLegendTrips();
+
+    if (idsArr.length === 0) {
+      clearRoadLayers();
+      lastRoadFc = null;
+      lastRoadSig = "";
+      return;
+    }
+
     const isBackgroundPoll = !manualFit && !forceFit;
-    if (!isBackgroundPoll) setStatus("로딩… " + tripId);
+    if (!isBackgroundPoll) setStatus("로딩… " + idsArr.join(", "));
     try {
-      const [roads, points, primInfo] = await Promise.all([
-        fetchJson("/api/trip/" + encodeURIComponent(tripId) + "/prim-roads?buffer=" + roadBufferM),
-        fetchJson("/api/trip/" + encodeURIComponent(tripId) + "/points"),
+      const idsParam = encodeURIComponent(idsArr.join(","));
+      const [roads, pointsByTrip, primInfo] = await Promise.all([
+        fetchJson("/api/trips/prim-roads?trip_ids=" + idsParam + "&buffer=" + roadBufferM),
+        fetchJson("/api/trips/points?trip_ids=" + idsParam),
         fetchJson("/api/prim/info"),
       ]);
-      if (!roads.features) {
-        throw new Error("roads 응답 형식 오류");
-      }
-      if (!Array.isArray(points)) {
-        throw new Error("points 응답 형식 오류");
-      }
-      if (points.length === 0) {
-        clearAllDisplay("선택 trip 데이터 없음 (DB 삭제됨) — 목록 갱신 중", true);
-        await refreshTrips(false);
-        return;
-      }
-      const tripChanged = tripId !== prevTripId;
-      // trip 이 바뀌면 gps_seq 체계가 리셋되므로 이전 마커를 전부 정리 (2026-07-21 최정우 추가)
-      if (tripChanged) clearPointLayers();
+      if (!roads.features) throw new Error("roads 응답 형식 오류");
       updateRoadsIfChanged(roads);
-      updatePoints(points);
+      const allPoints = [];
+      idsArr.forEach(function (tripId) {
+        const points = pointsByTrip[tripId] || [];
+        allPoints.push.apply(allPoints, points);
+        updatePoints(points, tripCtxById.get(tripId), tripId);
+      });
       if (shouldAutoFit(!!manualFit || !!forceFit)) {
-        fitToContent(points);
+        fitToContent(allPoints);
       }
       const now = new Date();
       const ts = now.toLocaleTimeString("ko-KR", { hour12: false });
-      setStatus(
-        "[" + ts + "] trip=" + tripId +
-        " prim도로=" + roads.features.length +
-        " (전체 " + (primInfo.count || "?") + ")" +
-        " GPS=" + points.filter(function (p) { return p.gps_lat != null; }).length +
-        " 매칭=" + points.filter(function (p) { return p.match_lat != null; }).length
-      );
+      if (idsArr.length === 1) {
+        const tripId = idsArr[0];
+        const points = pointsByTrip[tripId] || [];
+        setStatus(
+          "[" + ts + "] trip=" + tripId +
+          " prim도로=" + roads.features.length +
+          " (전체 " + (primInfo.count || "?") + ")" +
+          " GPS=" + points.filter(function (p) { return p.gps_lat != null; }).length +
+          " 매칭=" + points.filter(function (p) { return p.match_lat != null; }).length
+        );
+      } else {
+        setStatus(
+          "[" + ts + "] " + idsArr.length + "대 표시 중 · prim도로=" + roads.features.length +
+          " · 총 GPS=" + allPoints.filter(function (p) { return p.gps_lat != null; }).length +
+          " 매칭=" + allPoints.filter(function (p) { return p.match_lat != null; }).length
+        );
+      }
     } catch (err) {
       setStatus("로딩 실패: " + err.message, true);
     }
@@ -756,7 +857,7 @@
       const pending = points.filter(function (p) { return p.match_status === MATCH_STATUS_PENDING; }).length;
       // 완료 시점을 알 수 있는 경우이므로, 진행률 바에 실제 처리 비율(%) 표시 (2026-07-22 최정우 추가)
       showProgressPercent(points.length > 0 ? ((points.length - pending) / points.length) * 100 : 0);
-      await loadTrip(tripId, false, false);
+      await syncMapTrips(renderedTripIds(), false, false);
       if (pending === 0)
       {
         setStatus("재테스트 완료: " + tripId + " (" + points.length + "건)");
@@ -819,7 +920,7 @@
       btn.disabled = true;
       showProgressIndeterminate();
       try {
-        clearPointLayers();
+        destroyAllTripCtx();
         clearRoadLayers();
         // 시그니처도 같이 리셋 — 안 하면 다음 갱신 때 "안 바뀜"으로 판단해 도로가 다시 안 그려짐
         lastRoadFc = null;
@@ -1037,6 +1138,88 @@
     vehicleCountSelect.value = String(Math.min(max, Math.max(min, current)));
   }
 
+  let lastDisplayPanelSig = "";
+
+  function hideDisplayTripsPanel() {
+    if (displayTripsPanel) displayTripsPanel.style.display = "none";
+  }
+
+  // 체크리스트 패널 목록 채우기 — trip 목록 시그니처가 안 바뀌면 다시 그리지 않음(체크박스
+  //   깜빡임 방지, 기존 fillTripSelect 의 lastTripsSig 패턴과 동일). 포커스 trip(tripSelect
+  //   값)은 항상 지도에 보여야 하므로 체크박스를 비활성화한 채 항상 체크 상태로 표시한다
+  //   (2026-07-23 최정우 추가)
+  function renderDisplayTripsPanel(trips) {
+    if (!displayTripsList) return;
+    const sig = tripsSignature(trips);
+    if (sig === lastDisplayPanelSig) {
+      // 목록 구조는 안 바뀌었어도 체크 상태(자동추적 등)는 갱신
+      Array.from(displayTripsList.querySelectorAll("input[type=checkbox]")).forEach(function (cb) {
+        if (cb.disabled) return;
+        cb.checked = checkedDisplayTripIds.has(cb.value);
+      });
+      return;
+    }
+    lastDisplayPanelSig = sig;
+    displayTripsList.innerHTML = "";
+    trips.forEach(function (t) {
+      const row = document.createElement("label");
+      row.className = "display-trip-row";
+      const isFocus = t.trip_id === currentTripId;
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.value = t.trip_id;
+      cb.checked = isFocus || checkedDisplayTripIds.has(t.trip_id);
+      cb.disabled = isFocus;
+      cb.addEventListener("change", function () {
+        if (chkFollow) chkFollow.checked = false;
+        if (cb.checked) checkedDisplayTripIds.add(t.trip_id);
+        else checkedDisplayTripIds.delete(t.trip_id);
+        syncMapTrips(renderedTripIds(), true, false);
+      });
+      const swatch = document.createElement("span");
+      swatch.className = "trip-swatch";
+      swatch.style.background = getTripColor(t.trip_id);
+      const text = document.createElement("span");
+      text.textContent = t.trip_id + " (" + t.device_key + ") · " + t.count + "pts" + (isFocus ? " · 포커스" : "");
+      row.appendChild(cb);
+      row.appendChild(swatch);
+      row.appendChild(text);
+      displayTripsList.appendChild(row);
+    });
+  }
+
+  // 현재 지도에 실제로 그려진 trip 들의 색상 범례 — syncMapTrips 가 컨텍스트를 만들고 나면 호출
+  //   (2026-07-23 최정우 추가)
+  function updateLegendTrips() {
+    if (!legendTrips) return;
+    legendTrips.innerHTML = "";
+    Array.from(tripCtxById.keys()).forEach(function (tripId) {
+      const meta = lastTripsData.find(function (t) { return t.trip_id === tripId; });
+      const div = document.createElement("div");
+      const swatch = document.createElement("span");
+      swatch.className = "trip-swatch";
+      swatch.style.background = getTripColor(tripId);
+      div.appendChild(swatch);
+      div.appendChild(document.createTextNode(tripId + (meta ? " (" + meta.device_key + ")" : "")));
+      legendTrips.appendChild(div);
+    });
+  }
+
+  function setupDisplayTripsPanel() {
+    if (!btnDisplayTrips || !displayTripsPanel) return;
+    btnDisplayTrips.addEventListener("click", function (e) {
+      e.stopPropagation();
+      const opening = displayTripsPanel.style.display !== "block";
+      displayTripsPanel.style.display = opening ? "block" : "none";
+    });
+    document.addEventListener("click", function (e) {
+      if (displayTripsPanel.contains(e.target) || e.target === btnDisplayTrips) return;
+      hideDisplayTripsPanel();
+    });
+    document.addEventListener("scroll", hideDisplayTripsPanel, true);
+    window.addEventListener("blur", hideDisplayTripsPanel);
+  }
+
   async function boot() {
     initMap();
     setupTripContextMenu();
@@ -1066,7 +1249,11 @@
 
     tripSelect.addEventListener("change", function () {
       if (chkFollow) chkFollow.checked = false;
-      loadTrip(tripSelect.value, true, true);
+      currentTripId = tripSelect.value;
+      // 포커스 trip이 바뀌면 체크리스트의 disabled/checked 표시도 즉시 갱신 (2026-07-23 최정우 추가)
+      lastDisplayPanelSig = "";
+      renderDisplayTripsPanel(lastTripsData);
+      syncMapTrips(renderedTripIds(), true, true);
     });
     // 다른 버튼들과 동일하게, 조회가 끝날 때까지 중복 클릭 방지용으로 비활성화 (2026-07-22 최정우 추가)
     document.getElementById("btnReload").addEventListener("click", async function () {
@@ -1085,6 +1272,7 @@
     setupResetMapButton();
     setupDeleteButton();
     setupStartEnginesButton();
+    setupDisplayTripsPanel();
     if (chkPoll) {
       chkPoll.addEventListener("change", function () {
         if (chkPoll.checked) startPoll();

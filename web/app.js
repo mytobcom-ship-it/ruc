@@ -64,7 +64,6 @@
   const btnDisplayTrips = document.getElementById("btnDisplayTrips");
   const displayTripsPanel = document.getElementById("displayTripsPanel");
   const displayTripsList = document.getElementById("displayTripsList");
-  const legendTrips = document.getElementById("legendTrips");
 
   // 버튼 클릭 진행률 바 — 완료 시점을 알 수 있으면(재테스트) 실제 %, 모르면(신규테스트·삭제·
   //   새로고침) 좌우로 흐르는 불확정 애니메이션으로 표시 (2026-07-22 최정우 추가)
@@ -646,7 +645,6 @@
     checkedDisplayTripIds.clear();
     destroyAllTripCtx();
     clearRoadLayers();
-    updateLegendTrips();
     tripSelect.innerHTML = '<option value="">(trip 없음)</option>';
     if (statusMsg) setStatus(statusMsg, isError);
   }
@@ -667,20 +665,6 @@
 
   async function fetchTrips() {
     return fetchJson("/api/trips?limit=50");
-  }
-
-  // /api/trips 는 이미 MIN(gps_dt) DESC 로 정렬돼 오므로, device_key 별 첫 등장이 곧 그 차량의
-  //   최신 trip — waitForNewTestData(892~896행 부근)가 진행률 추적에 쓰는 것과 동일한 계산을
-  //   "지도에 표시할 차량 집합"에도 재사용한다 (2026-07-23 최정우 추가)
-  function computeLatestPerDevice(trips) {
-    const seenDevices = new Set();
-    const result = new Set();
-    trips.forEach(function (t) {
-      if (seenDevices.has(t.device_key)) return;
-      seenDevices.add(t.device_key);
-      result.add(t.trip_id);
-    });
-    return result;
   }
 
   // 실제 지도에 렌더링할 trip 집합 = 체크리스트로 고른 trip 들 ∪ 포커스 trip(tripSelect 값).
@@ -704,24 +688,39 @@
       const followLatest = isFollowLatest();
       const tripId = fillTripSelect(trips, currentTripId, followLatest);
       currentTripId = tripId;
-      // "최신 Trip" 자동추적 시 체크리스트도 device_key 별 최신 trip으로 동기화. 수동 모드에서는
-      //   목록에서 사라진(삭제된) trip만 체크리스트에서 정리 (2026-07-23 최정우 추가)
+      // 동시표시 체크리스트는 "동시표시 ▾" 패널에서 사용자가 직접 고른 trip만 반영한다 —
+      //   목록에서 사라진(삭제된) trip만 정리하고, 자동으로 다른 trip을 추가하지 않는다
+      //   (2026-07-24 최정우 수정 — device_key 자동매칭이 예전 세션 차량까지 겹쳐 그리던 문제)
       const validIds = new Set(trips.map(function (t) { return t.trip_id; }));
-      if (followLatest) {
-        checkedDisplayTripIds = computeLatestPerDevice(trips);
-      } else {
-        Array.from(checkedDisplayTripIds).forEach(function (id) {
-          if (!validIds.has(id)) checkedDisplayTripIds.delete(id);
-        });
-      }
+      Array.from(checkedDisplayTripIds).forEach(function (id) {
+        if (!validIds.has(id)) checkedDisplayTripIds.delete(id);
+      });
       renderDisplayTripsPanel(trips);
       // trip 이 바뀌었다는 이유만으로는 화면을 이동하지 않음 — "최신 Trip" 체크 상태에서
       //   배경 폴링 중 새 trip 이 뜰 때마다 지도 위치가 튀던 원인. 화면에 아직 아무것도
       //   없던 최초 상태에서만 자동 fit (2026-07-21 최정우 수정)
       await syncMapTrips(renderedTripIds(), false, forceFit || !prevTripId);
+      stopPollIfAllComplete();
     } catch (err) {
       setStatus("API 오류: " + err.message + " (웹/DB 기동 확인)", true);
     }
+  }
+
+  // 화면에 표시 중인 trip 이 전부 맵매칭 완료(pending 0건 + END 이벤트 도달) 상태면 더 볼 게
+  //   없으므로 자동 갱신(폴링)을 스스로 멈춘다 — 완료된 trip 을 계속 poll_sec 마다 찔러보는
+  //   낭비를 없앤다. 신규테스트/재테스트 버튼이 다시 켠다 (2026-07-24 최정우 추가)
+  function stopPollIfAllComplete() {
+    if (!pollTimer) return;
+    const rendered = Array.from(renderedTripIds());
+    if (rendered.length === 0) return;
+    const allComplete = rendered.every(function (id) {
+      const meta = lastTripsData.find(function (t) { return t.trip_id === id; });
+      return !!(meta && meta.complete);
+    });
+    if (!allComplete) return;
+    stopPoll();
+    if (chkPoll) chkPoll.checked = false;
+    setStatus("맵매칭 완료 — 자동 갱신 정지됨 (신규테스트/재테스트 시 다시 시작됩니다)");
   }
 
   async function loadTrips() {
@@ -737,7 +736,6 @@
     const existingIds = Array.from(tripCtxById.keys());
     existingIds.forEach(function (id) { if (!tripIds.has(id)) destroyTripCtx(id); });
     idsArr.forEach(ensureTripCtx);
-    updateLegendTrips();
 
     if (idsArr.length === 0) {
       clearRoadLayers();
@@ -880,6 +878,7 @@
       if (!currentTripId) return;
       const tripId = currentTripId;
       btn.disabled = true;
+      resumeAutoRefresh();
       // config.ini 변경 시 서버가 재테스트 전 MapMatchSvr 를 재시작하므로 다소 오래 걸릴 수 있음
       //   (2026-07-21 최정우 추가)
       setStatus("재테스트 요청 중… " + tripId + " (설정 변경 시 MapMatchSvr 재시작 포함, 최대 1분)");
@@ -993,11 +992,15 @@
       trips.forEach(function (t) {
         if (!prevTripIds.has(t.trip_id) && !newTripByDevice.has(t.device_key)) {
           newTripByDevice.set(t.device_key, t.trip_id);
+          // 동시표시 체크리스트는 이제 자동매칭을 하지 않으므로(2026-07-24 수정), 신규테스트로
+          //   막 시작된 차량들은 여기서 직접 체크해줘야 화면에 표시된다 — vehicleCount 대를
+          //   모두 지켜보는 것이 신규테스트 버튼의 목적이므로, 여기서 새로 감지된 trip 만
+          //   체크한다(예전 세션의 다른 device_key 는 건드리지 않음) (2026-07-24 최정우 추가)
+          checkedDisplayTripIds.add(t.trip_id);
         }
       });
 
-      // 지도에 실제로 표시되는 trip 은 기존 "최신 Trip" 팔로우 로직에 맡기고, 여기서는
-      // 완료 판정·진행률 집계만 전 차량에 걸쳐 따로 수행한다
+      // 완료 판정·진행률 집계는 전 차량에 걸쳐 따로 수행한다
       await refreshTrips(false);
 
       if (newTripByDevice.size > 0) {
@@ -1059,6 +1062,7 @@
     if (!btn) return;
     btn.addEventListener("click", async function () {
       btn.disabled = true;
+      resumeAutoRefresh();
       // 재시작 전 존재하던 trip_id 전부 — 재시작 후 여기 없는 trip_id 가 나타나면 "신규"로 판별
       // (차량 대수만큼 동시에 새 trip 이 시작되므로, 예전처럼 currentTripId 하나만으로는
       // 판별 불가) (2026-07-22 최정우 수정 — 차량 여러대 대응)
@@ -1118,6 +1122,13 @@
     pollTimer = setInterval(function () {
       refreshTrips(false);
     }, pollSec * 1000);
+  }
+
+  // 맵매칭 완료로 stopPollIfAllComplete() 가 자동 갱신을 꺼둔 상태일 수 있으므로, 새로 매칭할
+  //   거리가 생기는 신규테스트·재테스트 시작 시 다시 켠다 (2026-07-24 최정우 추가)
+  function resumeAutoRefresh() {
+    if (chkPoll && !chkPoll.checked) chkPoll.checked = true;
+    startPoll();
   }
 
   // 차량 동시운행 대수 콤보박스 — /api/config 의 sim_vehicles_min/max 로 옵션을 채우고
@@ -1188,22 +1199,6 @@
     });
   }
 
-  // 현재 지도에 실제로 그려진 trip 들의 색상 범례 — syncMapTrips 가 컨텍스트를 만들고 나면 호출
-  //   (2026-07-23 최정우 추가)
-  function updateLegendTrips() {
-    if (!legendTrips) return;
-    legendTrips.innerHTML = "";
-    Array.from(tripCtxById.keys()).forEach(function (tripId) {
-      const meta = lastTripsData.find(function (t) { return t.trip_id === tripId; });
-      const div = document.createElement("div");
-      const swatch = document.createElement("span");
-      swatch.className = "trip-swatch";
-      swatch.style.background = getTripColor(tripId);
-      div.appendChild(swatch);
-      div.appendChild(document.createTextNode(tripId + (meta ? " (" + meta.device_key + ")" : "")));
-      legendTrips.appendChild(div);
-    });
-  }
 
   function setupDisplayTripsPanel() {
     if (!btnDisplayTrips || !displayTripsPanel) return;

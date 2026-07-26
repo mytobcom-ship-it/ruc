@@ -87,8 +87,6 @@
       display: inline-block; width: 10px; height: 10px; border-radius: 50%;
       flex: 0 0 auto;
     }
-    #legendTrips { margin-top: 4px; }
-    #legendTrips div { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
     /* 버튼 클릭 진행률 바 — 클릭 전에도 테두리(홈)를 항상 표시해 어디에 나타날지 미리
        보여줌. 눈에 잘 띄도록 Trip 콤보박스 폭 동기화 대신 널찍한 고정 폭 + 기존보다
        살짝 높은 높이 사용 (2026-07-22 최정우 수정) */
@@ -152,10 +150,9 @@
     <div><span class="line" style="background:#94a3b8;height:0;border-top:2px dashed #94a3b8;"></span>GPS↔세그먼트 교차 <span style="color:#64748b;">(intersect_len)</span></div>
     <div><span class="line" style="background:#e53935;height:0;border-top:2px dashed #e53935;"></span>GPS 궤적(순서 연결)</div>
     <div style="padding-left:14px;color:#64748b;">마커 테두리 색 = 차량(trip) 구분 — "동시표시"로 선택</div>
-    <div id="legendTrips"></div>
   </div>
   <div id="ctxMenu"><div class="ctx-item" id="ctxCopy">복사하기</div></div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="/app.js?v=20260723_multi_trip"></script>
+  <script src="/app.js?v=20260724_newtest_autoshow"></script>
 </body>
 </html>

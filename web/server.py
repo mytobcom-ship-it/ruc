@@ -129,7 +129,9 @@ def api_trips():
                 SELECT trip_id, device_key,
                        MIN(gps_dt) AS gps_dt_min,
                        MAX(gps_dt) AS gps_dt_max,
-                       COUNT(*) AS cnt
+                       COUNT(*) AS cnt,
+                       SUM(CASE WHEN match_status = 0 THEN 1 ELSE 0 END) AS pending_cnt,
+                       BOOL_OR(trip_event = 2) AS has_end
                 FROM roadnet.prim_rawgps
                 GROUP BY trip_id, device_key
                   ORDER BY MIN(gps_dt) DESC, trip_id DESC, device_key DESC
@@ -144,6 +146,10 @@ def api_trips():
                     "gps_dt_min": r[2],
                     "gps_dt_max": r[3],
                     "count": r[4],
+                    # 이 trip 의 맵매칭이 완전히 끝났는지 — pending 0건 & END 이벤트 도달.
+                    #   app.js 자동 갱신(폴링)이 더 이상 볼 게 없는 완료된 trip 을 계속
+                    #   찔러보지 않고 스스로 멈추는 데 사용 (2026-07-24 최정우 추가)
+                    "complete": (r[5] == 0 and bool(r[6])),
                 }
                 for r in cur.fetchall()
             ]

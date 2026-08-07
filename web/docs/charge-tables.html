@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>과금 마스터/결과 테이블 구조 (ruc DB)</title>
+<script src="https://unpkg.com/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  :root {
+    --bg: #f8fafc; --panel: #ffffff; --text: #1e293b; --muted: #64748b;
+    --border: #e2e8f0; --accent: #1e88e5; --code-bg: #f1f5f9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a; --panel: #1e293b; --text: #e2e8f0; --muted: #94a3b8;
+      --border: #334155; --accent: #60a5fa; --code-bg: #0b1220;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", sans-serif;
+    line-height: 1.65; font-size: 18px;
+  }
+  #layout { display: flex; min-height: 100vh; }
+  nav {
+    width: 290px; flex: none; background: var(--panel); border-right: 1px solid var(--border);
+    padding: 22px 16px; position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  }
+  nav h2 { font-size: 15px; margin: 0 0 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  nav a { display: block; font-size: 15.5px; color: var(--text); text-decoration: none; padding: 7px 9px; border-radius: 6px; line-height: 1.4; }
+  nav a:hover { background: var(--code-bg); }
+  nav .grp { margin-top: 18px; font-size: 12.5px; color: var(--muted); font-weight: 700; padding: 0 9px; }
+  main { flex: 1; padding: 32px 40px 90px; max-width: 1280px; }
+  h1 { font-size: 32px; margin: 0 0 8px; }
+  .subtitle { color: var(--muted); font-size: 16.5px; margin-bottom: 26px; }
+  section { margin-bottom: 50px; scroll-margin-top: 16px; }
+  section h2 { font-size: 24px; border-bottom: 3px solid var(--accent); padding-bottom: 8px; margin-bottom: 8px; }
+  .easy-name {
+    display: inline-block; font-size: 15.5px; font-weight: 700; color: var(--accent);
+    background: var(--code-bg); border: 1px solid var(--accent); border-radius: 20px;
+    padding: 4px 14px; margin-bottom: 14px;
+  }
+  .intro {
+    background: var(--code-bg); border-radius: 8px;
+    padding: 10px 16px; margin: 0 0 14px; font-size: 15.5px; color: var(--text);
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px; overflow-x: auto; margin-bottom: 14px;
+  }
+  .note {
+    background: var(--code-bg); border-left: 4px solid var(--accent); border-radius: 4px;
+    padding: 12px 16px; font-size: 15px; margin: 12px 0; color: var(--text);
+  }
+  .note b { color: var(--accent); }
+  .warn {
+    background: #e5393512; border-left: 4px solid #e53935; border-radius: 4px;
+    padding: 12px 16px; font-size: 15px; margin: 12px 0; color: var(--text);
+  }
+  .warn b { color: #e53935; }
+  code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 14.5px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+  th, td { border: 1px solid var(--border); padding: 8px 11px; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); }
+  td code, th code { white-space: nowrap; }
+  .pk { color: var(--accent); font-weight: 700; }
+  .badge {
+    display: inline-block; font-size: 12px; font-weight: 700; border-radius: 10px;
+    padding: 1px 8px; margin-left: 6px; vertical-align: middle;
+  }
+  .badge.confirmed { background: #1e88e520; color: var(--accent); border: 1px solid var(--accent); }
+  .badge.deprecated { background: #e5393520; color: #e53935; border: 1px solid #e53935; }
+  .badge.soft { background: #fb8c0020; color: #fb8c00; border: 1px solid #fb8c00; }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 15px; color: var(--muted); margin: 8px 0 20px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { width: 13px; height: 13px; border-radius: 3px; display: inline-block; }
+  footer { color: var(--muted); font-size: 14px; padding: 22px 40px 44px; }
+  .src { font-size: 13.5px; color: var(--muted); margin-top: -4px; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+<div id="layout">
+<nav>
+  <h2>과금 테이블 구조 (ruc DB)</h2>
+  <a href="#overview">0. 개요 · 관계도</a>
+  <a href="#codeclash">0-1. [주의] 코드체계 3종 불일치</a>
+  <div class="grp">마스터 (기준정보)</div>
+  <a href="#base_road">base_road (은퇴)</a>
+  <a href="#base_roadlink">base_roadlink</a>
+  <a href="#base_tollgate">base_tollgate</a>
+  <a href="#base_tollfare">base_tollfare</a>
+  <a href="#base_tollsection">base_tollsection</a>
+  <a href="#base_mapinfo">base_mapinfo</a>
+  <a href="#base_fare">base_fare (신규 발견)</a>
+  <a href="#base_carinfo">base_carinfo (신규 발견)</a>
+  <a href="#road_link">road_link</a>
+  <a href="#codes">공통코드 (ZONEKIND/ROADKIND/CARTYPE)</a>
+  <div class="grp">결과 (판정 로그)</div>
+  <a href="#prim_chargehand">prim_chargehand</a>
+  <a href="#prim_tollcharge">prim_tollcharge</a>
+  <a href="#prim_vltncharge">prim_vltncharge</a>
+  <div class="grp">참고</div>
+  <a href="../index.html">← 웹 뷰어로</a>
+  <a href="charge-flow.html">← 도로이용 과금 알고리즘 Flow</a>
+  <a href="charge-issues.html">← 유형별 문제점·대응방안 요약</a>
+  <a href="charge-spatial-model.html">← 노드·링크·임시ID·폴리곤 공간모델</a>
+  <a href="mapmatch-flow.html">← 맵매칭 알고리즘 Flow</a>
+</nav>
+<main>
+  <h1>과금 마스터/결과 테이블 구조</h1>
+  <p class="subtitle">
+    운영 DB <code>ruc</code> 스키마(<code>59.11.91.162</code>)를 <code>pg_description</code>(테이블·컬럼 코멘트)까지 전수 조회해
+    확인한 실제 구조입니다. 개방형·폐쇄형·구간단속·주정차 과금은 <b>새 테이블 설계 없이 이 스키마를 그대로 사용</b>합니다
+    (doc/README.txt A절). 판정 흐름은 <a href="charge-flow.html">charge-flow.html</a> 참고, 컬럼명은 이 문서 기준.
+    <b>2026-08-06 실제 데이터까지 조회해 <a href="#base_fare">base_fare</a>·<a href="#base_carinfo">base_carinfo</a>
+    2개 테이블을 추가로 발견</b>했습니다(2026-08-04 최초 조사 당시 스키마 코멘트 스캔에서 누락) —
+    범칙금·차종 조인의 핵심 테이블이라 이 문서와 charge-flow.html에 반영했습니다.
+  </p>
+
+  <div class="legend">
+    <span><span class="badge confirmed" style="margin:0;">확인됨</span> 컬럼 코멘트(pg_description)로 직접 확인</span>
+    <span><span class="badge deprecated" style="margin:0;">은퇴</span> 테이블 코멘트에 명시된 폐기 대상</span>
+    <span><span class="badge soft" style="margin:0;">소프트 참조</span> 코멘트상 언급되지만 하드 FK 제약 없음</span>
+  </div>
+
+  <section id="overview">
+    <h2>0. 개요 · 관계도</h2>
+    <div class="intro">
+      <code>base_codesc</code>의 <code>ZONEKIND</code> 코드가 개방형·폐쇄형·구간단속·주정차 분류 그 자체입니다.
+      01·02는 이미 데이터가 있고, <b>03·04·05는 코드만 정의돼 있고 데이터가 없는 테스트 대상</b>입니다.
+    </div>
+    <div class="card">
+      <table>
+        <tr><th>코드</th><th>명칭</th><th>note</th><th>데이터</th><th>대응 테이블</th></tr>
+        <tr><td><code>01</code></td><td>일반도로(거리기반과금)</td><td><code>dist</code></td><td>1,525,177건</td><td>base_mapinfo</td></tr>
+        <tr><td><code>02</code></td><td>유료도로(개방식)</td><td><code>tollOpen</code></td><td>31,383건</td><td>base_mapinfo</td></tr>
+        <tr><td><code>03</code></td><td>유료도로(폐쇄식)</td><td><code>tollClosed</code></td><td style="color:#e53935;">0건 ← 테스트 대상</td><td>base_roadlink+base_tollgate+base_tollsection</td></tr>
+        <tr><td><code>04</code></td><td>과속·구간단속</td><td><code>section</code></td><td style="color:#e53935;">0건 ← 테스트 대상</td><td>base_mapinfo</td></tr>
+        <tr><td><code>05</code></td><td>주정차단속</td><td><code>parking</code></td><td style="color:#e53935;">0건 ← 테스트 대상</td><td>base_mapinfo</td></tr>
+      </table>
+    </div>
+    <div class="card">
+<pre class="mermaid">
+erDiagram
+    BASE_ROADLINK ||--o{ BASE_TOLLGATE : "road_id (FK)"
+    BASE_TOLLGATE ||--o{ BASE_TOLLFARE : "tollgate_id (FK)"
+    BASE_TOLLGATE ||--o{ BASE_TOLLSECTION : "entry/exit_tollgate_id (FK)"
+    BASE_MAPINFO }o..|| BASE_CODESC : "zone_kind → ZONEKIND (소프트)"
+    BASE_ROADLINK }o..|| BASE_CODESC : "road_kind → ROADKIND (소프트)"
+    BASE_TOLLFARE }o..|| BASE_CODESC : "car_type → CARTYPE (소프트)"
+    PRIM_CHARGEHAND ||--o{ PRIM_TOLLCHARGE : "trip_id,device_key,trip_seq (소프트)"
+    PRIM_CHARGEHAND ||--o{ PRIM_VLTNCHARGE : "trip_id,device_key,trip_seq (소프트)"
+
+    BASE_ROADLINK {
+        varchar road_id PK
+        varchar road_kind "ROADKIND 0~4"
+    }
+    BASE_TOLLGATE {
+        varchar tollgate_id PK
+        varchar road_id FK
+        varchar gate_div "M/I/O/B"
+    }
+    BASE_MAPINFO {
+        varchar zone_id PK
+        varchar zone_kind "ZONEKIND 01~05"
+        jsonb coords
+    }
+    PRIM_CHARGEHAND {
+        varchar trip_id PK
+        varchar device_key PK
+        int trip_seq PK
+        smallint charge_type "0~4, 별도체계"
+    }
+</pre>
+    </div>
+    <div class="note">
+      <b>실제 하드 FK는 5개뿐</b>: <code>base_tollfare.tollgate_id</code>·<code>base_tollsection.entry/exit_tollgate_id</code>
+      → <code>base_tollgate.tollgate_id</code>, <code>base_tollgate.road_id</code> → <code>base_roadlink.road_id</code>
+      (<code>base_road</code> 아님 — 0-1절 참고). 그 외 <code>zone_kind</code>/<code>road_kind</code>/<code>car_type</code>/
+      <code>trip_id</code> 연결은 전부 코멘트상 언급일 뿐 제약조건 없는 소프트 참조입니다.
+      <b>처리 흐름</b>: 마스터 판정 → <code>prim_chargehand</code>(원시, 검증서버 Insert) → 확정 단계에서
+      통행료는 <code>prim_tollcharge</code>, 위반은 <code>prim_vltncharge</code>로 분리 적재(둘 다 과금서버가 Insert,
+      <code>app_send_yn</code>으로 앱 발송 상태 관리).
+    </div>
+  </section>
+
+  <section id="codeclash">
+    <h2>0-1. [주의] 코드체계 3종 불일치</h2>
+    <div class="warn">
+      <b>같은 5분류(일반/개방식/폐쇄식/구간단속/주정차)를 가리키는 코드값이 테이블마다 다릅니다.</b>
+      재작업 시 이 표를 참고해 번역하지 않으면 바로 버그로 이어집니다.
+    </div>
+    <div class="card">
+      <table>
+        <tr><th>분류</th><th>ZONEKIND<br/>(base_mapinfo.zone_kind)</th><th>ROADKIND<br/>(base_roadlink.road_kind)</th><th>prim_chargehand.charge_type</th></tr>
+        <tr><td>일반도로</td><td><code>01</code></td><td><code>0</code></td><td rowspan="5" style="color:var(--muted)">별도 체계 —<br/>0:NODE_STEP<br/>1:OPEN_ROAD<br/>2:CLOSED_ROAD<br/>3:SPEED<br/>4:PARKING<br/>(NODE_STEP이 끼어있어<br/>단순 매핑 불가)</td></tr>
+        <tr><td>유료도로(개방식)</td><td><code>02</code></td><td><code>1</code></td></tr>
+        <tr><td>유료도로(폐쇄식)</td><td><code>03</code></td><td><code>2</code></td></tr>
+        <tr><td>과속·구간단속</td><td><code>04</code></td><td><code>3</code></td></tr>
+        <tr><td>주정차단속</td><td><code>05</code></td><td><code>4</code></td></tr>
+      </table>
+    </div>
+    <div class="note">
+      추가로 <code>prim_tollcharge.charge_type</code>은 0:NODE_STEP/1:OPEN_ROAD/2:CLOSED_ROAD 3개 값만 쓰고(TOLL 확정
+      테이블이라 SPEED/PARKING 없음), <code>prim_vltncharge.violation_type</code>은 0:SPEED/1:PARKING 2개 값만 쓰는
+      완전히 별도의 0-base 2값 체계입니다. 총 <b>5개 코드체계</b>가 같은 개념을 서로 다른 숫자로 표현합니다.
+    </div>
+    <div class="warn">
+      <b>ROADKIND 데이터 정합성 이슈</b>: <code>base_codesc</code>엔 <code>ROADKIND</code> 5개 행이 정상 존재하지만,
+      부모 테이블 <code>base_codelc</code>엔 <code>ROADKIND</code> 대분류 행 자체가 없습니다(0건) — 등록 누락으로 보임.
+      하드 FK가 없어 조회는 되지만, 코드 관리 화면에서 대분류 목록을 조회하면 ROADKIND가 안 보일 수 있음.
+    </div>
+  </section>
+
+  <section id="base_road">
+    <h2>base_road <span class="badge deprecated">은퇴</span></h2>
+    <div class="easy-name">(폐기 예정) 구 도로 마스터</div>
+    <div class="warn">
+      테이블 코멘트: <b>"(은퇴) 2026-08-04 base_roadlink로 대체 — 참조 코드·FK 없음. 확인 후 삭제 예정"</b> — 바로 오늘 날짜로
+      은퇴 처리됨. 실제로 이 테이블을 참조하는 FK도 0건(0절 관계도 참고). <b>신규 작업에서 이 테이블은 쓰지 말 것.</b>
+    </div>
+    <div class="card">
+      <table>
+        <tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
+        <tr><td class="pk">road_id</td><td>varchar(20)</td><td>노선 ID(PK, RD+3자리 - seq_road_id 채번)</td></tr>
+        <tr><td>road_nm</td><td>varchar(100)</td><td>노선명(표시용 - 요금표에는 저장하지 않고 조인)</td></tr>
+        <tr><td>toll_type</td><td>varchar(1)</td><td>과금 유형(O 개방식/C 폐쇄식/N 무료)</td></tr>
+        <tr><td>use_yn</td><td>varchar(1)</td><td>사용 여부(Y/N)</td></tr>
+        <tr><td>reg_dt / upd_dt</td><td>timestamp</td><td>등록/수정일시</td></tr>
+      </table>
+    </div>
+    <div class="note">
+      <code>base_mapinfo.road_id</code> 컬럼 코멘트가 "소속 노선(<code>base_road.road_id</code>)"라고 이 테이블을
+      가리키고 있는데, 위 은퇴 공지와 모순됩니다 — 마이그레이션 과정에서 코멘트 갱신이 누락된 것으로 보임.
+      실제로는 <code>base_roadlink.road_id</code>를 봐야 할 가능성이 큼. 재작업 시 확인 필요.
+    </div>
+  </section>
+
+  <section id="base_roadlink">
+    <h2>base_roadlink <span class="badge confirmed">확인됨</span></h2>
+    <div class="easy-name">운영 설정 도로/구역 마스터 — base_road를 대체하는 현재 진짜 마스터</div>
+    <div class="src">테이블 코멘트: "운영 설정 도로/구역 — 지도관리에서 직접 그려 등록. road_kind: ZONEKIND(01 일반/02 유료 개방식/03 유료 폐쇄식/04 과속·구간단속/05 주정차단속)"</div>
+    <div class="card">
+      <table>
+        <tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
+        <tr><td class="pk">road_id</td><td>varchar(20)</td><td>도로 ID — RL-Znnn 자동 채번(PK)</td></tr>
+        <tr><td>road_kind</td><td>varchar(2)</td><td>도로 유형 — base_codesc(ROADKIND): 0 일반/1 유료(개방식)/2 유료(폐쇄식)/3 과속·구간단속/4 주정차단속. CHARGE_TYPE과 번호 체계 일치(단, prim_chargehand.charge_type과는 실제로 다름 — 0-1절 참고)</td></tr>
+        <tr><td>road_nm</td><td>varchar(100)</td><td>도로명 — 화면 표시용</td></tr>
+        <tr><td>geom_type</td><td>varchar(4)</td><td>도형 형태 — LINE(선: 도로/구간) / POLY(면: 단속범위)</td></tr>
+        <tr><td>coords</td><td>jsonb</td><td>좌표열 — [[경도,위도],...] WGS84. 지도 클릭으로 찍은 순서</td></tr>
+        <tr><td>speed_limit_kmh</td><td>numeric</td><td>제한속도(km/h) — 과속·구간단속(road_kind=3) 판정 기준. 그 외 유형은 참고 보관</td></tr>
+        <tr><td>use_yn</td><td>char(1)</td><td>사용 여부 — Y 사용 / N 미사용(지도·판정에서 제외)</td></tr>
+        <tr><td>reg_dt / upd_dt</td><td>varchar(14)</td><td>등록/수정 일시 — YYYYMMDDHH24MISS</td></tr>
+        <tr><td>admin_id</td><td>varchar(20)</td><td>최종 수정 관리자 근무번호(base_workerinfo.worker_no)</td></tr>
+      </table>
+    </div>
+    <div class="note">
+      <span class="badge soft" style="margin:0;">소프트 참조</span> <code>base_tollgate.road_id</code>가 이 테이블을
+      하드 FK로 참조(0절 확인) — 폐쇄형(road_kind=2) 테스트 시 여기 먼저 1건 등록 후 게이트를 붙여야 함.
+    </div>
+  </section>
+
+  <section id="base_tollgate">
+    <h2>base_tollgate <span class="badge confirmed">확인됨</span></h2>
+    <div class="easy-name">영업소(게이트) 마스터 — 3건</div>
+    <div class="src">테이블 코멘트: "영업소 마스터 - 개방식 본선(M)/폐쇄식 입구(I)·출구(O)·겸용(B)"</div>
+    <div class="card">
+      <table>
+        <tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
+        <tr><td class="pk">tollgate_id</td><td>varchar(20)</td><td>영업소 ID(PK, TG+4자리 - seq_tollgate_id 채번)</td></tr>
+        <tr><td>road_id</td><td>varchar(20)</td><td>소속 노선. <b>FK → base_roadlink.road_id</b></td></tr>
+        <tr><td>tollgate_nm</td><td>varchar(100)</td><td>영업소명(표시용)</td></tr>
+        <tr><td>gate_div</td><td>varchar(1)</td><td>구분: M 개방식 본선 / I 폐쇄식 입구 / O 폐쇄식 출구 / B 겸용. CHECK(M/I/O/B), 현재 데이터는 M/I/O만 관측</td></tr>
+        <tr><td>lon / lat</td><td>numeric</td><td>경도/위도(WGS84) — 지도 배치 지점</td></tr>
+        <tr><td>link_id</td><td>varchar(20)</td><td>기준 링크(<code>base_mapinfo.link_id</code> — <span class="badge soft" style="margin:0;">소프트</span>, road_link.link_id 아님에 주의)</td></tr>
+        <tr><td>use_yn</td><td>varchar(1)</td><td>사용 여부(Y/N)</td></tr>
+        <tr><td>reg_dt / upd_dt</td><td>timestamp</td><td>등록/수정일시</td></tr>
+      </table>
+    </div>
+    <div class="note">
+      폐쇄형 테스트: 이 테이블에 진입(I)·진출(O) 게이트 2건을 먼저 등록해야 <code>base_tollsection</code>에 구간요금을 넣을 수 있음.
+    </div>
+  </section>
+
+  <section id="base_tollfare">
+    <h2>base_tollfare <span class="badge confirmed">확인됨</span></h2>
+    <div class="src">테이블 코멘트: "개방식 요금표 - 본선 영업소x차종x적용일. 개정 = 새 fare_date 행 추가(행 자체가 이력)"</div>
+    <div class="card">
+      <table>
+        <tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
+        <tr><td class="pk">tollgate_id</td><td>varchar(20)</td><td>PK-1. 본선 영업소(base_tollgate, gate_div=M). FK → base_tollgate</td></tr>
+        <tr><td class="pk">car_type</td><td>varchar(1)</td><td>PK-2. 차종(base_codesc CARTYPE 1~6)</td></tr>
+        <tr><td class="pk">fare_date</td><td>varchar(8)</td><td>PK-3. 적용 시작일(YYYYMMDD)</td></tr>
+        <tr><td>toll_fare</td><td>integer</td><td>통행요금(원) - NULL = 미정</td></tr>
+        <tr><td>admin_id</td><td>varchar(20)</td><td>저장 관리자(worker_no)</td></tr>
+        <tr><td>reg_dt / upd_dt</td><td>varchar(14)</td><td>등록/수정 일시(YYYYMMDDHH24MISS)</td></tr>
+      </table>
+    </div>
+    <div class="note">요금 개정 시 UPDATE가 아니라 새 <code>fare_date</code> 행을 추가하는 방식 — 행 자체가 이력.</div>
+  </section>
+
+  <section id="base_tollsection">
+    <h2>base_tollsection <span class="badge confirmed">확인됨</span></h2>
+    <div class="src">테이블 코멘트: "폐쇄식 구간요금표 - 입구x출구 영업소x차종x적용일. 개정 = 새 fare_date 행 추가"</div>
+    <div class="card">
+      <table>
+        <tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
+        <tr><td class="pk">entry_tollgate_id</td><td>varchar(20)</td><td>PK-1. 입구 영업소(gate_div I/B). FK → base_tollgate</td></tr>
+        <tr><td class="pk">exit_tollgate_id</td><td>varchar(20)</td><td>PK-2. 출구 영업소(gate_div O/B). FK → base_tollgate</td></tr>
+        <tr><td class="pk">car_type</td><td>varchar(1)</td><td>PK-3. 차종(CARTYPE 1~6)</td></tr>
+        <tr><td class="pk">fare_date</td><td>varchar(8)</td><td>PK-4. 적용 시작일</td></tr>
+        <tr><td>toll_fare</td><td>integer</td><td>구간 통행요금(원) - NULL = 미정</td></tr>
+        <tr><td>admin_id</td><td>varchar(20)</td><td>저장 관리자</td></tr>
+        <tr><td>reg_dt / upd_dt</td><td>varchar(14)</td><td>등록/수정 일시</td></tr>
+      </table>
+    </div>
+    <div class="note">(진입ID,진출ID) 조합 자체가 PK — 별도 짝짓기 키(GATE_PAIR_ID 등) 불필요.</div>
+  </section>
+
+  <section id="base_mapinfo">
+    <h2>base_mapinfo <span class="badge confirmed">확인됨</span></h2>
+    <div class="src">테이블 코멘트: "지도 구역/도로 마스터(강릉시) - 일반도로/유료도로/과속·구간단속/주정차단속 구역을 위경도 지오메트리로 관리"</div>
+    <div class="card">
+      <table>
+        <tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
+        <tr><td class="pk">zone_id</td><td>varchar(20)</td><td>구역 ID(예: GN-Z001)</td></tr>
+        <tr><td>zone_kind</td><td>varchar(2)</td><td>ZONEKIND 코드: 01 일반도로/02 유료도로/03 과속·구간단속/04 주정차단속 (코멘트 원문 그대로 — 0절 표의 03/04와 다르게 적혀있어 실제 저장값 재확인 권장). <b>실측: 01·02 데이터는 앞자리 0 없는 '1'·'2' 1글자로 저장돼 있음(2026-08-06 확인) — 04/05 등록 시 값 형식 주의</b></td></tr>
+        <tr><td>zone_nm</td><td>varchar(100)</td><td>구역명(예: 정동진 해안도로)</td></tr>
+        <tr><td>geom_type</td><td>varchar(4)</td><td>지오메트리 형태: LINE(선=도로/구간) / POLY(면=단속범위)</td></tr>
+        <tr><td>coords</td><td>jsonb</td><td>좌표열 JSON [[경도,위도],...] WGS84. POLY는 닫힌 링(마지막=처음 생략가능)</td></tr>
+        <tr><td>speed_limit_kmh</td><td>numeric(6,1)</td><td>제한속도(km/h) - 과속·구간단속용, 없으면 NULL</td></tr>
+        <tr><td>link_id</td><td>varchar(20)</td><td>표준노드링크 LINK_ID 연계(과금 정산 연동용, 선택). UNIQUE(NULL 제외)</td></tr>
+        <tr><td>color</td><td>varchar(10)</td><td>표시색 override(#RRGGBB) - 없으면 유형 기본색 사용</td></tr>
+        <tr><td>use_yn</td><td>char(1)</td><td>사용여부 Y/N</td></tr>
+        <tr><td>reg_dt / upd_dt</td><td>timestamp</td><td>등록/최종 수정일시</td></tr>
+        <tr><td>admin_id</td><td>varchar(20)</td><td>수정한 관리자(worker_no)</td></tr>
+        <tr><td>f_node / t_node</td><td>varchar(20)</td><td>표준노드링크 시작/종료노드 - 구간 입/출구 판정용</td></tr>
+        <tr><td>road_id</td><td>varchar(20)</td><td>소속 노선(코멘트상 base_road.road_id — <b>은퇴 테이블 참조, stale 가능성</b>). NULL = 미배정</td></tr>
+        <tr><td>min/max lon/lat</td><td>numeric</td><td>경계상자(영역 조회용, 표준노드링크 이관분)</td></tr>
+      </table>
+    </div>
+    <div class="warn">
+      <b>주정차(zone_kind=05) 유예시간·과태료 컬럼이 이 테이블에 없음</b> — <code>fine_amount</code>는 결과 테이블
+      <code>prim_vltncharge</code>에만 있고, 마스터(<code>base_mapinfo</code>) 쪽엔 "허용 유예시간" 자체를 저장할 컬럼이
+      안 보임. <b>범칙금 자체는 <a href="#base_fare">base_fare</a>(차종별 구간표)에서 가져오는 것으로 보이나(2026-08-06
+      실데이터로 역산 확인), "유예시간"(10분 미만/이상 분기 기준의 "10분") 값 자체는 여전히 어느 테이블에도
+      명시적으로 없어 코드 하드코딩 여부는 재작업 시 결정 필요</b>(doc/README.txt H절, charge-flow.html 5절).
+    </div>
+  </section>
+
+  <section id="base_fare">
+    <h2>base_fare <span class="badge confirmed">확인됨 (2026-08-06 데이터 조회로 발견)</span></h2>
+    <div class="easy-name">차종별 통행요금·범칙금 기준표 — 6건(차종당 1행)</div>
+    <div class="src">테이블 코멘트: "금액정보(차종별, 과태료)". PK=car_type 단일 컬럼(신/구 요금을 한 행에 같이 보관, 개정 이력은 base_farehist)</div>
+    <div class="card">
+      <table>
+        <tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
+        <tr><td class="pk">car_type</td><td>varchar(1)</td><td>PK. 차종구분 — 컬럼 코멘트는 "1:경차,2:소형,3:중형,4:대형"(1~4)뿐이지만 실제 데이터는 1~6행 존재 — <b>공통코드 CARTYPE(1종~6종, 0절 참고)과 라벨이 다르게 적혀있어 재확인 필요</b>. 조인 키(1~6 숫자) 자체는 CARTYPE과 호환됨</td></tr>
+        <tr><td>fare_date</td><td>varchar(8)</td><td>요금정보 적용일자</td></tr>
+        <tr><td>new_fare / old_fare</td><td>numeric(6,0)</td><td>신/구 요금 — charge-flow.html 실측 확인상 charge_type=0(NODE_STEP, ZONEKIND=01 일반도로) 정산에 사용되는 것으로 보임</td></tr>
+        <tr><td>new/old_parking_fine_10min_down</td><td>numeric(6,0)</td><td>주정차 과태료, 체류 10분 미만</td></tr>
+        <tr><td>new/old_parking_fine_10min_up</td><td>numeric(6,0)</td><td>주정차 과태료, 체류 10분 이상</td></tr>
+        <tr><td>new/old_speeding_fine_10km_down</td><td>numeric(6,0)</td><td>과속 과태료, 초과속도 10km/h 미만</td></tr>
+        <tr><td>new/old_speeding_fine_20km_down</td><td>numeric(6,0)</td><td>과속 과태료, 초과속도 10~20km/h</td></tr>
+        <tr><td>new/old_speeding_fine_30km_down</td><td>numeric(6,0)</td><td>과속 과태료, 초과속도 20~30km/h</td></tr>
+        <tr><td>new/old_speeding_fine_30km_up</td><td>numeric(6,0)</td><td>과속 과태료, 초과속도 30km/h 이상</td></tr>
+        <tr><td>inst_dt / admin_id</td><td>varchar(14)/varchar(4)</td><td>등록일시/등록관리자 ID</td></tr>
+      </table>
+    </div>
+    <div class="warn">
+      <b>범칙금 산정에 이 테이블이 유일한 기준인지는 미확정입니다.</b> <code>prim_vltncharge</code> 기존 데이터(111건)를
+      전수 확인한 결과, 이 표의 구간값(500~3,200원대)과 일치하는 행과, 이 표 어디에도 없는 고액(30,000~90,000원대)
+      행이 동일 테이블에 섞여 있습니다. 등록일시로도 분리되지 않아 실제 적용 기준을 과금서버 담당자에게 재확인해야
+      합니다(charge-flow.html 5·7절).
+    </div>
+  </section>
+
+  <section id="base_carinfo">
+    <h2>base_carinfo <span class="badge confirmed">확인됨 (2026-08-06 데이터 조회로 발견)</span></h2>
+    <div class="easy-name">차량 기본정보 — car_type(차종)의 실제 출처. 150건</div>
+    <div class="src">테이블 코멘트: "차량 기본정보 - 회원(cust_no)별 차량, 클라이언트키(device_key)는 차량 소속"</div>
+    <div class="card">
+      <table>
+        <tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
+        <tr><td class="pk">cust_no / car_seq</td><td>varchar(10)/smallint</td><td>PK. 회원번호(MBR+6자리) + 회원별 차량 순번</td></tr>
+        <tr><td>device_key</td><td>varchar(50)</td><td>단말키(CAR+6자리) — 회원 승인/차량 추가 시 단말 발급, <b>발급 후 불변</b>. <code>prim_chargehand</code>·<code>prim_tollcharge</code>·<code>prim_vltncharge</code>의 device_key와 동일 값. UNIQUE 인덱스로 1:1 조인 보장</td></tr>
+        <tr><td>car_type</td><td>varchar(8)</td><td>차종(공통코드 CARTYPE 1~6) — 컬럼 폭은 8이지만 실제 저장값은 1~6 단일 숫자</td></tr>
+        <tr><td>car_no</td><td>varchar(12)</td><td>차량번호(예: 12가3456)</td></tr>
+        <tr><td>car_status</td><td>smallint</td><td>차량 상태: 0 비활성/1 활성/2 정지. CHECK(0~2)</td></tr>
+        <tr><td>reg_dt / mdft_dt</td><td>varchar(14)</td><td>등록/수정일시</td></tr>
+      </table>
+    </div>
+    <div class="note">
+      <b>과금 정산의 car_type 조인 경로:</b> <code>prim_chargehand.device_key</code> = <code>base_carinfo.device_key</code>
+      → <code>car_type</code>. 맵매칭 소스(MapMatchSvr)엔 이 조회 코드가 없어 별도 확인이 필요했던 항목입니다
+      (charge-flow.html 5절 참고). <b>혼동 주의:</b> <code>tb_vhcl_info</code>(회원 앱쪽 차량정보, PK=mbr_id+vhcl_sn,
+      <code>carmdl_type</code> 컬럼)는 이름이 비슷하지만 코드체계가 다른 별개 테이블입니다 — 과금 조인에 쓰면 안 됩니다.
+    </div>
+  </section>
+
+  <section id="road_link">
+    <h2>road_link <span class="badge confirmed">확인됨</span></h2>
+    <div class="src">테이블 코멘트: "표준노드링크 LINK(전국, 2025-07-16판) — 과금 판정/원천용. 지도 표출(base_mapinfo)과 분리"</div>
+    <div class="card">
+      <table>
+        <tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
+        <tr><td class="pk">link_id</td><td>varchar(10)</td><td>링크 ID(표준노드링크)</td></tr>
+        <tr><td>f_node / t_node</td><td>varchar(10)</td><td>시작/종료 노드 ID</td></tr>
+        <tr><td>lanes</td><td>smallint</td><td>차로 수</td></tr>
+        <tr><td>road_rank</td><td>varchar(3)</td><td>도로 등급(101 고속국도~107 기타)</td></tr>
+        <tr><td>road_type</td><td>varchar(3)</td><td>도로 유형</td></tr>
+        <tr><td>road_no / road_name</td><td>varchar</td><td>노선번호/도로명</td></tr>
+        <tr><td>road_use</td><td>varchar(1)</td><td>사용 여부(0 사용)</td></tr>
+        <tr><td>max_spd</td><td>smallint</td><td>제한속도(km/h)</td></tr>
+        <tr><td>length_m</td><td>numeric(12,3)</td><td>링크 연장(m)</td></tr>
+        <tr><td>update_date</td><td>varchar(8)</td><td>원천 갱신일(YYYYMMDD)</td></tr>
+        <tr><td>min/max lon/lat</td><td>numeric</td><td>경계상자(지역 필터용)</td></tr>
+        <tr><td>coords</td><td>jsonb</td><td>좌표열 [[[lon,lat],...],...] (WGS84, MultiLineString)</td></tr>
+      </table>
+    </div>
+    <div class="note">
+      "과금 판정/원천용"이라고 명시 — 실제 판정 로직은 이 테이블을 봐야 하고, <code>base_mapinfo</code>는 지도
+      "표출"(화면 표시)용으로 명확히 분리돼 있음. 판정 코드 작성 시 어느 걸 봐야 하는지 헷갈리지 말 것.
+    </div>
+  </section>
+
+  <section id="codes">
+    <h2>공통코드 <span class="badge confirmed">확인됨</span></h2>
+    <div class="card">
+      <table>
+        <tr><th>테이블</th><th>컬럼</th><th>설명</th></tr>
+        <tr><td rowspan="4">base_codelc</td><td class="pk">codelc</td><td>대분류 코드</td></tr>
+        <tr><td>codelc_nm</td><td>대분류 코드명</td></tr>
+        <tr><td>codelc_note</td><td>대분류 코드 설명</td></tr>
+        <tr><td>codelc_use_yn</td><td>대분류 코드 사용 여부</td></tr>
+        <tr><td rowspan="5">base_codesc</td><td class="pk">codelc, codesc</td><td>대분류 코드 / 소분류 코드(복합 PK)</td></tr>
+        <tr><td>codesc_nm</td><td>소분류 코드명</td></tr>
+        <tr><td>codesc_note</td><td>소분류 코드 설명(영문 별칭, 예: tollOpen)</td></tr>
+        <tr><td>ary_ordr</td><td>정렬순서</td></tr>
+        <tr><td>codesc_use_yn</td><td>소분류코드 사용여부</td></tr>
+      </table>
+    </div>
+    <div class="intro">ZONEKIND (1-base, base_mapinfo.zone_kind가 참조):</div>
+    <div class="card">
+      <table>
+        <tr><th>codesc</th><th>codesc_nm</th><th>codesc_note</th></tr>
+        <tr><td>01</td><td>일반도로(거리기반과금)</td><td>dist</td></tr>
+        <tr><td>02</td><td>유료도로(개방식)</td><td>tollOpen</td></tr>
+        <tr><td>03</td><td>유료도로(폐쇄식)</td><td>tollClosed</td></tr>
+        <tr><td>04</td><td>과속·구간단속</td><td>section</td></tr>
+        <tr><td>05</td><td>주정차단속</td><td>parking</td></tr>
+      </table>
+    </div>
+    <div class="intro">ROADKIND (0-base, base_roadlink.road_kind가 참조 — <span class="badge deprecated" style="margin:0;">base_codelc 부모행 누락</span>):</div>
+    <div class="card">
+      <table>
+        <tr><th>codesc</th><th>codesc_nm</th><th>codesc_note</th></tr>
+        <tr><td>0</td><td>일반도로</td><td>dist</td></tr>
+        <tr><td>1</td><td>유료도로(개방식)</td><td>tollOpen</td></tr>
+        <tr><td>2</td><td>유료도로(폐쇄식)</td><td>tollClosed</td></tr>
+        <tr><td>3</td><td>과속·구간단속</td><td>section</td></tr>
+        <tr><td>4</td><td>주정차단속</td><td>parking</td></tr>
+      </table>
+    </div>
+    <div class="intro">CARTYPE (base_tollfare/base_tollsection.car_type, prim_tollcharge.vehicle_type이 참조):</div>
+    <div class="card">
+      <table>
+        <tr><th>codesc</th><th>codesc_nm</th></tr>
+        <tr><td>1</td><td>1종(소형)</td></tr>
+        <tr><td>2</td><td>2종(중형)</td></tr>
+        <tr><td>3</td><td>3종(대형)</td></tr>
+        <tr><td>4</td><td>4종(대형)</td></tr>
+        <tr><td>5</td><td>5종(대형)</td></tr>
+        <tr><td>6</td><td>6종(경차)</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section id="prim_chargehand">
+    <h2>prim_chargehand <span class="badge confirmed">확인됨</span></h2>
+    <div class="src">테이블 코멘트: "과금 대상 통합 테이블(검증서버가 Insert 함)"</div>
+    <div class="card">
+      <table>
+        <tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
+        <tr><td class="pk">trip_id</td><td>varchar(60)</td><td>PK-1. {차량 고유 번호}_{YYYYMMDDHH24MISS}. 동일 운행 시 여러 번 과금될 수 있어 인덱스로 사용</td></tr>
+        <tr><td class="pk">device_key</td><td>varchar(36)</td><td>PK-2. 모바일 앱 인증키(Client Key). 회원 테이블 조인용</td></tr>
+        <tr><td class="pk">trip_seq</td><td>integer</td><td>PK-3. 과금부과 순번(1~N)</td></tr>
+        <tr><td>charge_type</td><td>smallint</td><td>0:NODE_STEP, 1:OPEN_ROAD, 2:CLOSED_ROAD, 3:SPEED, 4:PARKING (0-1절: 다른 코드체계와 값 다름 주의)</td></tr>
+        <tr><td>charge_unit</td><td>smallint</td><td>0:NODE(노드 단위 과금), 1:LINK(링크 단위 과금)</td></tr>
+        <tr><td>link_id</td><td>varchar(20)</td><td>링크 ID. charge_unit=LINK일 때만, NODE면 NULL</td></tr>
+        <tr><td>from_id / to_id</td><td>varchar(20)</td><td>출발/도착 노드 또는 링크 시작/종료 노드 ID(charge_unit에 따라 의미 다름)</td></tr>
+        <tr><td>from_lat/lon, to_lat/lon</td><td>numeric(10,6)</td><td>출발/도착 좌표</td></tr>
+        <tr><td>dist_m</td><td>integer</td><td>구간 거리(m). 폐쇄식 요금 산출 기준</td></tr>
+        <tr><td>speed_kmh</td><td>smallint</td><td>구간 실측/평균 속도(km/h). 구간단속 위반 판단</td></tr>
+        <tr><td>speed_limit_kmh</td><td>smallint</td><td>제한 속도(km/h). 0이면 해당 없음</td></tr>
+        <tr><td>stay_seconds</td><td>integer</td><td>체류 시간(초). 주정차 위반 판단</td></tr>
+        <tr><td>zone_id / zone_name</td><td>varchar</td><td>관련 구역 ID/명 — 협력사 기준정보 역정규화(비정규화 저장)</td></tr>
+        <tr><td>occur_dt</td><td>varchar(14)</td><td>과금/위반 발생 시각</td></tr>
+        <tr><td>trip_start_dt / trip_end_dt</td><td>varchar(14)</td><td>운행 시작/종료 시각</td></tr>
+        <tr><td>charge_status</td><td>smallint</td><td>0:PENDING(대기), 1:PROCESSING(처리중), 2:CHARGED(완료), 3:SKIP(제외)</td></tr>
+        <tr><td>reg_dt / upd_dt</td><td>varchar(14)</td><td>등록/최종 수정 일시</td></tr>
+        <tr><td>charge_yn</td><td>varchar(1)</td><td>과금 대상 여부(Y/N) — 위치검증서버에서 적재</td></tr>
+        <tr><td>non_charge_reason</td><td>smallint</td><td>비과금 사유 — 위치검증서버에서 적재</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section id="prim_tollcharge">
+    <h2>prim_tollcharge <span class="badge confirmed">확인됨</span></h2>
+    <div class="src">테이블 코멘트: "통행료 과금 내역 (과금서버가 Insert 함)"</div>
+    <div class="card">
+      <table>
+        <tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
+        <tr><td class="pk">trip_id / device_key / trip_seq</td><td>varchar/varchar/int</td><td>PK. CHARGE_TARGET.TRIP_ID·TRIP_SEQ 참조</td></tr>
+        <tr><td>vehicle_type</td><td>smallint</td><td>차종(1~5종) — 과금 시점 확정값(CARTYPE은 1~6종인데 여기 코멘트는 1~5종 — 확인 필요)</td></tr>
+        <tr><td>charge_type</td><td>smallint</td><td>0:NODE_STEP, 1:OPEN_ROAD, 2:CLOSED_ROAD (SPEED/PARKING 없음 — TOLL 확정 전용이라)</td></tr>
+        <tr><td>from_id / to_id</td><td>varchar(20)</td><td>출발/도착 노드 또는 링크 ID</td></tr>
+        <tr><td>fare_amount</td><td>integer</td><td>기본 요금(원)</td></tr>
+        <tr><td>vat_amount</td><td>integer</td><td>부가세(원)</td></tr>
+        <tr><td>final_amount</td><td>integer</td><td>최종 과금액(원)</td></tr>
+        <tr><td>charge_status</td><td>smallint</td><td>0:PENDING_AUDIT, 1:CONFIRMED, 2:CANCELLED, 3:MANUAL_AUDIT (prim_chargehand.charge_status와 값 의미가 또 다름)</td></tr>
+        <tr><td>trip_start_dt / trip_end_dt</td><td>varchar(14)</td><td>운행 시작/종료 시각</td></tr>
+        <tr><td>reg_dt</td><td>varchar(14)</td><td>등록 일시</td></tr>
+        <tr><td>app_send_yn / app_send_dt</td><td>varchar</td><td>앱서버 전송 여부/일시</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section id="prim_vltncharge">
+    <h2>prim_vltncharge <span class="badge confirmed">확인됨</span></h2>
+    <div class="src">테이블 코멘트: "위반 과금 내역 (과금서버가 Insert 함)"</div>
+    <div class="card">
+      <table>
+        <tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
+        <tr><td class="pk">trip_id / device_key / trip_seq</td><td>varchar/varchar/int</td><td>PK. CHARGE_TARGET.TRIP_ID·TRIP_SEQ 참조</td></tr>
+        <tr><td>violation_type</td><td>smallint</td><td>0:SPEED, 1:PARKING</td></tr>
+        <tr><td>from_id / to_id</td><td>varchar(20)</td><td>위반 구간 출발/도착 노드 또는 링크 ID</td></tr>
+        <tr><td>lat / lon</td><td>numeric(10,6)</td><td>위반 발생 좌표</td></tr>
+        <tr><td>zone_id</td><td>varchar(20)</td><td>위반 구역 ID</td></tr>
+        <tr><td>speed_limit_kmh / measured_speed_kmh</td><td>smallint</td><td>제한/실측 속도(과속 위반 시)</td></tr>
+        <tr><td>stay_minutes</td><td>integer</td><td>체류 시간(분, 주정차 위반 시). prim_chargehand.stay_seconds(초)와 단위 다름</td></tr>
+        <tr><td>violation_dt</td><td>varchar(14)</td><td>위반 발생 일시</td></tr>
+        <tr><td>fine_amount</td><td>integer</td><td>범칙금(원)</td></tr>
+        <tr><td>reg_dt</td><td>varchar(14)</td><td>등록 일시</td></tr>
+        <tr><td>app_send_yn / app_send_dt</td><td>varchar</td><td>앱서버 전송 여부/일시</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    출처: PostgreSQL <code>ruc</code> 스키마(<code>59.11.91.162</code>) — <code>\d</code> + <code>pg_description</code>
+    (테이블·컬럼 코멘트) + <code>information_schema</code>(FK 제약조건) 전수 조회 (2026-08-04). 컬럼 설명은 전부 실제
+    코멘트 원문 기준이며, 코멘트 상호 모순(예: base_mapinfo.road_id가 은퇴된 base_road를 가리킴)은 그대로 노출하고
+    주석으로 표시했습니다. 상세 논의 경과는 <code>doc/README.txt</code> 참고.
+  </footer>
+</main>
+</div>
+<script>
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default',
+    themeVariables: { fontSize: '17px' },
+    er: { useMaxWidth: true }
+  });
+  (async function renderAllSequential() {
+    const blocks = Array.from(document.querySelectorAll('pre.mermaid'));
+    for (let i = 0; i < blocks.length; i++) {
+      const el = blocks[i];
+      const src = el.textContent;
+      try {
+        const { svg } = await mermaid.render('erdiagram-' + i, src);
+        el.innerHTML = svg;
+      } catch (e) {
+        el.innerHTML = '<p style="color:#e53935">다이어그램 렌더링 실패: ' + e.message + '</p>';
+      }
+    }
+  })();
+</script>
+</body>
+</html>

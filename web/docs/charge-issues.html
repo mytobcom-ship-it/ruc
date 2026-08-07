@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>과금 유형별 문제점·대응방안 요약</title>
+<script src="https://unpkg.com/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  :root {
+    --bg: #f8fafc; --panel: #ffffff; --text: #1e293b; --muted: #64748b;
+    --border: #e2e8f0; --accent: #1e88e5; --code-bg: #f1f5f9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a; --panel: #1e293b; --text: #e2e8f0; --muted: #94a3b8;
+      --border: #334155; --accent: #60a5fa; --code-bg: #0b1220;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", sans-serif;
+    line-height: 1.65; font-size: 18px;
+  }
+  #layout { display: flex; min-height: 100vh; }
+  nav {
+    width: 260px; flex: none; background: var(--panel); border-right: 1px solid var(--border);
+    padding: 22px 16px; position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  }
+  nav h2 { font-size: 15px; margin: 0 0 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  nav a { display: block; font-size: 15.5px; color: var(--text); text-decoration: none; padding: 7px 9px; border-radius: 6px; line-height: 1.4; }
+  nav a:hover { background: var(--code-bg); }
+  nav .grp { margin-top: 18px; font-size: 12.5px; color: var(--muted); font-weight: 700; padding: 0 9px; }
+  main { flex: 1; padding: 32px 40px 90px; max-width: 1200px; }
+  h1 { font-size: 32px; margin: 0 0 8px; }
+  .subtitle { color: var(--muted); font-size: 16.5px; margin-bottom: 26px; }
+  section { margin-bottom: 56px; scroll-margin-top: 16px; }
+  section h2 { font-size: 26px; border-bottom: 3px solid var(--accent); padding-bottom: 8px; margin-bottom: 10px; }
+  .badge-type {
+    display: inline-block; font-size: 14px; font-weight: 700; color: #fff;
+    background: var(--accent); border-radius: 20px; padding: 3px 14px; margin-left: 10px; vertical-align: middle;
+  }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  @media (max-width: 860px) { .grid2 { grid-template-columns: 1fr; } }
+  .box {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px;
+  }
+  .box h3 { margin: 0 0 8px; font-size: 15.5px; }
+  .box.problem { border-left: 4px solid #e53935; }
+  .box.problem h3 { color: #e53935; }
+  .box.solution { border-left: 4px solid #1e88e5; }
+  .box.solution h3 { color: var(--accent); }
+  .box ul { margin: 0; padding-left: 20px; font-size: 14.5px; }
+  .box li { margin-bottom: 6px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px; overflow-x: auto; margin-bottom: 16px;
+  }
+  code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 14px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); }
+  .refs { font-size: 15px; margin: 10px 0 16px; }
+  .refs b { color: var(--accent); }
+  .shared {
+    background: var(--code-bg); border-radius: 8px; padding: 10px 16px; font-size: 14.5px; margin: 20px 0;
+  }
+  footer { color: var(--muted); font-size: 14px; padding: 22px 40px 44px; }
+</style>
+</head>
+<body>
+<div id="layout">
+<nav>
+  <h2>과금 유형별 요약</h2>
+  <a href="#open">개방형(OPEN)</a>
+  <a href="#closed">폐쇄형(CLOSED_ROAD)</a>
+  <a href="#speed">구간단속(SPEED)</a>
+  <a href="#parking">주정차(PARKING)</a>
+  <a href="#shared-issues">공통 이슈</a>
+  <div class="grp">참고</div>
+  <a href="../index.html">← 웹 뷰어로</a>
+  <a href="charge-flow.html">→ 도로이용 과금 알고리즘 Flow(상세)</a>
+  <a href="charge-tables.html">→ 과금 마스터/결과 테이블 구조</a>
+  <a href="charge-spatial-model.html">→ 노드·링크·임시ID·폴리곤 공간모델</a>
+</nav>
+<main>
+  <h1>과금 유형별 문제점·대응방안 요약</h1>
+  <p class="subtitle">
+    유형별 <b>문제점 → 대응방안 → 간소화 판정 로직 → 참조 테이블 → PRIM_CHARGEHAND 매핑</b> 순으로 한 화면에서
+    보기 위한 요약본입니다. 근거·상세 흐름·경고문은 <a href="charge-flow.html">charge-flow.html</a>에,
+    스키마 원문은 <a href="charge-tables.html">charge-tables.html</a>에 있습니다 — 이 문서는 실무 참조용 압축판입니다.
+  </p>
+
+  <section id="open">
+    <h2>개방형 <span class="badge-type">OPEN · charge_type=1</span></h2>
+    <div class="box problem" style="margin-bottom:16px;">
+      <h3>⚠ [2026-08-06 발견] 모델 자체가 미확정 — 아래 내용은 확정 설계가 아님</h3>
+      <p style="margin:0; font-size:14.5px;">
+        게이트 점(point) 이벤트 모델(아래 플로우차트)로 설계했으나, <code>prim_chargehand</code>(charge_type=1) 293건
+        실측은 <b>전부 링크 hop 체인 구조</b>(<code>from_id</code>≠<code>to_id</code>, <code>dist_m</code> 채움,
+        이전 행 <code>to_id</code>=다음 행 <code>from_id</code>)였습니다. 게다가 같은 트립의
+        <code>prim_tollcharge</code>는 이 체인과 <b>다른 ID로 점(from_id=to_id) 형태</b>를 갖고 있어 두 테이블조차
+        서로 안 맞습니다. 게이트 점 이벤트 vs 링크 hop 누적거리, 둘 중 뭐가 맞는지 <b>담당자 확인 전까지 미정</b>
+        — 상세는 <a href="charge-flow.html#open-road">charge-flow.html 1절</a> 참고.
+      </p>
+    </div>
+    <div class="grid2">
+      <div class="box problem">
+        <h3>문제점</h3>
+        <ul>
+          <li><code>base_tollgate.link_id</code>가 실데이터 3건 전부 NULL — 링크ID 매칭 불가</li>
+          <li>GPS는 이산 샘플이라 게이트 좌표에 정확히 안 찍힘</li>
+          <li><b>[신규] 게이트 점 이벤트 vs 링크 hop 누적거리 — 실측 데이터가 모순</b>(위 경고 참고)</li>
+        </ul>
+      </div>
+      <div class="box solution">
+        <h3>대응방안</h3>
+        <ul>
+          <li>게이트 <code>lon/lat</code>과 맵매칭 좌표 간 <b>거리 임계값</b>으로 판정(점 이벤트 채택 시)</li>
+          <li>기존 <code>HaversineMeters</code>(RawLogWorker.h:162) 재사용, 임계값은 config 신규 파라미터</li>
+          <li><b>[신규]</b> 링크 hop 누적거리 모델일 가능성도 있어, 코드 착수 전 담당자와 모델 확정 필요</li>
+        </ul>
+      </div>
+    </div>
+    <div class="card">
+<pre class="mermaid">
+flowchart LR
+    A(["GPS 매칭"]) --> B{"게이트 근접?&lt;br/&gt;(거리&lt;임계값)"}
+    B -->|"아니오"| C(["판정 없음"])
+    B -->|"예"| D(["INSERT 1건, Y"])
+    classDef ok fill:#1e88e5,color:#fff,stroke:#0d47a1;
+    class D ok;
+</pre>
+    </div>
+    <div class="refs"><b>참조 테이블</b>: <code>base_tollgate</code>(gate_div=M) — 위치 판정만, 요금은 2단계(정산) 대상 밖</div>
+    <div class="card">
+      <table>
+        <tr><th>PRIM_CHARGEHAND 컬럼</th><th>값(설계 가정 — 미확정)</th><th>실측 293건 패턴(참고)</th></tr>
+        <tr><td>charge_type</td><td>1</td><td>1(동일)</td></tr>
+        <tr><td>charge_yn</td><td>Y (즉시 확정)</td><td>Y(동일)</td></tr>
+        <tr><td>from_id / to_id</td><td>tollgate_id (동일값)</td><td>road_link.link_id 형식, <b>서로 다른 값</b>(hop 체인)</td></tr>
+        <tr><td>dist_m</td><td>불필요(정액요금)</td><td><b>전부 채움</b>(hop 구간 거리)</td></tr>
+        <tr><td>occur_dt</td><td>통과 시각</td><td>hop 시각</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section id="closed">
+    <h2>폐쇄형 <span class="badge-type">CLOSED_ROAD · charge_type=2</span></h2>
+    <div class="grid2">
+      <div class="box problem">
+        <h3>문제점</h3>
+        <ul>
+          <li>개방형과 동일한 link_id NULL 문제 — 좌표 거리 판정만 가능</li>
+          <li><code>base_tollsection</code>에 없는 (진입,진출) 조합이 나오면 처리 정책 미정</li>
+          <li><b>[신규] 휴게소 장시간 정차(시동 OFF) 시 진입정보 유실</b> — 세션이 메모리에만 있어 TTL(기본 1시간) 초과 정차나 트립 재시작(TRIP_ID 변경) 시 진출해도 무과금될 위험</li>
+        </ul>
+      </div>
+      <div class="box solution">
+        <h3>대응방안</h3>
+        <ul>
+          <li>게이트 좌표 거리 임계값(개방형과 공유 로직)</li>
+          <li>미등록 조합은 <code>charge_status=AUDIT</code>로 남겨 추후 확인(잠정 — 확정 필요)</li>
+          <li><b>[신규]</b> 진입 시 세션+DB 동시 기록(durable), 진출 판정 시 DEVICE_KEY 기준으로도 조회, CLOSED_ROAD 전용 장기 TTL, 일단위 배치로 영구 미종결 스윕</li>
+        </ul>
+      </div>
+    </div>
+    <div class="card">
+<pre class="mermaid">
+flowchart LR
+    A(["GPS 매칭"]) --> B{"진입 게이트&lt;br/&gt;근접?"}
+    B -->|"예"| C["세션+DB 동시 기록&lt;br/&gt;(신규, durable)"]
+    B -->|"아니오"| D{"세션 진행중?"}
+    D -->|"아니오"| D2{"DEVICE_KEY 미종결&lt;br/&gt;DB기록 있음?(신규)"}
+    D2 -->|"예"| D3["세션 복원(신규)"]
+    D2 -->|"아니오"| E(["판정 없음"])
+    D3 --> F
+    D -->|"예"| F{"진출 게이트&lt;br/&gt;근접?"}
+    F -->|"아니오"| G(["세션 유지, 누적거리 갱신"])
+    F -->|"예"| H(["INSERT 1건&lt;br/&gt;(진입+진출 합침), Y&lt;br/&gt;DB durable기록 종결(신규)"])
+    D -.->|"장기 TTL 만료(신규)"| I1(["세션만 만료&lt;br/&gt;DB기록 유지"])
+    S[["일단위 배치 스윕(신규)"]] -.-> I2(["AUDIT INSERT"])
+    classDef ok fill:#1e88e5,color:#fff,stroke:#0d47a1;
+    classDef audit fill:#e53935,color:#fff,stroke:#b71c1c;
+    classDef new fill:#8e24aa,color:#fff,stroke:#4a148c;
+    class H ok;
+    class I1,I2 audit;
+    class C,D2,D3,S new;
+</pre>
+    </div>
+    <div class="refs"><b>참조 테이블</b>: <code>base_tollgate</code>(gate_div=I/O/B) — 이번 단계는 위치 판정만, <code>base_tollsection</code>(요금)은 2단계 대상 밖</div>
+    <div class="card">
+      <table>
+        <tr><th>PRIM_CHARGEHAND 컬럼</th><th>값</th></tr>
+        <tr><td>charge_type</td><td>2</td></tr>
+        <tr><td>charge_yn</td><td>Y (진출 시 확정) / AUDIT(미종결)</td></tr>
+        <tr><td>from_id / to_id</td><td>진입게이트ID / 진출게이트ID</td></tr>
+        <tr><td>dist_m</td><td>누적거리 (참고용, 요금 산출엔 미사용)</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section id="speed">
+    <h2>구간단속 <span class="badge-type">SPEED · charge_type=3</span></h2>
+    <div class="grid2">
+      <div class="box problem">
+        <h3>문제점</h3>
+        <ul>
+          <li><code>base_roadlink</code>엔 link_id/f_node/t_node가 아예 없음 — 순수 좌표 판정만 가능</li>
+          <li><code>base_mapinfo</code>와 <code>base_roadlink</code> 이중화 — 어느 쪽이 정답인지 미확정</li>
+          <li>GPS 샘플 간격이 넓으면 구간을 통째로 건너뛸 위험</li>
+        </ul>
+      </div>
+      <div class="box solution">
+        <h3>대응방안</h3>
+        <ul>
+          <li>LINE을 버퍼링해 폴리곤(회랑)으로 변환 → point-in-polygon 판정(주정차용 로직 재사용)</li>
+          <li><code>base_roadlink</code>를 잠정 채택(실데이터·FK·번호체계 근거 우세) — <b>담당자 최종 확인 필요</b></li>
+          <li>이전~현재 GPS 사이 맵매칭 경로까지 교차판정 확장 필요(놓침 방지, 미구현)</li>
+        </ul>
+      </div>
+    </div>
+    <div class="card">
+<pre class="mermaid">
+flowchart LR
+    A(["GPS 매칭"]) --> B{"회랑(버퍼) 진입?"}
+    B -->|"예"| C["세션 저장(진입시각)"]
+    B -->|"아니오"| D{"세션 진행중?"}
+    D -->|"아니오"| E(["판정 없음"])
+    D -->|"예"| F{"회랑 진출?"}
+    F -->|"아니오"| G(["세션 유지, 누적거리/시간 갱신"])
+    F -->|"예"| H["평균속도 = 거리÷시간"]
+    H --> I{"제한속도 초과?"}
+    I -->|"아니오"| J(["INSERT 1건, N"])
+    I -->|"예"| K(["INSERT 1건, Y"])
+    D -.->|"TTL 만료"| L(["AUDIT INSERT"])
+    classDef ok fill:#1e88e5,color:#fff,stroke:#0d47a1;
+    classDef warn fill:#fb8c00,color:#fff,stroke:#e65100;
+    classDef audit fill:#e53935,color:#fff,stroke:#b71c1c;
+    class K ok;
+    class J warn;
+    class L audit;
+</pre>
+    </div>
+    <div class="refs"><b>참조 테이블</b>: <code>base_roadlink</code>(road_kind=3, LINE, speed_limit_kmh) — 범칙금 산정용 <code>base_fare</code>는 2단계 대상 밖</div>
+    <div class="card">
+      <table>
+        <tr><th>PRIM_CHARGEHAND 컬럼</th><th>값</th></tr>
+        <tr><td>charge_type</td><td>3</td></tr>
+        <tr><td>charge_yn</td><td>Y/N (여기서 위반여부 확정, 단순 기록 아님)</td></tr>
+        <tr><td>speed_kmh / speed_limit_kmh</td><td>평균속도 / base_roadlink.speed_limit_kmh</td></tr>
+        <tr><td>zone_id</td><td>base_roadlink.road_id</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section id="parking">
+    <h2>주정차 <span class="badge-type">PARKING · charge_type=4</span></h2>
+    <div class="grid2">
+      <div class="box problem">
+        <h3>문제점</h3>
+        <ul>
+          <li>point-in-polygon 판정 로직 자체가 아직 없음(신규 구현)</li>
+          <li><code>nDriveStatus</code>(DRIVE_STATUS_PARKED)가 RawLogWorker.cpp에서 아직 안 읽힘</li>
+          <li>유예시간(10분) 근거가 <code>base_fare</code> 컬럼명(<code>_10min_down/up</code>) 추론뿐 — 확정 아님</li>
+          <li><code>base_roadlink</code> 실테스트 데이터 1건뿐(검증 부족)</li>
+        </ul>
+      </div>
+      <div class="box solution">
+        <h3>대응방안</h3>
+        <ul>
+          <li>point-in-polygon 신규 구현(구간단속과 공유)</li>
+          <li><code>nDriveStatus</code> 판정 진입점 신규 배선</li>
+          <li>10분을 전역 상수로 잠정 채택 — <b>담당자 확인 필요</b></li>
+        </ul>
+      </div>
+    </div>
+    <div class="card">
+<pre class="mermaid">
+flowchart LR
+    A(["GPS 매칭&lt;br/&gt;(nDriveStatus)"]) --> B{"PARKED 시작?"}
+    B -->|"예"| C["세션 저장(시작시각·좌표)"]
+    B -->|"아니오"| D{"세션 진행중?"}
+    D -->|"아니오"| E(["판정 없음"])
+    D -->|"예"| F{"이동 재개 또는&lt;br/&gt;트립 종료?"}
+    F -->|"아니오"| G(["세션 유지"])
+    F -->|"예"| H["체류시간 계산"]
+    H --> I{"금지구역(POLY) 내부?"}
+    I -->|"아니오"| J(["INSERT 1건, N"])
+    I -->|"예"| K{"10분 초과?"}
+    K -->|"아니오"| L(["INSERT 1건, N"])
+    K -->|"예"| M(["INSERT 1건, Y"])
+    D -.->|"TTL 만료"| N(["AUDIT INSERT"])
+    classDef ok fill:#1e88e5,color:#fff,stroke:#0d47a1;
+    classDef warn fill:#fb8c00,color:#fff,stroke:#e65100;
+    classDef audit fill:#e53935,color:#fff,stroke:#b71c1c;
+    class M ok;
+    class J,L warn;
+    class N audit;
+</pre>
+    </div>
+    <div class="refs"><b>참조 테이블</b>: <code>base_roadlink</code>(road_kind=4, POLY) — 범칙금 산정용 <code>base_fare</code>는 2단계 대상 밖</div>
+    <div class="card">
+      <table>
+        <tr><th>PRIM_CHARGEHAND 컬럼</th><th>값</th></tr>
+        <tr><td>charge_type</td><td>4</td></tr>
+        <tr><td>charge_yn</td><td>Y/N (여기서 위반여부 확정)</td></tr>
+        <tr><td>stay_seconds</td><td>체류시간(초)</td></tr>
+        <tr><td>zone_id</td><td>base_roadlink.road_id</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section id="shared-issues">
+    <h2>공통 이슈</h2>
+    <div class="shared">
+      <b>게이트 계열(개방형·폐쇄형)</b>: link_id NULL로 좌표 거리 판정 공유 — 임계값 config 파라미터 하나로 통일 가능.<br/>
+      <b>구역 계열(구간단속·주정차)</b>: point-in-polygon 로직 공유 — 구간단속은 LINE을 버퍼링해 폴리곤화하면 동일 함수 재사용.<br/>
+      <b>모든 유형 공통</b>: <code>VEHICLE_TRIP_SESSION</code> 확장 필드 필요(현재 0개), <code>strChargeInsertSQL</code> 실행 코드 없음,
+      캐시 계층 미구현, GPS 샘플 간 놓침 방지 로직 미구현.
+    </div>
+  </section>
+
+  <footer>
+    doc/README.txt(A~I절)·web/docs/charge-flow.html·web/docs/charge-tables.html 논의 및 운영 DB(59.11.91.162/ruc)
+    실데이터 조회(2026-08-06)를 압축 요약한 문서입니다. 상세 근거·미해결 이슈 전체 목록은 charge-flow.html 7절 참고.
+  </footer>
+</main>
+</div>
+<script>
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default',
+    themeVariables: { fontSize: '16px' },
+    flowchart: { curve: 'basis', useMaxWidth: true, padding: 8, nodeSpacing: 20, rankSpacing: 28 }
+  });
+  (async function renderAllSequential() {
+    const blocks = Array.from(document.querySelectorAll('pre.mermaid'));
+    for (let i = 0; i < blocks.length; i++) {
+      const el = blocks[i];
+      const src = el.textContent;
+      try {
+        const { svg } = await mermaid.render('flowdiagram-' + i, src);
+        el.innerHTML = svg;
+      } catch (e) {
+        el.innerHTML = '<p style="color:#e53935">다이어그램 렌더링 실패: ' + e.message + '</p>';
+      }
+    }
+  })();
+</script>
+</body>
+</html>

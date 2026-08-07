@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>과금 유형별 공간모델 — 노드·링크·임시ID·폴리곤</title>
+<style>
+  :root {
+    --bg: #f8fafc; --panel: #ffffff; --text: #1e293b; --muted: #64748b;
+    --border: #e2e8f0; --accent: #1e88e5; --code-bg: #f1f5f9;
+    --accent-open: #a3742a; --accent-closed: #1e88e5; --accent-speed: #c8524a; --accent-parking: #7c5cc7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a; --panel: #1e293b; --text: #e2e8f0; --muted: #94a3b8;
+      --border: #334155; --accent: #60a5fa; --code-bg: #0b1220;
+      --accent-open: #cf9f55; --accent-closed: #60a5fa; --accent-speed: #e07a70; --accent-parking: #a692ea;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", sans-serif;
+    line-height: 1.65; font-size: 18px;
+  }
+  #layout { display: flex; min-height: 100vh; }
+  nav {
+    width: 290px; flex: none; background: var(--panel); border-right: 1px solid var(--border);
+    padding: 22px 16px; position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  }
+  nav h2 { font-size: 15px; margin: 0 0 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  nav a { display: block; font-size: 15.5px; color: var(--text); text-decoration: none; padding: 7px 9px; border-radius: 6px; line-height: 1.4; }
+  nav a:hover { background: var(--code-bg); }
+  nav .grp { margin-top: 18px; font-size: 12.5px; color: var(--muted); font-weight: 700; padding: 0 9px; }
+  main { flex: 1; padding: 32px 40px 90px; max-width: 1000px; }
+  h1 { font-size: 32px; margin: 0 0 8px; }
+  .subtitle { color: var(--muted); font-size: 16.5px; margin-bottom: 10px; max-width: 68ch; }
+  .scope { color: var(--muted); font-size: 15px; margin: 0 0 24px; max-width: 68ch; }
+  .scope b { color: var(--text); }
+  section { margin-bottom: 54px; scroll-margin-top: 16px; }
+  section h2 { font-size: 24px; margin-bottom: 4px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .type-code {
+    font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 13px; font-weight: 700;
+    padding: 2px 10px; border-radius: 20px;
+  }
+  #open h2 { border-bottom: 3px solid var(--accent-open); padding-bottom: 8px; }
+  #closed h2 { border-bottom: 3px solid var(--accent-closed); padding-bottom: 8px; }
+  #speed h2 { border-bottom: 3px solid var(--accent-speed); padding-bottom: 8px; }
+  #parking h2 { border-bottom: 3px solid var(--accent-parking); padding-bottom: 8px; }
+  #open .type-code { background: #a3742a26; color: var(--accent-open); }
+  #closed .type-code { background: #1e88e526; color: var(--accent-closed); }
+  #speed .type-code { background: #c8524a26; color: var(--accent-speed); }
+  #parking .type-code { background: #7c5cc726; color: var(--accent-parking); }
+  .mechanism { color: var(--muted); font-size: 15.5px; margin: 10px 0 18px; max-width: 66ch; }
+  .mechanism b { color: var(--text); }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 8px; overflow-x: auto; margin-bottom: 10px;
+  }
+  .card svg { display: block; width: 100%; height: auto; min-width: 560px; }
+  figcaption { font-size: 13.5px; color: var(--muted); margin: 8px 4px 0; }
+  .fig text { fill: currentColor; font-family: ui-monospace, "SF Mono", Consolas, monospace; }
+  .fig .node { fill: var(--panel); stroke: currentColor; stroke-width: 2; }
+  .fig .link { stroke: currentColor; stroke-width: 2; fill: none; }
+  .fig .muted-link { stroke: var(--muted); stroke-width: 1.6; fill: none; }
+  .fig .dash { stroke-dasharray: 4 3; }
+  .fig .arrow { fill: currentColor; }
+  .fig .label-muted { fill: var(--muted); font-size: 11px; }
+  .note {
+    background: var(--code-bg); border-left: 4px solid var(--accent); border-radius: 4px;
+    padding: 12px 16px; font-size: 15px; margin: 14px 0 0; color: var(--text);
+  }
+  .warn {
+    background: #e5393512; border-left: 4px solid #e53935; border-radius: 4px;
+    padding: 12px 16px; font-size: 15px; margin: 14px 0 0; color: var(--text);
+  }
+  .warn b { color: #e53935; }
+  .legend { display: flex; gap: 20px; flex-wrap: wrap; font-size: 14.5px; color: var(--muted); margin: 10px 0 30px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .legend b { color: var(--text); }
+  code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 14.5px; }
+  footer { color: var(--muted); font-size: 14px; padding: 22px 40px 44px; }
+</style>
+</head>
+<body>
+<div id="layout">
+<nav>
+  <h2>과금 공간모델</h2>
+  <a href="#open">개방형 (OPEN)</a>
+  <a href="#closed">폐쇄형 (CLOSED_ROAD)</a>
+  <a href="#speed">구간단속 (SPEED)</a>
+  <a href="#parking">주정차단속 (PARKING)</a>
+  <div class="grp">참고</div>
+  <a href="../index.html">← 웹 뷰어로</a>
+  <a href="charge-flow.html">→ 도로이용 과금 알고리즘 Flow(상세)</a>
+  <a href="charge-issues.html">→ 유형별 문제점·대응방안 요약</a>
+  <a href="charge-tables.html">→ 과금 마스터/결과 테이블 구조</a>
+</nav>
+<main>
+  <h1>과금 유형별 노드·링크·임시ID·폴리곤 공간모델</h1>
+  <p class="subtitle">
+    맵매칭 알고리즘(좌표→링크 스냅) 자체는 제외하고, 맵매칭 결과가 나온 <b>이후</b> 각 과금 유형이 공간을
+    무엇으로 표현하고(점·구간·구역), 판정 중 어떤 임시 상태(ID·세션)를 들고 있는지만 그림으로 정리한 문서입니다.
+  </p>
+  <p class="scope">
+    상세 판정 흐름은 <a href="charge-flow.html">charge-flow.html</a>, 근거 데이터는
+    <code>doc/README.txt</code> B·I절 참고 — 이 문서는 <b>공간 표현 방식</b>에만 집중한 보조 자료입니다.
+  </p>
+
+  <div class="legend" role="group" aria-label="다이어그램 기호 범례">
+    <span>
+      <svg width="24" height="24" viewBox="0 0 26 26" aria-hidden="true"><circle cx="13" cy="13" r="5.5" fill="var(--panel)" stroke="currentColor" stroke-width="2"/></svg>
+      <b>노드</b> · 지점
+    </span>
+    <span>
+      <svg width="28" height="24" viewBox="0 0 30 26" aria-hidden="true">
+        <circle cx="4" cy="13" r="3" fill="currentColor"/><line x1="4" y1="13" x2="26" y2="13" stroke="currentColor" stroke-width="2"/><circle cx="26" cy="13" r="3" fill="currentColor"/>
+      </svg>
+      <b>링크</b> · 구간
+    </span>
+    <span>
+      <svg width="24" height="24" viewBox="0 0 26 26" aria-hidden="true">
+        <line x1="13" y1="4" x2="13" y2="22" stroke="currentColor" stroke-width="2"/><polygon points="13,4 23,9 13,14" fill="currentColor"/>
+      </svg>
+      <b>게이트</b> · 통과지점
+    </span>
+    <span>
+      <svg width="32" height="24" viewBox="0 0 34 26" aria-hidden="true">
+        <rect x="2" y="7" width="30" height="13" rx="6.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-dasharray="3.5 2.5"/><circle cx="9" cy="13.5" r="1.8" fill="currentColor"/>
+      </svg>
+      <b>임시ID</b> · 세션/GatePairID
+    </span>
+    <span>
+      <svg width="24" height="24" viewBox="0 0 26 26" aria-hidden="true">
+        <polygon points="4,20 8,5 21,4 24,17 13,23" fill="currentColor" opacity="0.22" stroke="currentColor" stroke-width="1.6"/>
+      </svg>
+      <b>폴리곤</b> · 구역(zone)
+    </span>
+  </div>
+
+  <!-- ============ OPEN ============ -->
+  <section id="open">
+    <h2>개방형 <span class="type-code">OPEN · charge_type=1</span></h2>
+    <p class="mechanism">게이트를 지나는 순간 <b>점(point) 이벤트</b>로 즉시 확정 — 원래 이렇게 설계했지만, 실측
+    데이터는 전혀 다른 구조를 보여서 <b>어느 모델이 맞는지 아직 미확정</b>입니다.</p>
+
+    <div class="card">
+      <svg class="fig" viewBox="0 0 760 300" role="img" aria-label="개방형 과금의 두 가지 공간모델 비교. 모델 A는 링크 위 한 지점(게이트)을 지나는 순간 하나의 이벤트가 발생하는 점 이벤트 모델이고, 모델 B는 링크 체인을 이동하며 각 노드 경계마다 이벤트가 쌓이는 hop 누적 모델이다. 실측 데이터는 모델 B와 같은 형태를 보이지만 게이트 위치와 링크가 연결되지 않아 두 모델 중 무엇이 맞는지 확정되지 않았다.">
+        <text x="190" y="26" text-anchor="middle" font-size="13" font-weight="700">모델 A · 점 이벤트 (설계 가정)</text>
+        <text x="190" y="42" text-anchor="middle" class="label-muted">charge_type=1, from_id = to_id</text>
+        <line x1="40" y1="180" x2="340" y2="180" class="link"/>
+        <circle cx="40" cy="180" r="6" class="node"/>
+        <circle cx="340" cy="180" r="6" class="node"/>
+        <line x1="190" y1="150" x2="190" y2="180" style="stroke:var(--accent-open);stroke-width:2"/>
+        <polygon points="190,148 208,156 190,164" style="fill:var(--accent-open)"/>
+        <line x1="88" y1="180" x2="180" y2="180" class="muted-link dash"/>
+        <polygon points="180,180 168,175 168,185" class="arrow" style="fill:var(--muted)"/>
+        <circle cx="190" cy="180" r="6" style="fill:var(--accent-open)"/>
+        <text x="190" y="207" text-anchor="middle" font-size="12" font-weight="700" style="fill:var(--accent-open)">INSERT 1건 · Y (즉시확정)</text>
+        <text x="190" y="226" text-anchor="middle" class="label-muted">임시ID 불필요 (상태 없음)</text>
+
+        <line x1="380" y1="52" x2="380" y2="248" class="muted-link dash"/>
+        <text x="380" y="38" text-anchor="middle" font-size="15" font-weight="700">?</text>
+
+        <text x="570" y="26" text-anchor="middle" font-size="13" font-weight="700">모델 B · 링크 Hop 누적 (실측 293건)</text>
+        <text x="570" y="42" text-anchor="middle" class="label-muted">charge_type=1, from_id ≠ to_id, dist_m 채움</text>
+        <line x1="430" y1="180" x2="520" y2="180" class="link"/>
+        <line x1="520" y1="180" x2="610" y2="180" class="link"/>
+        <line x1="610" y1="180" x2="700" y2="180" class="link"/>
+        <text x="475" y="170" text-anchor="middle" class="label-muted">dist_m=779</text>
+        <text x="565" y="170" text-anchor="middle" class="label-muted">dist_m=949</text>
+        <text x="655" y="170" text-anchor="middle" class="label-muted">dist_m=950</text>
+        <circle cx="430" cy="180" r="6" class="node"/>
+        <circle cx="520" cy="180" r="6" class="node"/>
+        <circle cx="610" cy="180" r="6" class="node"/>
+        <circle cx="700" cy="180" r="6" class="node"/>
+        <circle cx="520" cy="180" r="3.2" style="fill:var(--accent-open)"/>
+        <circle cx="610" cy="180" r="3.2" style="fill:var(--accent-open)"/>
+        <circle cx="700" cy="180" r="3.2" style="fill:var(--accent-open)"/>
+        <line x1="565" y1="118" x2="565" y2="180" class="muted-link dash"/>
+        <line x1="565" y1="100" x2="565" y2="118" style="stroke:var(--accent-open);stroke-width:2;opacity:.55"/>
+        <polygon points="565,100 581,107 565,114" style="fill:var(--accent-open);opacity:.55"/>
+        <text x="565" y="90" text-anchor="middle" class="label-muted">게이트 · link_id=NULL?</text>
+        <text x="570" y="207" text-anchor="middle" font-size="12" font-weight="700" style="fill:var(--accent-open)">hop마다 INSERT (누적거리)</text>
+        <text x="570" y="226" text-anchor="middle" class="label-muted">prim_tollcharge와 ID 불일치</text>
+      </svg>
+      <figcaption>모델 A(게이트 점 이벤트)와 모델 B(링크 hop 누적)는 서로 다른 공간 표현을 쓴다 — 실측 데이터는 B 형태이지만 게이트-링크 연결이 없어 확정되지 않았다.</figcaption>
+    </div>
+    <div class="warn"><b>미해결</b> — 두 모델 중 확정 전 코드 착수 보류 (<code>doc/README.txt</code> I-7)</div>
+  </section>
+
+  <!-- ============ CLOSED_ROAD ============ -->
+  <section id="closed">
+    <h2>폐쇄형 <span class="type-code">CLOSED_ROAD · charge_type=2</span></h2>
+    <p class="mechanism">진입 게이트에서 <b>임시ID(GatePairID)</b>를 열고, 링크 체인을 이동하며 거리를 누적하다가
+    진출 게이트에서 짝을 지어 닫는 <b>구간 짝 이벤트</b>입니다. 이동 중 임시ID가 사라지면(시동 OFF 등) 무과금
+    위험이 있어 DB에도 같이 남겨두는 대응이 필요합니다.</p>
+
+    <div class="card">
+      <svg class="fig" viewBox="0 0 760 320" role="img" aria-label="폐쇄형 과금의 공간모델. 진입 게이트에서 임시ID(GatePairID)가 열리고 링크 체인을 따라 이동하며 거리를 누적하다가 진출 게이트에서 짝을 지어 닫힌다. 아래쪽에는 이동 중 세션이 TTL로 만료되어도 DB에 durable 기록이 남아 DEVICE_KEY로 복원할 수 있는 대응방안을 보여준다.">
+        <line x1="70" y1="140" x2="690" y2="140" class="link"/>
+        <line x1="70" y1="140" x2="430" y2="140" style="stroke:var(--accent-closed);stroke-width:4"/>
+        <circle cx="230" cy="140" r="5.5" class="node"/>
+        <circle cx="370" cy="140" r="5.5" class="node"/>
+        <circle cx="510" cy="140" r="5.5" class="node"/>
+
+        <line x1="70" y1="106" x2="70" y2="140" style="stroke:var(--accent-closed);stroke-width:2"/>
+        <polygon points="70,104 89,112 70,120" style="fill:var(--accent-closed)"/>
+        <text x="70" y="92" text-anchor="middle" font-size="12" font-weight="700" style="fill:var(--accent-closed)">진입 게이트 (I)</text>
+
+        <line x1="690" y1="106" x2="690" y2="140" style="stroke:var(--accent-closed);stroke-width:2"/>
+        <polygon points="690,104 671,112 690,120" style="fill:var(--accent-closed)"/>
+        <text x="690" y="92" text-anchor="middle" font-size="12" font-weight="700" style="fill:var(--accent-closed)">진출 게이트 (O)</text>
+
+        <circle cx="430" cy="140" r="6.5" style="fill:var(--accent-closed)"/>
+        <rect x="370" y="68" width="120" height="38" rx="8" class="dash" style="stroke:var(--accent-closed);fill:var(--panel)"/>
+        <text x="430" y="87" text-anchor="middle" font-size="11.5" font-weight="700" style="fill:var(--accent-closed)">GatePairID</text>
+        <text x="430" y="100" text-anchor="middle" class="label-muted">entry=G-I, dist=360m</text>
+        <line x1="430" y1="106" x2="430" y2="134" class="muted-link dash"/>
+
+        <text x="380" y="200" text-anchor="middle" font-size="12.5" font-weight="700" class="label-muted">— 대응방안: 장시간 정차(시동 OFF)로 세션이 끊겨도 —</text>
+
+        <circle cx="150" cy="255" r="6" style="fill:var(--muted);opacity:.6"/>
+        <rect x="90" y="222" width="120" height="32" rx="8" class="dash" style="stroke:var(--muted);opacity:.6;fill:var(--panel)"/>
+        <text x="150" y="242" text-anchor="middle" font-size="10.5" style="fill:var(--muted)">세션 만료(TTL 1h)</text>
+
+        <line x1="222" y1="255" x2="315" y2="255" class="muted-link"/>
+        <polygon points="315,255 305,250 305,260" class="arrow" style="fill:var(--muted)"/>
+        <text x="268" y="245" text-anchor="middle" class="label-muted">DEVICE_KEY 조회</text>
+
+        <rect x="325" y="228" width="100" height="52" rx="8" style="stroke:var(--accent-closed);fill:var(--panel);stroke-width:1.6"/>
+        <text x="375" y="252" text-anchor="middle" font-size="13" font-weight="700" style="fill:var(--accent-closed)">DB</text>
+        <text x="375" y="268" text-anchor="middle" class="label-muted">durable 기록 유지</text>
+
+        <line x1="437" y1="255" x2="530" y2="255" class="muted-link" style="stroke:var(--accent-closed)"/>
+        <polygon points="530,255 520,250 520,260" class="arrow" style="fill:var(--accent-closed)"/>
+        <text x="483" y="245" text-anchor="middle" class="label-muted">복원</text>
+
+        <circle cx="555" cy="255" r="6" style="fill:var(--accent-closed)"/>
+        <line x1="565" y1="248" x2="571" y2="255" style="stroke:var(--accent-closed);stroke-width:2"/>
+        <line x1="571" y1="255" x2="583" y2="240" style="stroke:var(--accent-closed);stroke-width:2"/>
+
+        <text x="380" y="308" text-anchor="middle" class="label-muted">① 진입시 DB 동시기록 ② DEVICE_KEY 미종결 조회 ③ 전용 장기TTL ④ 일단위 배치 스윕</text>
+      </svg>
+      <figcaption>진입~진출 사이 GatePairID가 거리를 들고 이동하고, 세션이 끊겨도 DB 기록으로 DEVICE_KEY 기준 복원할 수 있게 하는 대응 구조.</figcaption>
+    </div>
+    <div class="warn"><b>미해결</b> — DB durable 기록의 테이블 구조·배치 주기·TTL 임계값 미확정 (<code>doc/README.txt</code> I-8)</div>
+  </section>
+
+  <!-- ============ SPEED ============ -->
+  <section id="speed">
+    <h2>구간단속 <span class="type-code">SPEED · charge_type=3</span></h2>
+    <p class="mechanism">링크(LINE)를 그대로 쓰지 않고 <b>버퍼링해 폴리곤(회랑)</b>으로 만든 뒤, 진입~진출 구간의
+    평균속도로 위반을 판정합니다. 판정 결과(Y/N)가 이 단계에서 바로 나온다는 점이 다른 유형과 다릅니다.</p>
+
+    <div class="card">
+      <svg class="fig" viewBox="0 0 760 265" role="img" aria-label="구간단속 과금의 공간모델. 도로 링크를 버퍼링해 만든 폴리곤 회랑에 진입하는 순간 시각을 기록하고, 회랑을 빠져나오는 순간까지의 거리와 시간으로 평균속도를 계산해 제한속도와 비교, 위반 여부를 이 단계에서 바로 판정한다.">
+        <line x1="100" y1="140" x2="660" y2="140" class="link"/>
+        <circle cx="100" cy="140" r="6" class="node"/>
+        <circle cx="660" cy="140" r="6" class="node"/>
+        <text x="100" y="160" text-anchor="middle" class="label-muted">f_node</text>
+        <text x="660" y="160" text-anchor="middle" class="label-muted">t_node</text>
+
+        <polygon points="100,122 660,122 660,158 100,158" class="dash" style="stroke:var(--accent-speed);fill:var(--accent-speed);fill-opacity:.12"/>
+
+        <polygon points="220,105 232,120 208,120" style="fill:var(--accent-speed)"/>
+        <line x1="220" y1="120" x2="220" y2="140" class="muted-link dash"/>
+        <text x="220" y="93" text-anchor="middle" font-size="11.5" font-weight="700" style="fill:var(--accent-speed)">진입 (entry_time=t0)</text>
+
+        <polygon points="560,105 572,120 548,120" style="fill:var(--accent-speed)"/>
+        <line x1="560" y1="120" x2="560" y2="140" class="muted-link dash"/>
+        <text x="560" y="93" text-anchor="middle" font-size="11.5" font-weight="700" style="fill:var(--accent-speed)">진출 (t1)</text>
+
+        <text x="380" y="196" text-anchor="middle" font-size="12.5" font-weight="700">avg_speed = dist_m ÷ (t1−t0)  vs  speed_limit_kmh</text>
+        <line x1="380" y1="203" x2="330" y2="216" class="muted-link"/>
+        <line x1="380" y1="203" x2="460" y2="216" class="muted-link"/>
+
+        <rect x="270" y="218" width="110" height="30" rx="15" style="stroke:var(--muted);fill:none"/>
+        <text x="325" y="238" text-anchor="middle" font-size="12" style="fill:var(--muted)">N · 통과</text>
+
+        <rect x="400" y="218" width="120" height="30" rx="15" style="stroke:var(--accent-speed);fill:var(--accent-speed);fill-opacity:.15"/>
+        <text x="460" y="238" text-anchor="middle" font-size="12" font-weight="700" style="fill:var(--accent-speed)">Y · INSERT</text>
+
+        <text x="380" y="260" text-anchor="middle" class="label-muted">LINE → 버퍼 폴리곤 변환 (point-in-polygon 판정)</text>
+      </svg>
+      <figcaption>회랑 진입~진출 사이 평균속도를 계산해, 판정 단계에서 바로 위반 여부(Y/N)를 확정한다.</figcaption>
+    </div>
+    <div class="note"><b>미확정</b> — <code>base_mapinfo</code> vs <code>base_roadlink</code> 이중화, 어느 쪽이 기준인지 담당자 확인 필요</div>
+  </section>
+
+  <!-- ============ PARKING ============ -->
+  <section id="parking">
+    <h2>주정차단속 <span class="type-code">PARKING · charge_type=4</span></h2>
+    <p class="mechanism">면적을 가진 <b>폴리곤 구역</b> 안에 머무는 <b>체류 이벤트</b>입니다. 거리가 아니라
+    <b>체류시간</b>이 판정 기준이며, 정차가 시작되는 순간부터 임시ID가 시간을 들고 있다가 이동 재개나 트립
+    종료 시점에 닫힙니다.</p>
+
+    <div class="card">
+      <svg class="fig" viewBox="0 0 760 365" role="img" aria-label="주정차단속 과금의 공간모델. 폴리곤 구역에 진입해 정차하면 임시ID가 정차 시작 시각을 들고 체류시간을 잰다. 이동을 재개하거나 트립이 종료되면 체류시간을 10분 잠정 기준과 비교해 위반 여부를 판정한다.">
+        <polygon points="300,50 460,45 515,140 420,200 275,175 235,100" class="dash" style="stroke:var(--accent-parking);fill:var(--accent-parking);fill-opacity:.15"/>
+        <circle cx="375" cy="120" r="4" class="node" style="stroke:var(--accent-parking)"/>
+        <line x1="379" y1="120" x2="596" y2="120" class="muted-link dash"/>
+        <text x="602" y="124" text-anchor="start" class="label-muted">zone_id → base_roadlink(POLY)</text>
+
+        <line x1="140" y1="170" x2="248" y2="150" style="stroke:currentColor;stroke-width:2"/>
+        <polygon points="248,150 236,148 240,158" class="arrow"/>
+        <text x="140" y="186" text-anchor="middle" class="label-muted">GPS 진입</text>
+
+        <circle cx="350" cy="140" r="6.5" style="fill:var(--accent-parking)"/>
+        <line x1="352" y1="146" x2="363" y2="223" class="muted-link dash"/>
+        <rect x="290" y="225" width="150" height="42" rx="8" class="dash" style="stroke:var(--accent-parking);fill:var(--panel)"/>
+        <text x="365" y="244" text-anchor="middle" font-size="11.5" font-weight="700" style="fill:var(--accent-parking)">stay_start=t0</text>
+        <text x="365" y="258" text-anchor="middle" class="label-muted">정차 지속 중…</text>
+
+        <circle cx="470" cy="246" r="14" style="stroke:currentColor;fill:none;stroke-width:1.6"/>
+        <line x1="470" y1="246" x2="470" y2="236" style="stroke:currentColor;stroke-width:1.6"/>
+        <line x1="470" y1="246" x2="478" y2="246" style="stroke:currentColor;stroke-width:1.6"/>
+
+        <line x1="450" y1="150" x2="578" y2="185" style="stroke:currentColor;stroke-width:2"/>
+        <polygon points="578,185 566,181 569,191" class="arrow"/>
+        <text x="580" y="203" text-anchor="start" class="label-muted">이동재개 / 트립종료</text>
+
+        <text x="380" y="304" text-anchor="middle" font-size="12.5" font-weight="700">stay_seconds  vs  10분 (잠정)</text>
+        <line x1="380" y1="310" x2="330" y2="316" class="muted-link"/>
+        <line x1="380" y1="310" x2="475" y2="316" class="muted-link"/>
+
+        <rect x="270" y="318" width="120" height="32" rx="16" style="stroke:var(--muted);fill:none"/>
+        <text x="330" y="339" text-anchor="middle" font-size="12" style="fill:var(--muted)">N · 통과</text>
+
+        <rect x="410" y="318" width="130" height="32" rx="16" style="stroke:var(--accent-parking);fill:var(--accent-parking);fill-opacity:.15"/>
+        <text x="475" y="339" text-anchor="middle" font-size="12" font-weight="700" style="fill:var(--accent-parking)">Y · INSERT</text>
+
+        <text x="380" y="360" text-anchor="middle" class="label-muted">point-in-polygon 판정 (구간단속과 공유 로직)</text>
+      </svg>
+      <figcaption>정차 시작부터 이동재개/트립종료까지 체류시간을 재고, 10분(잠정) 기준과 비교해 위반 여부를 판정한다.</figcaption>
+    </div>
+    <div class="note"><b>미확정</b> — point-in-polygon 판정 로직 미구현, 10분 유예시간은 컬럼명 추론뿐</div>
+  </section>
+
+  <footer>
+    출처: <code>doc/README.txt</code> B·I절, <a href="charge-issues.html">charge-issues.html</a>. 맵매칭(좌표→링크 스냅)
+    알고리즘 자체는 이 문서에서 다루지 않음 — 맵매칭 결과가 나온 이후의 공간모델·임시상태만 표현.
+  </footer>
+</main>
+</div>
+</body>
+</html>

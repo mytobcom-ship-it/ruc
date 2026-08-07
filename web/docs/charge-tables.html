@@ -106,6 +106,7 @@
   <a href="charge-issues.html">← 유형별 문제점·대응방안 요약</a>
   <a href="charge-spatial-model.html">← 노드·링크·임시ID·폴리곤 공간모델</a>
   <a href="mapmatch-flow.html">← 맵매칭 알고리즘 Flow</a>
+  <a href="charge-open-gate-test.html">→ 개방식 임시 게이트 테스트 DDL</a>
 </nav>
 <main>
   <h1>과금 마스터/결과 테이블 구조</h1>
@@ -259,6 +260,16 @@ erDiagram
       <span class="badge soft" style="margin:0;">소프트 참조</span> <code>base_tollgate.road_id</code>가 이 테이블을
       하드 FK로 참조(0절 확인) — 폐쇄형(road_kind=2) 테스트 시 여기 먼저 1건 등록 후 게이트를 붙여야 함.
     </div>
+    <div class="note">
+      <b>road_link(표준노드링크)와의 관계 (사용자 논의, 2026-08-08)</b>: 이 테이블은 표준노드링크와 연계하는 컬럼이
+      전혀 없는 <b>완전히 독립적인 "가상 링크"</b>다. 실제 도로망 위상과 무관하게 관리자가 그린 <code>coords</code>로
+      "도로 전체"를 하나의 논리적 단위로 등록하며, <code>f_node</code>/<code>t_node</code> 같은 위상(시작/끝) 컬럼
+      자체가 없다. 폐쇄형(03) 과금에서 이 가상 링크의 양 끝 역할은 <code>base_roadlink</code>가 아니라
+      <a href="#base_tollgate"><code>base_tollgate.gate_div</code></a>(I=진입/O=진출)가 대신한다 — 실제 요금도
+      이동거리 계산이 아니라 <code>base_tollsection</code>의 고정요금표를 쓰는 것도 같은 맥락. 정리:
+      <code>base_roadlink</code> = 가상 링크의 "몸통"(경로 표시용, 위상 없음), <code>base_tollgate</code>(I/O) =
+      그 양 끝 노드 역할.
+    </div>
   </section>
 
   <section id="base_tollgate">
@@ -346,6 +357,17 @@ erDiagram
       안 보임. <b>범칙금 자체는 <a href="#base_fare">base_fare</a>(차종별 구간표)에서 가져오는 것으로 보이나(2026-08-06
       실데이터로 역산 확인), "유예시간"(10분 미만/이상 분기 기준의 "10분") 값 자체는 여전히 어느 테이블에도
       명시적으로 없어 코드 하드코딩 여부는 재작업 시 결정 필요</b>(doc/README.txt H절, charge-flow.html 5절).
+    </div>
+    <div class="note">
+      <b>road_link(표준노드링크)와의 관계 (사용자 논의, 2026-08-08)</b>: <code>road_link</code> 테이블 코멘트가
+      "지도 표출(base_mapinfo)과 분리"라 명시하듯, 이 테이블은 <code>road_link</code>와 동일 테이블이 아니라
+      <code>link_id</code>/<code>f_node</code>/<code>t_node</code>로 <b>선택적</b>으로만 연계되는 <b>별개</b>
+      테이블이다. 다만 <code>zone_kind</code>에 따라 정밀도가 다르다 — <code>01</code>(일반)/<code>02</code>(개방식)는
+      152만+3.1만 건으로 표준노드링크급으로 잘게 쪼갠 것으로 추정되는 반면, <code>04</code>(구간단속)/<code>05</code>(주정차)는
+      예시 zone_id(ZS01/ZP01류)로 볼 때 훨씬 굵은 "구역/구간" 단위다. 즉 "base_mapinfo = 표준노드링크"가 아니라
+      "표준노드링크와 별개이되, 01/02는 우연히 비슷한 세밀도, 04/05는 훨씬 굵은 단위"로 이해하는 게 정확하다.
+      (<a href="#base_roadlink"><code>base_roadlink</code></a>와 대비: 그쪽은 표준노드링크 연계 컬럼 자체가 없는
+      완전 독립적 "가상 링크".)
     </div>
   </section>
 

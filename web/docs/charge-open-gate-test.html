@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>개방식(OPEN) 임시 게이트 테스트 DDL·데이터</title>
+<style>
+  :root {
+    --bg: #f8fafc; --panel: #ffffff; --text: #1e293b; --muted: #64748b;
+    --border: #e2e8f0; --accent: #1e88e5; --code-bg: #f1f5f9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a; --panel: #1e293b; --text: #e2e8f0; --muted: #94a3b8;
+      --border: #334155; --accent: #60a5fa; --code-bg: #0b1220;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", sans-serif;
+    line-height: 1.65; font-size: 18px;
+  }
+  #layout { display: flex; min-height: 100vh; }
+  nav {
+    width: 290px; flex: none; background: var(--panel); border-right: 1px solid var(--border);
+    padding: 22px 16px; position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  }
+  nav h2 { font-size: 15px; margin: 0 0 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  nav a { display: block; font-size: 15.5px; color: var(--text); text-decoration: none; padding: 7px 9px; border-radius: 6px; line-height: 1.4; }
+  nav a:hover { background: var(--code-bg); }
+  nav .grp { margin-top: 18px; font-size: 12.5px; color: var(--muted); font-weight: 700; padding: 0 9px; }
+  main { flex: 1; padding: 32px 40px 90px; max-width: 1280px; }
+  h1 { font-size: 32px; margin: 0 0 8px; }
+  .subtitle { color: var(--muted); font-size: 16.5px; margin-bottom: 26px; }
+  section { margin-bottom: 50px; scroll-margin-top: 16px; }
+  section h2 { font-size: 24px; border-bottom: 3px solid var(--accent); padding-bottom: 8px; margin-bottom: 8px; }
+  .easy-name {
+    display: inline-block; font-size: 15.5px; font-weight: 700; color: var(--accent);
+    background: var(--code-bg); border: 1px solid var(--accent); border-radius: 20px;
+    padding: 4px 14px; margin-bottom: 14px;
+  }
+  .intro {
+    background: var(--code-bg); border-radius: 8px;
+    padding: 10px 16px; margin: 0 0 14px; font-size: 15.5px; color: var(--text);
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px; overflow-x: auto; margin-bottom: 14px;
+  }
+  .note {
+    background: var(--code-bg); border-left: 4px solid var(--accent); border-radius: 4px;
+    padding: 12px 16px; font-size: 15px; margin: 12px 0; color: var(--text);
+  }
+  .note b { color: var(--accent); }
+  .warn {
+    background: #e5393512; border-left: 4px solid #e53935; border-radius: 4px;
+    padding: 12px 16px; font-size: 15px; margin: 12px 0; color: var(--text);
+  }
+  .warn b { color: #e53935; }
+  code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 14.5px; }
+  pre.sql {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px 16px; font-size: 13.5px; overflow-x: auto; white-space: pre; margin: 0;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+  th, td { border: 1px solid var(--border); padding: 8px 11px; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); }
+  td code, th code { white-space: nowrap; }
+  .pk { color: var(--accent); font-weight: 700; }
+  .fk { color: #fb8c00; font-weight: 700; }
+  .badge {
+    display: inline-block; font-size: 12px; font-weight: 700; border-radius: 10px;
+    padding: 1px 8px; margin-left: 6px; vertical-align: middle;
+  }
+  .badge.confirmed { background: #1e88e520; color: var(--accent); border: 1px solid var(--accent); }
+  .badge.estimate { background: #fb8c0020; color: #fb8c00; border: 1px solid #fb8c00; }
+  .badge.testdata { background: #43a04720; color: #43a047; border: 1px solid #43a047; }
+  footer { color: var(--muted); font-size: 14px; padding: 22px 40px 44px; }
+  .src { font-size: 13.5px; color: var(--muted); margin-top: -4px; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+<div id="layout">
+<nav>
+  <h2>개방식 임시 게이트 테스트</h2>
+  <a href="#overview">0. 개요·목적</a>
+  <div class="grp">DDL (roadnet/sql)</div>
+  <a href="#base_roadlink">base_roadlink</a>
+  <a href="#base_tollgate">base_tollgate</a>
+  <a href="#base_tollfare">base_tollfare</a>
+  <div class="grp">샘플 데이터</div>
+  <a href="#sample-data">임시 테스트 데이터 미리보기</a>
+  <div class="grp">참고</div>
+  <a href="../index.html">← 웹 뷰어로</a>
+  <a href="charge-tables.html">← 과금 전체 테이블 구조(원본)</a>
+  <a href="charge-flow.html">← 도로이용 과금 알고리즘 Flow</a>
+  <a href="charge-issues.html">← 유형별 문제점·대응방안 요약</a>
+</nav>
+<main>
+  <h1>개방식(OPEN) 임시 게이트 테스트 — DDL·데이터</h1>
+  <p class="subtitle">
+    "톨게이트처럼 임시로 개방식 도로에 게이트 ID를 부여해 사용" 방식을 테스트하기 위한 최소 구성입니다.
+    <code>base_roadlink</code> → <code>base_tollgate</code>(gate_div=M) → <code>base_tollfare</code> 3개 테이블만
+    있으면 되고, 전국 표준노드링크(<code>road_link</code>)나 <code>base_mapinfo</code>에는 손댈 필요가 없습니다
+    (개방형·폐쇄형 판정은 <code>base_tollgate</code> 계열만 사용 — <a href="charge-tables.html">charge-tables.html</a> I-4 참고).
+  </p>
+
+  <div class="warn">
+    <b>이 문서의 DDL은 실제 <code>pg_dump</code>가 아닙니다.</b>
+    <code>doc/RUC_과금DB_스키마_기준선_v1.0.md</code>(2026-08-07, <code>pg_description</code> 코멘트 조사 기반)를
+    근거로 재구성한 것으로, <span class="badge estimate" style="margin:0;">추정</span> 표시된 항목(정밀도·인덱스·CHECK
+    제약)은 실제 운영 DB에 존재하는지 확인되지 않았습니다. 원격 DB(<code>59.11.91.162</code>) 접속이 복구되면
+    <code>pg_dump --schema-only</code>로 대조검증 후 <code>v1.1</code> 델타 문서에 반영할 것.
+  </div>
+
+  <section id="overview">
+    <h2>0. 개요·목적</h2>
+    <div class="intro">
+      로컬에 원격 DB(<code>59.11.91.162</code>)와 동일 구조의 <code>ruc</code> 테스트 DB를 구성해, 개방식 게이트
+      통과 판정 흐름을 원격 접속 없이도 테스트할 수 있게 하는 것이 목적입니다.
+      실행 순서: <code>base_roadlink.sql</code> → <code>base_tollgate.sql</code> → <code>base_tollfare.sql</code>
+      → <code>base_open_gate_test_data.sql</code>.
+    </div>
+    <div class="card">
+<pre class="sql">psql -U postgres -d ruc -f roadnet/sql/base_roadlink.sql
+psql -U postgres -d ruc -f roadnet/sql/base_tollgate.sql
+psql -U postgres -d ruc -f roadnet/sql/base_tollfare.sql
+psql -U postgres -d ruc -f roadnet/sql/base_open_gate_test_data.sql</pre>
+    </div>
+  </section>
+
+  <section id="base_roadlink">
+    <h2>base_roadlink <span class="badge confirmed">확인됨</span></h2>
+    <div class="easy-name">운영 설정 도로/구역 마스터</div>
+    <div class="src">테이블 코멘트: "운영 설정 도로/구역 — 지도관리에서 직접 그려 등록. road_kind: ZONEKIND(01 일반/02 유료 개방식/03 유료 폐쇄식/04 과속·구간단속/05 주정차단속)"</div>
+    <div class="card">
+      <table>
+        <tr><th>컬럼</th><th>타입</th><th>기본값</th><th>PK/FK</th><th>설명</th></tr>
+        <tr><td class="pk">road_id</td><td>varchar(20)</td><td><code>'RL-Z' || nextval(seq_road_id)</code> <span class="badge estimate" style="margin:0;">추정</span></td><td class="pk">PK</td><td>도로 ID — RL-Znnn 자동 채번</td></tr>
+        <tr><td>road_kind</td><td>varchar(2)</td><td>NULL</td><td>—</td><td>ROADKIND: 0 일반/1 유료개방식/2 유료폐쇄식/3 과속·구간단속/4 주정차단속</td></tr>
+        <tr><td>road_nm</td><td>varchar(100)</td><td>NULL</td><td>—</td><td>도로명(표시용)</td></tr>
+        <tr><td>geom_type</td><td>varchar(4)</td><td>NULL</td><td>—</td><td>LINE(선) / POLY(면)</td></tr>
+        <tr><td>coords</td><td>jsonb</td><td>NULL</td><td>—</td><td>좌표열 [[경도,위도],...] WGS84</td></tr>
+        <tr><td>speed_limit_kmh</td><td>numeric(6,1) <span class="badge estimate" style="margin:0;">추정</span></td><td>NULL</td><td>—</td><td>제한속도(km/h) — road_kind=3 판정 기준</td></tr>
+        <tr><td>use_yn</td><td>char(1)</td><td><code>'Y'</code></td><td>—</td><td>Y 사용 / N 미사용</td></tr>
+        <tr><td>reg_dt</td><td>varchar(14)</td><td><code>NOW()</code> 포맷</td><td>—</td><td>등록일시 YYYYMMDDHH24MISS</td></tr>
+        <tr><td>upd_dt</td><td>varchar(14)</td><td><code>NOW()</code> 포맷</td><td>—</td><td>수정일시 YYYYMMDDHH24MISS</td></tr>
+        <tr><td>admin_id</td><td>varchar(20)</td><td>NULL</td><td>—</td><td>최종 수정 관리자(base_workerinfo.worker_no)</td></tr>
+      </table>
+    </div>
+    <div class="note">
+      <b>인덱스</b>: <code>pk_base_roadlink</code> (PK, road_id) · <code>idx_base_roadlink_road_kind</code>
+      (road_kind, use_yn='Y' 조건부) <span class="badge estimate" style="margin:0;">제안</span>
+    </div>
+  </section>
+
+  <section id="base_tollgate">
+    <h2>base_tollgate <span class="badge confirmed">확인됨</span></h2>
+    <div class="easy-name">영업소(게이트) 마스터</div>
+    <div class="src">테이블 코멘트: "영업소 마스터 - 개방식 본선(M)/폐쇄식 입구(I)·출구(O)·겸용(B)"</div>
+    <div class="card">
+      <table>
+        <tr><th>컬럼</th><th>타입</th><th>기본값</th><th>PK/FK</th><th>설명</th></tr>
+        <tr><td class="pk">tollgate_id</td><td>varchar(20)</td><td><code>'TG' || nextval(seq_tollgate_id)</code> <span class="badge estimate" style="margin:0;">추정</span></td><td class="pk">PK</td><td>영업소 ID (TG+4자리)</td></tr>
+        <tr><td>road_id</td><td>varchar(20)</td><td>—</td><td class="fk">FK</td><td>→ base_roadlink.road_id (하드 FK)</td></tr>
+        <tr><td>tollgate_nm</td><td>varchar(100)</td><td>NULL</td><td>—</td><td>영업소명</td></tr>
+        <tr><td>gate_div</td><td>varchar(1)</td><td>—</td><td>—</td><td>M 개방식본선/I 입구/O 출구/B 겸용(미관측)</td></tr>
+        <tr><td>lon / lat</td><td>numeric(10,6) <span class="badge estimate" style="margin:0;">추정</span></td><td>NULL</td><td>—</td><td>경도/위도(WGS84)</td></tr>
+        <tr><td>link_id</td><td>varchar(20)</td><td>NULL</td><td>소프트</td><td>base_mapinfo.link_id 소프트 참조 — 실데이터 전부 NULL</td></tr>
+        <tr><td>use_yn</td><td>varchar(1)</td><td><code>'Y'</code></td><td>—</td><td>사용 여부</td></tr>
+        <tr><td>reg_dt / upd_dt</td><td>timestamp</td><td><code>NOW()</code></td><td>—</td><td>등록/수정일시</td></tr>
+      </table>
+    </div>
+    <div class="note">
+      <b>인덱스</b>: <code>pk_base_tollgate</code> (PK, tollgate_id) · <code>idx_base_tollgate_road_id</code>
+      (road_id) · <code>idx_base_tollgate_gate_div</code> (gate_div, use_yn='Y' 조건부)
+      <span class="badge estimate" style="margin:0;">제안 — 실제 존재 여부 미확인</span>
+    </div>
+    <div class="warn">
+      실데이터 3건 전부 <code>link_id</code> NULL — 링크ID 매칭 불가, 좌표거리 임계값 방식 필요(추정).
+      임시 게이트도 <code>link_id</code>는 비워두고 동일 패턴을 따름.
+    </div>
+  </section>
+
+  <section id="base_tollfare">
+    <h2>base_tollfare <span class="badge confirmed">확인됨</span></h2>
+    <div class="easy-name">개방식 요금표</div>
+    <div class="src">테이블 코멘트: "개방식 요금표 - 본선 영업소x차종x적용일. 개정 = 새 fare_date 행 추가(행 자체가 이력)"</div>
+    <div class="card">
+      <table>
+        <tr><th>컬럼</th><th>타입</th><th>기본값</th><th>PK/FK</th><th>설명</th></tr>
+        <tr><td class="pk">tollgate_id</td><td>varchar(20)</td><td>—</td><td class="pk">PK-1 / <span class="fk">FK</span></td><td>→ base_tollgate.tollgate_id</td></tr>
+        <tr><td class="pk">car_type</td><td>varchar(1)</td><td>—</td><td class="pk">PK-2</td><td>차종(CARTYPE 1~6)</td></tr>
+        <tr><td class="pk">fare_date</td><td>varchar(8)</td><td>—</td><td class="pk">PK-3</td><td>적용 시작일(YYYYMMDD) — 행 자체가 이력</td></tr>
+        <tr><td>toll_fare</td><td>integer</td><td>NULL</td><td>—</td><td>통행요금(원), NULL=미정</td></tr>
+        <tr><td>admin_id</td><td>varchar(20)</td><td>NULL</td><td>—</td><td>저장 관리자</td></tr>
+        <tr><td>reg_dt / upd_dt</td><td>varchar(14)</td><td><code>NOW()</code> 포맷</td><td>—</td><td>등록/수정일시</td></tr>
+      </table>
+    </div>
+    <div class="note">
+      <b>인덱스</b>: <code>pk_base_tollfare</code> (PK, tollgate_id+car_type+fare_date) ·
+      <code>idx_base_tollfare_car_type</code> (car_type) <span class="badge estimate" style="margin:0;">제안</span>
+    </div>
+  </section>
+
+  <section id="sample-data">
+    <h2>임시 테스트 데이터 미리보기 <span class="badge testdata" style="margin:0;">테스트</span></h2>
+    <div class="intro">
+      <code>roadnet/sql/base_open_gate_test_data.sql</code>에 담긴 실제 INSERT 값입니다.
+      <code>road_id='RL-Z900'</code> / <code>tollgate_id='TG9000'</code>은 기존 운영 채번과 겹치지 않도록 임의로
+      고른 번호이며, 요금(<code>toll_fare</code>)도 실제 요금 정책이 아닌 <b>임시 placeholder 값</b>입니다 —
+      실 등록 전 담당자 확인 필요.
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0; font-size:16px;">1) base_roadlink — 임시 개방식 도로 1건</h3>
+      <table>
+        <tr><th>road_id</th><th>road_kind</th><th>road_nm</th><th>geom_type</th><th>coords</th><th>use_yn</th><th>admin_id</th></tr>
+        <tr>
+          <td><code>RL-Z900</code></td>
+          <td><code>1</code> (유료개방식)</td>
+          <td>[테스트] 임시 개방식 시험도로</td>
+          <td><code>LINE</code></td>
+          <td><code>[[128.8761,37.7519],[128.8802,37.7563]]</code></td>
+          <td><code>Y</code></td>
+          <td><code>TEST</code></td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0; font-size:16px;">2) base_tollgate — 임시 개방식 본선 게이트 1건</h3>
+      <table>
+        <tr><th>tollgate_id</th><th>road_id</th><th>tollgate_nm</th><th>gate_div</th><th>lon</th><th>lat</th><th>link_id</th></tr>
+        <tr>
+          <td><code>TG9000</code></td>
+          <td><code>RL-Z900</code></td>
+          <td>[테스트] 임시 개방식 게이트</td>
+          <td><code>M</code></td>
+          <td><code>128.8802</code></td>
+          <td><code>37.7563</code></td>
+          <td>NULL</td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0; font-size:16px;">3) base_tollfare — 차종별(1~6종) 임시 요금 6건</h3>
+      <table>
+        <tr><th>tollgate_id</th><th>car_type</th><th>fare_date</th><th>toll_fare(원)</th><th>admin_id</th></tr>
+        <tr><td><code>TG9000</code></td><td>1 (소형)</td><td>오늘</td><td>1,000</td><td><code>TEST</code></td></tr>
+        <tr><td><code>TG9000</code></td><td>2 (중형)</td><td>오늘</td><td>1,200</td><td><code>TEST</code></td></tr>
+        <tr><td><code>TG9000</code></td><td>3 (대형)</td><td>오늘</td><td>1,800</td><td><code>TEST</code></td></tr>
+        <tr><td><code>TG9000</code></td><td>4 (대형)</td><td>오늘</td><td>2,200</td><td><code>TEST</code></td></tr>
+        <tr><td><code>TG9000</code></td><td>5 (대형)</td><td>오늘</td><td>2,600</td><td><code>TEST</code></td></tr>
+        <tr><td><code>TG9000</code></td><td>6 (경차)</td><td>오늘</td><td>800</td><td><code>TEST</code></td></tr>
+      </table>
+    </div>
+
+    <div class="note">
+      <b>정리(삭제)</b>: 테스트 후 아래 순서로 지우면 FK 위반 없이 정리됩니다.
+    </div>
+    <div class="card">
+<pre class="sql">DELETE FROM base_tollfare  WHERE tollgate_id = 'TG9000';
+DELETE FROM base_tollgate  WHERE tollgate_id = 'TG9000';
+DELETE FROM base_roadlink  WHERE road_id     = 'RL-Z900';</pre>
+    </div>
+  </section>
+
+  <footer>
+    기준 문서: <code>doc/RUC_과금DB_스키마_기준선_v1.0.md</code> (2026-08-07) ·
+    DDL: <code>roadnet/sql/base_roadlink.sql</code>, <code>base_tollgate.sql</code>, <code>base_tollfare.sql</code>,
+    <code>base_open_gate_test_data.sql</code>
+  </footer>
+</main>
+</div>
+</body>
+</html>

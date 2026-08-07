@@ -202,3 +202,17 @@ I-8. [대응방안 설계] 폐쇄형(CLOSED_ROAD) 휴게소 장시간 정차(시
        기준이라 프로세스 재시작·트립 재시작을 못 버팀 — DB 기반 배치 별도 필요)
   미해결로 남는 것: DB durable 기록의 테이블 구조(prim_chargehand 선기록 vs 별도 경량 테이블), 배치 스윕
   주기, "N시간" 임계값 확정, 그리고 위 2번(트립 경계가 시동 ON/OFF와 연동되는지) 확인.
+
+J. [2026-08-08] 개방식(OPEN) 임시 게이트 테스트 스캐폴드 생성
+  I-7에서 개방형 모델 자체가 실측과 안 맞는 것이 확인됐지만, 담당자 확인 전까지 임시로라도 원래 설계 가정
+  ("게이트 점 이벤트")을 그대로 따라 테스트할 수 있도록 최소 DDL·샘플데이터를 만들어둠:
+    - roadnet/sql/base_roadlink.sql / base_tollgate.sql / base_tollfare.sql
+      → base_roadlink·base_tollgate·base_tollfare 3개 테이블 재구성 DDL(⚠️ pg_dump 아님, 기준선 문서
+        v1.0의 pg_description 조사 내용 기반 재구성 — 대조검증 전까지 참고용)
+    - roadnet/sql/base_open_gate_test_data.sql
+      → road_id='RL-Z900'(임시 개방식 도로 1건), tollgate_id='TG9000'(gate_div=M 게이트 1건),
+        차종별(1~6) 임시 요금 6건(toll_fare는 placeholder, 실제 요금 아님)
+    - web/docs/charge-open-gate-test.html
+      → 위 DDL·샘플데이터 문서화 (charge-tables.html과 별개 문서, 사이드바에서 상호 링크)
+  용도: 원격 DB 접속 없이 로컬에서 개방식 게이트 통과 판정 흐름 테스트. I-7 이슈(게이트 점 vs 링크 hop)의
+  정식 해결과는 무관 — 임시 테스트 목적으로 원 설계안을 그대로 채택한 것뿐.

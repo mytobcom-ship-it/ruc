@@ -90,7 +90,7 @@ static void ApplySensorFieldOmit(GPS_SAMPLE& stSample, mt19937& rng, const SIM_C
 CVehicle::CVehicle()
 	: m_pcRoute(nullptr), m_dfPos(0.0), m_dfSpeedMps(0.0),
 	m_dfLastHeading(0.0), m_dfAltitude(40.0), m_dfAltRoadOffset(0.0), m_dfBattery(100.0),
-	m_bTripActive(false), m_bStartPending(false), m_qwGpsSeq(0)
+	m_bTripActive(false), m_bTripDone(false), m_bStartPending(false), m_qwGpsSeq(0)
 {
 }
 
@@ -252,6 +252,12 @@ bool CVehicle::Interpolate(double dfPos, GEO_POINT& stPt, double& dfBearing, int
 
 void CVehicle::Tick(const char *pszGpsDt, vector<GPS_SAMPLE>& vtOut)
 {
+	// 1회 운행 완료 — 재운행 요청(웹 "신규테스트"→프로세스 재시작) 전까지 더 이상 생성하지 않음
+	//   (2026-08-12 최정우 추가 — 기존엔 END 직후 다음 tick 에서 곧바로 새 경로를 자동으로
+	//   다시 만들어 운행이 계속 이어졌음)
+	if (m_bTripDone)
+		return;
+
 	// 경로 준비
 	if (!m_bTripActive)
 	{
@@ -396,5 +402,9 @@ void CVehicle::Tick(const char *pszGpsDt, vector<GPS_SAMPLE>& vtOut)
 
 	vtOut.push_back(stSample);
 
-	if (bEnd) m_bTripActive = false;	// 다음 tick 에서 새 경로(새 운행)
+	if (bEnd)
+	{
+		m_bTripActive = false;
+		m_bTripDone = true;	// 재운행 요청 전까지 정지 (2026-08-12 최정우 수정)
+	}
 }

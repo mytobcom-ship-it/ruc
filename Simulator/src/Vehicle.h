@@ -55,6 +55,7 @@ private:
 	double					m_dfAltRoadOffset;	// ROAD_TYPE 고도 오프셋 — 램프로 점진 수렴 (2026-07-20 최정우 추가)
 	double					m_dfBattery;	// 배터리 (%, 실수 누적)
 	bool					m_bTripActive;	// 운행 중 여부
+	bool					m_bTripDone;	// 1회 운행 완료 — true면 재운행 요청(프로세스 재시작) 전까지 추가 생성 안 함 (2026-08-12 최정우 추가)
 	bool					m_bStartPending;// START 이벤트 대기
 	string					m_strTripId;	// 현재 운행 trip_id (START 시 발급) (2026-07-10 최정우 추가)
 	uint64					m_qwGpsSeq;		// 운행 내 GPS 순번 (START 시 1, 이후 +1) (2026-07-10 최정우 추가)

@@ -82,9 +82,20 @@ typedef struct sZoneInfo
 	char							szUseYN[1+1];
 	string							strLinkIdsJson;							// link_ids 원본(jsonb 텍스트, 미파싱 TODO)
 	string							strCoordsJson;							// coords 원본(jsonb 텍스트, 미파싱 TODO)
+	double							dfLengthM;								// coords 폴리라인 실거리(m) — [zone_select] SQL 에서
+																			//   하버사인 합산 계산됨. 폐쇄형·구간단속 dist_m 산출에 사용 (2026-08-12 최정우 추가)
+	double							dfFirstLon;								// coords 첫 정점 — 구간단속 from_lon (2026-08-12 최정우 추가)
+	double							dfFirstLat;								// coords 첫 정점 — 구간단속 from_lat
+	double							dfLastLon;								// coords 마지막 정점 — 구간단속 to_lon
+	double							dfLastLat;								// coords 마지막 정점 — 구간단속 to_lat
 
 	sZoneInfo() :
-		dfSpeedLimitKmh(0.0)
+		dfSpeedLimitKmh(0.0),
+		dfLengthM(0.0),
+		dfFirstLon(0.0),
+		dfFirstLat(0.0),
+		dfLastLon(0.0),
+		dfLastLat(0.0)
 	{
 		memset(szRoadID, 0, sizeof(szRoadID));
 		memset(szRoadKind, 0, sizeof(szRoadKind));

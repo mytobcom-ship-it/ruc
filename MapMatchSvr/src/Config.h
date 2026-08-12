@@ -38,9 +38,10 @@ typedef struct sConfig
 	string							strRawLogRecoverSession;			// GPS 좀비 PROCESSING 복구 SQL
 	string							strRawLogSelectSession;				// GPS 로그 조회·예약 SQL
 	string							strRawLogUpdateSession;				// GPS 로그 갱신 SQL
-	string							strChargeInsertSession;				// 과금 INSERT SQL (#10 보류, 비어 있으면 비활성)
+	string							strChargeInsertSession;				// 과금 INSERT SQL (개방형 게이트 통과, 비어 있으면 비활성)
 	string							strGateSelectSession;				// 과금 게이트(BASE_TOLLGATE) 전량 조회 SQL, 비어 있으면 CChargeDataLoader 게이트 캐시 비활성 (2026-08-12 최정우 추가)
 	string							strZoneSelectSession;				// 과금 구역(BASE_ROADLINK) 전량 조회 SQL, 비어 있으면 CChargeDataLoader 구역 캐시 비활성 (2026-08-12 최정우 추가)
+	string							strTripEndUpdateSession;			// 트립 종료 시 trip_end_dt UPDATE SQL, 비어 있으면 비활성 (2026-08-12 최정우 추가)
 
 	// 피더 (DB poll)
 	int								nFetchLimit;						// 1회 조회·예약 최대 건수 (건)

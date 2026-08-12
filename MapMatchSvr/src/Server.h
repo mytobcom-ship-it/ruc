@@ -103,7 +103,8 @@ private:
 	string							m_strRawLogRecoverSQL;				// PROCESSING 복구 SQL
 	string							m_strRawLogSelectSQL;				// 조회·예약 SQL (UPDATE RETURNING)
 	string							m_strRawLogUpdateSQL;				// 결과 갱신 SQL
-	string							m_strChargeInsertSQL;				// #10 보류: 로드만, Worker INSERT 미연동
+	string							m_strChargeInsertSQL;				// 개방형 게이트 통과 과금 INSERT SQL, 비어 있으면 비활성
+	string							m_strTripEndUpdateSQL;				// 트립 종료 시 trip_end_dt UPDATE SQL, 비어 있으면 비활성 (2026-08-12 최정우 추가)
 	string							m_strGateSelectSQL;				// 과금 게이트 전량 조회 SQL (2026-08-12 최정우 추가)
 	string							m_strZoneSelectSQL;				// 과금 구역 전량 조회 SQL (2026-08-12 최정우 추가)
 	int								m_nGateReloadSec;					// [charge] gate_reload — 게이트·구역 캐시 재조회 주기(sec, 0=재조회 없음) (2026-08-12 최정우 추가)

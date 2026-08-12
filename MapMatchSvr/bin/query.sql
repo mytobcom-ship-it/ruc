@@ -153,7 +153,16 @@ ORDER BY TOLLGATE_ID ASC;
 -- ── 4. 과금 구역(도로/링크) 전량 조회 ────────────────────────────────────────
 -- [zone_select] BASE_ROADLINK 전량 — CChargeDataLoader::LoadZones() 가 실행 (2026-08-12 최정우 추가)
 -- 컬럼 순서(ChargeDataLoader.cpp LoadZones() 와 반드시 일치): 0:ROAD_ID 1:ROAD_KIND 2:ROAD_NM
---   3:GEOM_TYPE 4:SPEED_LIMIT_KMH 5:USE_YN 6:LINK_IDS 7:COORDS
+--   3:GEOM_TYPE 4:SPEED_LIMIT_KMH 5:USE_YN 6:LINK_IDS 7:COORDS 8:LENGTH_M
+--   9:FIRST_LON 10:FIRST_LAT 11:LAST_LON 12:LAST_LAT
+-- LENGTH_M: coords 배열의 연속 정점 사이 하버사인 거리 합산(폴리라인 실거리) — 폐쇄형·구간단속
+--   dist_m 산출에 사용(실측 운영 데이터와 거의 일치 확인됨, 2026-08-12 최정우 추가).
+--   PostGIS 없어 직접 구현: 정점을 LEAD() 로 다음 정점과 짝지어 각 구간 하버사인 거리 계산 후 SUM.
+--   주의: BASE_ROADLINK.coords 는 road_link.coords 와 중첩 구조가 다름 — [[lon,lat],...] 형태로
+--   바로 좌표쌍 배열이라 coords->0 로 한 번 더 까면 안 됨(road_link 는 [[[lon,lat],...]] 라 ->0 필요.
+--   이 차이를 못 보고 처음에 ->0 을 붙였다가 전부 대척점 거리(20037508m)로 잘못 나온 걸 실측으로 확인·수정함).
+-- FIRST/LAST: coords 배열의 첫/마지막 정점 — 구간단속 from_lat/lon·to_lat/lon 에 사용
+--   (실측 확인: 게이트 좌표가 아니라 구역 폴리라인 자체의 시작·끝점, 2026-08-12 최정우 추가)
 [zone_select]
 SELECT
 	ROAD_ID,
@@ -163,22 +172,46 @@ SELECT
 	SPEED_LIMIT_KMH,
 	USE_YN,
 	LINK_IDS,
-	COORDS
+	COORDS,
+	(
+		SELECT COALESCE(SUM(
+			2 * 6378137.0 * asin(least(1.0, sqrt(
+				sin(radians((nxt->>1)::float8 - (cur->>1)::float8) / 2) ^ 2 +
+				cos(radians((cur->>1)::float8)) * cos(radians((nxt->>1)::float8)) *
+				sin(radians((nxt->>0)::float8 - (cur->>0)::float8) / 2) ^ 2
+			)))
+		), 0)
+		FROM (
+			SELECT elem AS cur, LEAD(elem) OVER (ORDER BY ord) AS nxt
+			FROM jsonb_array_elements(COORDS) WITH ORDINALITY AS t(elem, ord)
+		) pairs
+		WHERE nxt IS NOT NULL
+	) AS LENGTH_M,
+	COORDS->0->>0 AS FIRST_LON,
+	COORDS->0->>1 AS FIRST_LAT,
+	COORDS->-1->>0 AS LAST_LON,
+	COORDS->-1->>1 AS LAST_LAT
 FROM RUC.BASE_ROADLINK
 WHERE USE_YN = 'Y'
 ORDER BY ROAD_ID ASC;
 
 -- ── 5. 개방형 게이트 통과 bulk INSERT ─────────────────────────────────────
 -- [charge_insert] PRIM_CHARGEHAND — CRawLogWorker::BulkInsertCharges() 가 실행 (2026-08-12 최정우 추가)
+-- 개방형(OPEN_ROAD)·폐쇄형(CLOSED_ROAD) 공용 — 폐쇄형은 DIST_M/ENTRY_TOLLGATE_ID/EXIT_TOLLGATE_ID 도 채움 (2026-08-12 최정우 수정)
 -- 파라미터 순서(RawLogWorker.cpp CHARGE_INSERT_ROW/BulkInsertCharges() 와 반드시 일치):
---   $1=TRIP_ID[] $2=DEVICE_KEY[] $3=TRIP_SEQ[] $4=CHARGE_TYPE[](1=OPEN_ROAD 고정) $5=CHARGE_UNIT[](1=LINK 고정)
---   $6=LINK_ID[] $7=FROM_ID[](링크 시작노드) $8=TO_ID[](링크 종료노드) $9=FROM_LAT[] $10=FROM_LON[]
---   $11=TO_LAT[] $12=TO_LON[] $13=ZONE_ID[] $14=ZONE_NAME[] $15=OCCUR_DT[] $16=TRIP_START_DT[] $17=TOLLGATE_ID[]
+--   $1=TRIP_ID[] $2=DEVICE_KEY[] $3=TRIP_SEQ[] $4=CHARGE_TYPE[](1=OPEN_ROAD/2=CLOSED_ROAD) $5=CHARGE_UNIT[](0=NODE/1=LINK,실측 확인)
+--   $6=LINK_ID[](실측상 항상 빈값) $7=FROM_ID[] $8=TO_ID[] $9=FROM_LAT[] $10=FROM_LON[]
+--   $11=TO_LAT[] $12=TO_LON[] $13=ZONE_ID[] $14=ZONE_NAME[] $15=DIST_M[](개방형은 빈값) $16=SPEED_KMH[](계산 불가 시 빈값)
+--   $17=SPEED_LIMIT_KMH[] $18=OCCUR_DT[] $19=TRIP_START_DT[] $20=TOLLGATE_ID[](실측상 항상 빈값)
+--   $21=ENTRY_TOLLGATE_ID[](폐쇄형 전용, 개방형은 빈값) $22=EXIT_TOLLGATE_ID[](폐쇄형 전용) $23=REG_DT[] $24=UPD_DT[](REG_DT와 항상 동일)
+--   $25=CHARGE_YN[](빈값=DB기본 Y, 폐쇄형 입/출구 게이트 이상 시 "N") $26=CHARGE_STATUS[](빈값=DB기본 0, 이상 시 "4"=SKIP)
 -- ON CONFLICT: 배치 release 후 재시도되는 케이스의 중복 INSERT 방어(정상 흐름에서는 trip_seq 가 매번 새 값)
 [charge_insert]
 INSERT INTO RUC.PRIM_CHARGEHAND (
 	TRIP_ID, DEVICE_KEY, TRIP_SEQ, CHARGE_TYPE, CHARGE_UNIT, LINK_ID, FROM_ID, TO_ID,
-	FROM_LAT, FROM_LON, TO_LAT, TO_LON, ZONE_ID, ZONE_NAME, OCCUR_DT, TRIP_START_DT, TOLLGATE_ID
+	FROM_LAT, FROM_LON, TO_LAT, TO_LON, ZONE_ID, ZONE_NAME, DIST_M, SPEED_KMH, SPEED_LIMIT_KMH,
+	OCCUR_DT, TRIP_START_DT, TOLLGATE_ID, ENTRY_TOLLGATE_ID, EXIT_TOLLGATE_ID, REG_DT, UPD_DT,
+	CHARGE_YN, CHARGE_STATUS
 )
 SELECT
 	U.TRIP_ID,
@@ -195,15 +228,42 @@ SELECT
 	U.TO_LON::NUMERIC,
 	NULLIF(U.ZONE_ID, ''),
 	NULLIF(U.ZONE_NAME, ''),
+	CASE WHEN U.DIST_M <> '' THEN U.DIST_M::INTEGER ELSE 0 END,
+	CASE WHEN U.SPEED_KMH <> '' THEN U.SPEED_KMH::SMALLINT ELSE 0 END,
+	CASE WHEN U.SPEED_LIMIT_KMH <> '' THEN U.SPEED_LIMIT_KMH::SMALLINT ELSE 0 END,
 	U.OCCUR_DT,
 	U.TRIP_START_DT,
-	NULLIF(U.TOLLGATE_ID, '')
+	NULLIF(U.TOLLGATE_ID, ''),
+	NULLIF(U.ENTRY_TOLLGATE_ID, ''),
+	NULLIF(U.EXIT_TOLLGATE_ID, ''),
+	U.REG_DT,
+	U.UPD_DT,
+	CASE WHEN U.CHARGE_YN <> '' THEN U.CHARGE_YN ELSE 'Y' END,
+	CASE WHEN U.CHARGE_STATUS <> '' THEN U.CHARGE_STATUS::SMALLINT ELSE 0 END
 FROM UNNEST(
 	$1::TEXT[], $2::TEXT[], $3::TEXT[], $4::TEXT[], $5::TEXT[], $6::TEXT[], $7::TEXT[],
 	$8::TEXT[], $9::TEXT[], $10::TEXT[], $11::TEXT[], $12::TEXT[], $13::TEXT[], $14::TEXT[],
-	$15::TEXT[], $16::TEXT[], $17::TEXT[]
+	$15::TEXT[], $16::TEXT[], $17::TEXT[], $18::TEXT[], $19::TEXT[], $20::TEXT[], $21::TEXT[],
+	$22::TEXT[], $23::TEXT[], $24::TEXT[], $25::TEXT[], $26::TEXT[]
 ) AS U(
 	TRIP_ID, DEVICE_KEY, TRIP_SEQ, CHARGE_TYPE, CHARGE_UNIT, LINK_ID, FROM_ID, TO_ID,
-	FROM_LAT, FROM_LON, TO_LAT, TO_LON, ZONE_ID, ZONE_NAME, OCCUR_DT, TRIP_START_DT, TOLLGATE_ID
+	FROM_LAT, FROM_LON, TO_LAT, TO_LON, ZONE_ID, ZONE_NAME, DIST_M, SPEED_KMH, SPEED_LIMIT_KMH,
+	OCCUR_DT, TRIP_START_DT, TOLLGATE_ID, ENTRY_TOLLGATE_ID, EXIT_TOLLGATE_ID, REG_DT, UPD_DT,
+	CHARGE_YN, CHARGE_STATUS
 )
 ON CONFLICT (trip_id, device_key, trip_seq) DO NOTHING;
+
+-- ── 6. 트립 종료 시 trip_end_dt 반영 ───────────────────────────────────────
+-- [trip_end] TRIP_EVENT=2 감지 시 CRawLogWorker::UpdateTripEndDt() 가 실행 (2026-08-12 최정우 추가)
+-- 과금 INSERT 는 게이트 통과 즉시(트립 종료 전) 발생하므로 trip_end_dt 는 그 시점에 알 수
+-- 없음 — 트립이 실제로 끝날 때 해당 trip_id 의 PRIM_CHARGEHAND 전 행에 반영.
+-- $1=TRIP_ID[] $2=TRIP_END_DT[] $3=UPD_DT[]
+[trip_end]
+UPDATE RUC.PRIM_CHARGEHAND AS T
+SET
+	TRIP_END_DT = V.TRIP_END_DT,
+	UPD_DT = V.UPD_DT
+FROM UNNEST(
+	$1::TEXT[], $2::TEXT[], $3::TEXT[]
+) AS V(TRIP_ID, TRIP_END_DT, UPD_DT)
+WHERE T.TRIP_ID = V.TRIP_ID;

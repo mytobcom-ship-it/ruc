@@ -281,7 +281,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 		return false;
 	}
 
-	// 과금 대상 INSERT SQL (#10 보류: 세션 미지정·SQL 없으면 스킵)
+	// 과금 대상 INSERT SQL (세션 미지정·SQL 없으면 스킵)
 	if (!stConfig.strChargeInsertSession.empty())
 	{
 		m_strChargeInsertSQL = m_pcSQLAccessor->GetSQL(stConfig.strChargeInsertSession);
@@ -292,6 +292,19 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	else
 	{
 		LOGFMTW("charge_insert session not configured — charge disabled");
+	}
+
+	// 트립 종료 시 trip_end_dt UPDATE SQL (세션 미지정·SQL 없으면 비활성) (2026-08-12 최정우 추가)
+	if (!stConfig.strTripEndUpdateSession.empty())
+	{
+		m_strTripEndUpdateSQL = m_pcSQLAccessor->GetSQL(stConfig.strTripEndUpdateSession);
+		if (m_strTripEndUpdateSQL.empty())
+			LOGFMTW("trip_end session=[%s] sql is empty — trip_end_dt update disabled",
+				stConfig.strTripEndUpdateSession.c_str());
+	}
+	else
+	{
+		LOGFMTW("trip_end session not configured — trip_end_dt update disabled");
 	}
 
 	// 과금 게이트 전량 조회 SQL (세션 미지정·SQL 없으면 CChargeDataLoader 게이트 캐시 비활성) (2026-08-12 최정우 추가)
@@ -446,6 +459,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	stWorkerConfig.pcChargeDataLoader = m_pcChargeDataLoader;			// nullptr 이면 개방형 과금 판정 비활성 (2026-08-12 최정우 추가)
 	stWorkerConfig.strUpdateSQL = m_strRawLogUpdateSQL;
 	stWorkerConfig.strChargeInsertSQL = m_strChargeInsertSQL;
+	stWorkerConfig.strTripEndUpdateSQL = m_strTripEndUpdateSQL;			// (2026-08-12 최정우 추가)
 	stWorkerConfig.nWorkerThreads = m_nWorkerThread;
 	stWorkerConfig.nTtlSec = m_nTtlSec;
 	stWorkerConfig.nMatchTimeoutMs = m_nMatchTimeout;

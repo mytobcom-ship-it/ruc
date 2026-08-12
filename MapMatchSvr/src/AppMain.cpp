@@ -171,6 +171,8 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileStr("sql", "gate_select", "", pstConfig->strGateSelectSession);
 	// [sql] zone_select (선택, 비어 있으면 CChargeDataLoader 구역 캐시 비활성) (2026-08-12 최정우 추가)
 	cIniReader.GetProfileStr("sql", "zone_select", "", pstConfig->strZoneSelectSession);
+	// [sql] trip_end (선택, 비어 있으면 trip_end_dt UPDATE 비활성) (2026-08-12 최정우 추가)
+	cIniReader.GetProfileStr("sql", "trip_end", "", pstConfig->strTripEndUpdateSession);
 	// [charge] gate_reload (단위: sec, 0=재조회 없음) (2026-08-12 최정우 추가)
 	cIniReader.GetProfileInt("charge", "gate_reload", CFG_DEF_GATE_RELOAD, pstConfig->nGateReloadSec);
 	if (pstConfig->nGateReloadSec < 0)

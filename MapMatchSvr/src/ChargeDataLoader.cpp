@@ -275,8 +275,9 @@ bool CChargeDataLoader::LoadZones()
 		return false;
 	}
 
-	// 컬럼 순서: road_id, road_kind, road_nm, geom_type, speed_limit_kmh, use_yn, link_ids, coords
-	//   (query.sql [zone_select] 세션과 반드시 일치해야 함) (2026-08-12 최정우 추가)
+	// 컬럼 순서: road_id, road_kind, road_nm, geom_type, speed_limit_kmh, use_yn, link_ids, coords,
+	//   length_m, first_lon, first_lat, last_lon, last_lat
+	//   (query.sql [zone_select] 세션과 반드시 일치해야 함) (2026-08-12 최정우 수정 — first/last 좌표 추가)
 	mapZoneInfo mapNewZoneInfo;
 	int nRows = PQntuples(pcResult);
 	for (int i = 0; i < nRows; i++)
@@ -290,6 +291,11 @@ bool CChargeDataLoader::LoadZones()
 		const char *pszUseYN = PQgetvalue(pcResult, i, 5);
 		const char *pszLinkIds = PQgetvalue(pcResult, i, 6);
 		const char *pszCoords = PQgetvalue(pcResult, i, 7);
+		const char *pszLengthM = PQgetvalue(pcResult, i, 8);
+		const char *pszFirstLon = PQgetvalue(pcResult, i, 9);
+		const char *pszFirstLat = PQgetvalue(pcResult, i, 10);
+		const char *pszLastLon = PQgetvalue(pcResult, i, 11);
+		const char *pszLastLat = PQgetvalue(pcResult, i, 12);
 
 		ZONE_INFO stZoneInfo;
 		strncpy(stZoneInfo.szRoadID, pszRoadID, sizeof(stZoneInfo.szRoadID) - 1);
@@ -300,6 +306,11 @@ bool CChargeDataLoader::LoadZones()
 		strncpy(stZoneInfo.szUseYN, pszUseYN, sizeof(stZoneInfo.szUseYN) - 1);
 		stZoneInfo.strLinkIdsJson = pszLinkIds;
 		stZoneInfo.strCoordsJson = pszCoords;
+		stZoneInfo.dfLengthM = atof(pszLengthM);
+		stZoneInfo.dfFirstLon = atof(pszFirstLon);
+		stZoneInfo.dfFirstLat = atof(pszFirstLat);
+		stZoneInfo.dfLastLon = atof(pszLastLon);
+		stZoneInfo.dfLastLat = atof(pszLastLat);
 
 		mapNewZoneInfo[stZoneInfo.szRoadID] = stZoneInfo;
 	}

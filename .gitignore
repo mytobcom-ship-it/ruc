@@ -41,7 +41,6 @@ Simulator/bin/RawGpsSimSvr
 *.prj
 *.cpg
 CreateData/data/
-MapMatchSvr
 
 # Logs
 **/log/

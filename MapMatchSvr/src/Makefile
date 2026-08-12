@@ -23,6 +23,7 @@ SOURCES		= \
 		SQLAccessor.cpp \
 		PostgrePool.cpp \
 		DataLoader.cpp \
+		ChargeDataLoader.cpp \
 		ContinueMapMatch.cpp \
 		BeginMapMatch.cpp \
 		MatchTrace.cpp \

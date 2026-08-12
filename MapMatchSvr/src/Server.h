@@ -26,6 +26,7 @@
 #include "SQLAccessor.h"
 #include "LoggerManager.h"
 #include "DataLoader.h"
+#include "ChargeDataLoader.h"
 #include "ProcessManager.h"
 #include "RawLogFetcher.h"
 #include "RawLogWorker.h"
@@ -72,6 +73,7 @@ private:
 	CSQLAccessor					*m_pcSQLAccessor;					// SQL 파일 읽기
 	CLoggerManager					*m_pcLoggerManager;					// 로그 관리 클래스
 	CDataLoader						*m_pcDataLoader;					// 기반 데이터 클래스
+	CChargeDataLoader					*m_pcChargeDataLoader;				// 과금 게이트 데이터 클래스 (2026-08-12 최정우 추가)
 	CThreadPool						*m_pcThreadPool;					// 스레드 풀
 	CProcessManager					*m_pcProcessManager;				// GPS 정보 맵 매칭 처리 클래스
 	CRawLogFetcher					*m_pcRawLogFetcher;					// 원시 GPS DB 폴링 클래스
@@ -102,6 +104,10 @@ private:
 	string							m_strRawLogSelectSQL;				// 조회·예약 SQL (UPDATE RETURNING)
 	string							m_strRawLogUpdateSQL;				// 결과 갱신 SQL
 	string							m_strChargeInsertSQL;				// #10 보류: 로드만, Worker INSERT 미연동
+	string							m_strGateSelectSQL;				// 과금 게이트 전량 조회 SQL (2026-08-12 최정우 추가)
+	string							m_strZoneSelectSQL;				// 과금 구역 전량 조회 SQL (2026-08-12 최정우 추가)
+	int								m_nGateReloadSec;					// [charge] gate_reload — 게이트·구역 캐시 재조회 주기(sec, 0=재조회 없음) (2026-08-12 최정우 추가)
+	time_t							m_dtLastGateReload;					// 마지막 게이트 캐시 재조회 시각 (2026-08-12 최정우 추가)
 	int								m_nFetchLimit;						// 1회 조회·예약 최대 건수 (건)
 	int								m_nFetchInterval;					// 큐 여유 시 DB 조회 간격 (ms)
 	int								m_nQueuePauseCount;					// 큐 batch 수, 이상이면 DB 조회 중단 (건)

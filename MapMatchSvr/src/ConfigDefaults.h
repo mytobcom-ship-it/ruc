@@ -51,6 +51,8 @@
 #define CFG_DEF_MONITOR				30									// [server]	monitor (단위: sec) (2026-07-11 최정우 주석 추가)
 #define CFG_DEF_RECOVER_MAX			3									// [server]	recover_retry_max (2026-07-11 최정우 주석 추가)
 #define CFG_DEF_RECOVER_WAIT		2000								// [server]	recover_retry_wait (단위: ms) (2026-07-11 최정우 주석 추가)
+// ── [charge] ─────────────────────────────────────────────────────────────────────
+#define CFG_DEF_GATE_RELOAD			0									// [charge]	gate_reload (단위: sec, 0=재조회 없음) (2026-08-12 최정우 추가)
 
 #endif //__CONFIG_DEFAULTS_H__
 

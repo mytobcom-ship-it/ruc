@@ -37,6 +37,7 @@ def load_config():
         "host": db.get("host", "127.0.0.1"),
         "port": int(db.get("port", "5432")),
         "name": db.get("name", "roadnet"),
+        "points_name": db.get("points_name", db.get("name", "roadnet")),
         "userid": db.get("userid", "mytobcom"),
         "password": db.get("password", ""),
         "web_port": int(web.get("port", "8088")),
@@ -51,6 +52,19 @@ def get_conn():
         host=c["host"],
         port=c["port"],
         dbname=c["name"],
+        user=c["userid"],
+        password=c["password"],
+    )
+
+
+def get_conn_points():
+    """GPS/매칭 점(prim_rawgps) 전용 연결 — Simulator/MapMatchSvr 가 2026-08-11
+    ruc DB(schema: ruc)로 전환해 도로망(roadnet DB)과 분리됨 (2026-08-12 최정우 추가)"""
+    c = load_config()
+    return psycopg2.connect(
+        host=c["host"],
+        port=c["port"],
+        dbname=c["points_name"],
         user=c["userid"],
         password=c["password"],
     )
@@ -122,7 +136,7 @@ def api_trips():
     #   차량 사이를 계속 튀어다니는 원인이 된다. 시작 시각은 trip 생애 동안 고정값이라, 정말
     #   새 trip 이 시작될 때만 순위가 바뀐다 (2026-07-22 최정우 수정 — vehicles=3 전환에 대응)
     limit = min(int(request.args.get("limit", 30)), 200)
-    with get_conn() as conn:
+    with get_conn_points() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -132,7 +146,7 @@ def api_trips():
                        COUNT(*) AS cnt,
                        SUM(CASE WHEN match_status = 0 THEN 1 ELSE 0 END) AS pending_cnt,
                        BOOL_OR(trip_event = 2) AS has_end
-                FROM roadnet.prim_rawgps
+                FROM ruc.prim_rawgps
                 GROUP BY trip_id, device_key
                   ORDER BY MIN(gps_dt) DESC, trip_id DESC, device_key DESC
                 LIMIT %s
@@ -226,9 +240,9 @@ def api_start_engines():
 def api_trip_delete(trip_id):
     """선택된 Trip을 PRIM_RAWGPS 에서 완전히 삭제 — 되돌릴 수 없음. 웹 "삭제" 버튼 전용
     (2026-07-22 최정우 추가)"""
-    with get_conn() as conn:
+    with get_conn_points() as conn:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM roadnet.prim_rawgps WHERE trip_id = %s", (trip_id,))
+            cur.execute("DELETE FROM ruc.prim_rawgps WHERE trip_id = %s", (trip_id,))
             deleted = cur.rowcount
     return jsonify({"trip_id": trip_id, "deleted": deleted})
 
@@ -245,11 +259,11 @@ def api_trip_retest(trip_id):
             return jsonify({"error": "MapMatchSvr 재시작 실패", "log": log[-2000:]}), 500
         restarted = True
 
-    with get_conn() as conn:
+    with get_conn_points() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                UPDATE roadnet.prim_rawgps
+                UPDATE ruc.prim_rawgps
                 SET match_status = 0, match_link_id = NULL,
                     match_lat = NULL, match_lon = NULL, intersect_len = NULL
                 WHERE trip_id = %s
@@ -285,32 +299,20 @@ def infer_match_reason(match_status, match_link_id, intersect_len, accuracy_m):
 
 @app.route("/api/trip/<path:trip_id>/points")
 def api_trip_points(trip_id):
-    with get_conn() as conn:
+    with get_conn_points() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            # 엔진 저장 match_link_id 기준, 매칭 좌표를 매칭 링크 기하에 재-스냅해 도로선 위에 표출 (2026-07-15 최정우 복구)
-            #   · match_link_name : prim_link_info 조인 도로명(팝업용)
-            #   · match_lat/lon   : ST_ClosestPoint(매칭 링크 기하, 저장 매칭점) → 정확히 도로선 위
-            #       링크 없거나 좌표 없으면 원본 좌표 유지
+            # ruc DB(2026-08-11 전환) 는 road_link 가 geom 없이 jsonb coords 라 도로선
+            # 재-스냅(ST_ClosestPoint)은 불가 — 엔진이 저장한 match_lat/lon 을 그대로 쓰고
+            # road_link 조인은 도로명 표시(match_link_name)에만 사용 (2026-08-12 최정우 수정)
             cur.execute(
                 """
                 SELECT g.gps_seq, g.gps_dt, g.trip_event, g.drive_status, g.match_status,
                        g.gps_lat, g.gps_lon, g.intersect_len, g.accuracy_m,
                        g.match_link_id,
-                       l.name AS match_link_name,
-                       CASE
-                         WHEN g.match_lat IS NOT NULL AND l.geom IS NOT NULL
-                         THEN ST_Y(ST_ClosestPoint(l.geom,
-                              ST_SetSRID(ST_MakePoint(g.match_lon::float8, g.match_lat::float8), 4326)))
-                         ELSE g.match_lat
-                       END AS match_lat,
-                       CASE
-                         WHEN g.match_lon IS NOT NULL AND l.geom IS NOT NULL
-                         THEN ST_X(ST_ClosestPoint(l.geom,
-                              ST_SetSRID(ST_MakePoint(g.match_lon::float8, g.match_lat::float8), 4326)))
-                         ELSE g.match_lon
-                       END AS match_lon
-                FROM roadnet.prim_rawgps g
-                LEFT JOIN roadnet.prim_link_info l ON l.link_id = g.match_link_id
+                       l.road_name AS match_link_name,
+                       g.match_lat, g.match_lon
+                FROM ruc.prim_rawgps g
+                LEFT JOIN ruc.road_link l ON l.link_id = g.match_link_id
                 WHERE g.trip_id = %s
                 ORDER BY g.gps_seq ASC
                 """,
@@ -347,28 +349,17 @@ def api_trips_points():
     trip_ids = [t for t in request.args.get("trip_ids", "").split(",") if t]
     if not trip_ids:
         return jsonify({"error": "trip_ids required"}), 400
-    with get_conn() as conn:
+    with get_conn_points() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
                 SELECT g.trip_id, g.gps_seq, g.gps_dt, g.trip_event, g.drive_status, g.match_status,
                        g.gps_lat, g.gps_lon, g.intersect_len, g.accuracy_m,
                        g.match_link_id,
-                       l.name AS match_link_name,
-                       CASE
-                         WHEN g.match_lat IS NOT NULL AND l.geom IS NOT NULL
-                         THEN ST_Y(ST_ClosestPoint(l.geom,
-                              ST_SetSRID(ST_MakePoint(g.match_lon::float8, g.match_lat::float8), 4326)))
-                         ELSE g.match_lat
-                       END AS match_lat,
-                       CASE
-                         WHEN g.match_lon IS NOT NULL AND l.geom IS NOT NULL
-                         THEN ST_X(ST_ClosestPoint(l.geom,
-                              ST_SetSRID(ST_MakePoint(g.match_lon::float8, g.match_lat::float8), 4326)))
-                         ELSE g.match_lon
-                       END AS match_lon
-                FROM roadnet.prim_rawgps g
-                LEFT JOIN roadnet.prim_link_info l ON l.link_id = g.match_link_id
+                       l.road_name AS match_link_name,
+                       g.match_lat, g.match_lon
+                FROM ruc.prim_rawgps g
+                LEFT JOIN ruc.road_link l ON l.link_id = g.match_link_id
                 WHERE g.trip_id = ANY(%s)
                 ORDER BY g.trip_id ASC, g.gps_seq ASC
                 """,

@@ -472,6 +472,7 @@ enum RawGpsReturningCol
 	RGC_INTERSECT_LEN,					// GPS↔세그먼트 교차점 거리(m)
 	RGC_RAW_VLD,
 	RGC_SPEED_KMH,
+	RGC_OBD_SPEED_KMH,					// 차량 OBD 순간속도 — NULL 아니면 SPEED_KMH 보다 우선 (2026-08-11 최정우 추가)
 	RGC_HEADING,
 	RGC_ALTITUDE_M,
 	RGC_ACCURACY_M,
@@ -703,12 +704,12 @@ bool CRawLogFetcher::ParseRow(PGresult *pcResult, int nRow, sRawLogInfo *pstRawL
 		? nullptr : PQgetvalue(pcResult, nRow, RGC_GPS_LAT);
 	const char *pszLon = PQgetisnull(pcResult, nRow, RGC_GPS_LON)
 		? nullptr : PQgetvalue(pcResult, nRow, RGC_GPS_LON);
-	// 2026-07-08 최정우 주석 처리
-	//const char *pszSpeed = PQgetisnull(pcResult, nRow, RGC_SPEED_KMH)
-	//	? "0" : PQgetvalue(pcResult, nRow, RGC_SPEED_KMH);
 	// SPEED_KMH 가 NULL 이면 속도 미상 → NO_SPEED 로 표기(방위각 기본 가중치 적용) (2026-07-08 최정우 수정)
 	const bool bSpeedNull = PQgetisnull(pcResult, nRow, RGC_SPEED_KMH);
 	const char *pszSpeed = bSpeedNull ? nullptr : PQgetvalue(pcResult, nRow, RGC_SPEED_KMH);
+	// OBD_SPEED_KMH(차량 OBD 순간속도) 가 있으면 SPEED_KMH(GPS 환산속도) 보다 우선 적용 (2026-08-11 최정우 추가)
+	const bool bObdSpeedNull = PQgetisnull(pcResult, nRow, RGC_OBD_SPEED_KMH);
+	const char *pszObdSpeed = bObdSpeedNull ? nullptr : PQgetvalue(pcResult, nRow, RGC_OBD_SPEED_KMH);
 	const char *pszRecvDt = PQgetisnull(pcResult, nRow, RGC_RECV_DT)
 		? "" : PQgetvalue(pcResult, nRow, RGC_RECV_DT);
 
@@ -737,11 +738,13 @@ bool CRawLogFetcher::ParseRow(PGresult *pcResult, int nRow, sRawLogInfo *pstRawL
 			&& (pszRawVld[0] == 't' || pszRawVld[0] == 'T' || pszRawVld[0] == '1');
 	}
 
-	// 2026-07-08 최정우 주석 처리
-	//pstRawLogInfo->fSpeed = static_cast<float>(atof(pszSpeed));
-	// NULL 이면 NO_SPEED(-1), 아니면 정수 km/h 파싱 (2026-07-08 최정우 수정)
-	pstRawLogInfo->fSpeed = bSpeedNull ? static_cast<float>(NO_SPEED)
-		: static_cast<float>(atof(pszSpeed));
+	// OBD_SPEED_KMH 우선, 없으면 SPEED_KMH, 둘 다 NULL 이면 NO_SPEED(-1) (2026-08-11 최정우 수정)
+	if (!bObdSpeedNull)
+		pstRawLogInfo->fSpeed = static_cast<float>(atof(pszObdSpeed));
+	else if (!bSpeedNull)
+		pstRawLogInfo->fSpeed = static_cast<float>(atof(pszSpeed));
+	else
+		pstRawLogInfo->fSpeed = static_cast<float>(NO_SPEED);
 	// HEADING(방위각) 이 NULL 이면 맵매칭에 미적용(NO_ANGLE) — 방향 조건 스킵
 	if (PQgetisnull(pcResult, nRow, RGC_HEADING))
 		pstRawLogInfo->nAngle = static_cast<sint16>(NO_ANGLE);

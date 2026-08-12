@@ -78,17 +78,17 @@ bool CRouteProvider::SeedLink(LINK_GEOM& stOut)
 	string strSQL = m_pcSQL->GetSQL("moct_link_seed");
 	if (strSQL.empty()) { LOGFMTE("moct_link_seed sql empty!"); return false; }
 
-	char szMinLon[32], szMinLat[32], szMaxLon[32], szMaxLat[32], szSrid[16], szLimit[16];
+	char szMinLon[32], szMinLat[32], szMaxLon[32], szMaxLat[32], szLimit[16];
 	snprintf(szMinLon, sizeof(szMinLon), "%.6f", m_stConfig.dfMinLon);
 	snprintf(szMinLat, sizeof(szMinLat), "%.6f", m_stConfig.dfMinLat);
 	snprintf(szMaxLon, sizeof(szMaxLon), "%.6f", m_stConfig.dfMaxLon);
 	snprintf(szMaxLat, sizeof(szMaxLat), "%.6f", m_stConfig.dfMaxLat);
-	snprintf(szSrid, sizeof(szSrid), "%d", m_nSrid);
 	snprintf(szLimit, sizeof(szLimit), "%d", m_stConfig.nSeedCandidates > 0 ? 1 : 1);
 
-	const char *aszParams[6] = { szMinLon, szMinLat, szMaxLon, szMaxLat, szSrid, szLimit };
+	// ruc.road_link 는 bbox 컬럼이 이미 WGS-84라 SRID 파라미터 불필요 (2026-08-11 최정우 수정)
+	const char *aszParams[5] = { szMinLon, szMinLat, szMaxLon, szMaxLat, szLimit };
 	// bbox 내 시작 링크 조회 SQL 실행 (2026-07-08 최정우 주석 추가)
-	return RunLinkQuery(strSQL, aszParams, 6, stOut);
+	return RunLinkQuery(strSQL, aszParams, 5, stOut);
 }
 
 /**

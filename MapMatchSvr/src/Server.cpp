@@ -97,8 +97,9 @@ CServer::CServer() :
 	m_pcPostgrePool(nullptr),
 	m_pcSQLAccessor(nullptr), 
 	m_pcLoggerManager(nullptr), 
-	m_pcDataLoader(nullptr), 
-	m_pcThreadPool(nullptr), 
+	m_pcDataLoader(nullptr),
+	m_pcChargeDataLoader(nullptr),
+	m_pcThreadPool(nullptr),
 	m_pcProcessManager(nullptr), 
 	m_pcRawLogFetcher(nullptr),
 	m_pcRawLogWorker(nullptr),
@@ -108,6 +109,8 @@ CServer::CServer() :
 	m_hTimerThread(0),
 	m_nDBMinConnect(CFG_DEF_MINCONNECT),
 	m_nDBMaxConnect(5),
+	m_nGateReloadSec(CFG_DEF_GATE_RELOAD),
+	m_dtLastGateReload(0),
 	m_nFetchLimit(CFG_DEF_LIMIT),
 	m_nFetchInterval(CFG_DEF_FETCH_INTVL),
 	m_nQueuePauseCount(CFG_DEF_Q_PAUSE_CNT),
@@ -195,6 +198,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	m_nTtlSec = stConfig.nTtlSec;
 	m_nShutdownWait = stConfig.nShutdownWait;
 	m_nRetryMax = stConfig.nRetryMax;
+	m_nGateReloadSec = stConfig.nGateReloadSec;					// (2026-08-12 최정우 추가)
 
 	LOGFMTI("please wait ....");
 
@@ -290,6 +294,32 @@ bool CServer::Initialize(const CONFIG& stConfig)
 		LOGFMTW("charge_insert session not configured — charge disabled");
 	}
 
+	// 과금 게이트 전량 조회 SQL (세션 미지정·SQL 없으면 CChargeDataLoader 게이트 캐시 비활성) (2026-08-12 최정우 추가)
+	if (!stConfig.strGateSelectSession.empty())
+	{
+		m_strGateSelectSQL = m_pcSQLAccessor->GetSQL(stConfig.strGateSelectSession);
+		if (m_strGateSelectSQL.empty())
+			LOGFMTW("gate_select session=[%s] sql is empty — gate cache disabled",
+				stConfig.strGateSelectSession.c_str());
+	}
+	else
+	{
+		LOGFMTW("gate_select session not configured — gate cache disabled");
+	}
+
+	// 과금 구역 전량 조회 SQL (세션 미지정·SQL 없으면 CChargeDataLoader 구역 캐시 비활성) (2026-08-12 최정우 추가)
+	if (!stConfig.strZoneSelectSession.empty())
+	{
+		m_strZoneSelectSQL = m_pcSQLAccessor->GetSQL(stConfig.strZoneSelectSession);
+		if (m_strZoneSelectSQL.empty())
+			LOGFMTW("zone_select session=[%s] sql is empty — zone cache disabled",
+				stConfig.strZoneSelectSession.c_str());
+	}
+	else
+	{
+		LOGFMTW("zone_select session not configured — zone cache disabled");
+	}
+
 	LOGFMTI("sql accessor initialize success!");
 
 	if (m_pcSQLAccessor != nullptr)
@@ -340,6 +370,39 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	// 적재된 그리드·링크 통계 콘솔 출력 (2026-07-08 최정우 주석 추가)
 	m_pcDataLoader->SetDataInfoDisplay();
 
+	// 과금 게이트 데이터 클래스 — gate_select SQL 미설정 시 비활성(치명적 실패 아님) (2026-08-12 최정우 추가)
+	if (!m_strGateSelectSQL.empty())
+	{
+		m_pcChargeDataLoader = new (std::nothrow)CChargeDataLoader;
+		if (m_pcChargeDataLoader == nullptr)
+		{
+			LOGFMTE("charge data loader memory allocate failed!");
+			Uninitialize();
+			return false;
+		}
+
+		if (!m_pcChargeDataLoader->Initialize(m_pcPostgrePool, m_strGateSelectSQL, m_strZoneSelectSQL))
+		{
+			LOGFMTE("charge data loader initialize failed!");
+			Uninitialize();
+			return false;
+		}
+
+		// 기동 시 1회 게이트 캐시 로드 — 실패해도 서버 기동은 계속(과금 판정만 비활성) (2026-08-12 최정우 추가)
+		if (!m_pcChargeDataLoader->LoadGates())
+			LOGFMTW("initial gate cache load failed — charge gate matching disabled until next reload");
+		else
+			LOGFMTI("gate cache initial load success!count=[%zu]", m_pcChargeDataLoader->GetGateCount());
+
+		// 기동 시 1회 구역 캐시 로드 — 실패해도 서버 기동은 계속(zone_name 조회만 비활성) (2026-08-12 최정우 추가)
+		if (!m_pcChargeDataLoader->LoadZones())
+			LOGFMTW("initial zone cache load failed — zone name lookup disabled until next reload");
+		else
+			LOGFMTI("zone cache initial load success!count=[%zu]", m_pcChargeDataLoader->GetZoneCount());
+
+		m_dtLastGateReload = time(nullptr);
+	}
+
 	m_pcProcessManager = new (std::nothrow)CProcessManager[m_nWorkerThread];
 	if (m_pcProcessManager == nullptr)
 	{
@@ -380,6 +443,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	RAWLOG_WORKER_CONFIG stWorkerConfig;
 	stWorkerConfig.pcPostgrePool = m_pcPostgrePool;
 	stWorkerConfig.pcProcessManager = m_pcProcessManager;
+	stWorkerConfig.pcChargeDataLoader = m_pcChargeDataLoader;			// nullptr 이면 개방형 과금 판정 비활성 (2026-08-12 최정우 추가)
 	stWorkerConfig.strUpdateSQL = m_strRawLogUpdateSQL;
 	stWorkerConfig.strChargeInsertSQL = m_strChargeInsertSQL;
 	stWorkerConfig.nWorkerThreads = m_nWorkerThread;
@@ -573,6 +637,15 @@ void CServer::Uninitialize()
 		m_pcDataLoader = nullptr;
 	}
 	LOGFMTI("data loader uninitialize!");
+
+	if (m_pcChargeDataLoader != nullptr)
+	{
+		// 과금 게이트 캐시 메모리 해제 (2026-08-12 최정우 추가)
+		m_pcChargeDataLoader->Uninitialize();
+		delete m_pcChargeDataLoader;
+		m_pcChargeDataLoader = nullptr;
+	}
+	LOGFMTI("charge data loader uninitialize!");
 
 	if (m_pcPostgrePool != nullptr)
 	{
@@ -771,4 +844,22 @@ void CServer::ProcessPeriodSec(time_t dtNow)
 {
 	// 설정 시각·보관일 기준 만료 로그 파일 삭제 (2026-07-08 최정우 주석 추가)
 	m_pcLoggerManager->LogDeleteRun(dtNow);
+
+	// 게이트·구역 캐시 주기 재조회 — gate_reload=0 이면 비활성. 기존 타이머 스레드(1초 주기) 재사용,
+	// 별도 스레드 없음. 워커 처리량에 영향 없도록 best-effort — 실패해도 이전 캐시 유지 (2026-08-12 최정우 추가)
+	if ((m_pcChargeDataLoader != nullptr) && (m_nGateReloadSec > 0) &&
+		((dtNow - m_dtLastGateReload) >= m_nGateReloadSec))
+	{
+		if (!m_pcChargeDataLoader->LoadGates())
+			LOGFMTW("gate cache reload failed — keeping previous cache");
+		else
+			LOGFMTI("gate cache reload success!count=[%zu]", m_pcChargeDataLoader->GetGateCount());
+
+		if (!m_pcChargeDataLoader->LoadZones())
+			LOGFMTW("zone cache reload failed — keeping previous cache");
+		else
+			LOGFMTI("zone cache reload success!count=[%zu]", m_pcChargeDataLoader->GetZoneCount());
+
+		m_dtLastGateReload = dtNow;
+	}
 }

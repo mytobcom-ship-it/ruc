@@ -167,6 +167,14 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 
 	// [sql] charge_insert (선택) (2026-07-11 최정우 주석 추가)
 	cIniReader.GetProfileStr("sql", "charge_insert", "", pstConfig->strChargeInsertSession);
+	// [sql] gate_select (선택, 비어 있으면 CChargeDataLoader 게이트 캐시 비활성) (2026-08-12 최정우 추가)
+	cIniReader.GetProfileStr("sql", "gate_select", "", pstConfig->strGateSelectSession);
+	// [sql] zone_select (선택, 비어 있으면 CChargeDataLoader 구역 캐시 비활성) (2026-08-12 최정우 추가)
+	cIniReader.GetProfileStr("sql", "zone_select", "", pstConfig->strZoneSelectSession);
+	// [charge] gate_reload (단위: sec, 0=재조회 없음) (2026-08-12 최정우 추가)
+	cIniReader.GetProfileInt("charge", "gate_reload", CFG_DEF_GATE_RELOAD, pstConfig->nGateReloadSec);
+	if (pstConfig->nGateReloadSec < 0)
+		pstConfig->nGateReloadSec = CFG_DEF_GATE_RELOAD;
 
 	// [feeder] (2026-07-11 최정우 주석 추가)
 	// [feeder] limit (단위: 건수) (2026-07-11 최정우 주석 추가)

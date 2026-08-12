@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>개방형·폐쇄형 과금 구간 링크 판정 설계 (변경 전/후)</title>
+<style>
+  :root {
+    --bg: #f8fafc; --panel: #ffffff; --text: #1e293b; --muted: #64748b;
+    --border: #e2e8f0; --accent: #1e88e5; --code-bg: #f1f5f9;
+    --before: #94a3b8; --after: #43a047;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a; --panel: #1e293b; --text: #e2e8f0; --muted: #94a3b8;
+      --border: #334155; --accent: #60a5fa; --code-bg: #0b1220;
+      --before: #64748b; --after: #66bb6a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", sans-serif;
+    line-height: 1.65; font-size: 18px;
+  }
+  #layout { display: flex; min-height: 100vh; }
+  nav {
+    width: 290px; flex: none; background: var(--panel); border-right: 1px solid var(--border);
+    padding: 22px 16px; position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  }
+  nav h2 { font-size: 15px; margin: 0 0 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  nav a { display: block; font-size: 15.5px; color: var(--text); text-decoration: none; padding: 7px 9px; border-radius: 6px; line-height: 1.4; }
+  nav a:hover { background: var(--code-bg); }
+  nav .grp { margin-top: 18px; font-size: 12.5px; color: var(--muted); font-weight: 700; padding: 0 9px; }
+  main { flex: 1; padding: 32px 40px 90px; max-width: 1280px; }
+  h1 { font-size: 32px; margin: 0 0 8px; }
+  .subtitle { color: var(--muted); font-size: 16.5px; margin-bottom: 26px; }
+  section { margin-bottom: 50px; scroll-margin-top: 16px; }
+  section h2 { font-size: 24px; border-bottom: 3px solid var(--accent); padding-bottom: 8px; margin-bottom: 8px; }
+  .easy-name {
+    display: inline-block; font-size: 15.5px; font-weight: 700; color: var(--accent);
+    background: var(--code-bg); border: 1px solid var(--accent); border-radius: 20px;
+    padding: 4px 14px; margin-bottom: 14px;
+  }
+  .intro {
+    background: var(--code-bg); border-radius: 8px;
+    padding: 10px 16px; margin: 0 0 14px; font-size: 15.5px; color: var(--text);
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px; overflow-x: auto; margin-bottom: 14px;
+  }
+  .note {
+    background: var(--code-bg); border-left: 4px solid var(--accent); border-radius: 4px;
+    padding: 12px 16px; font-size: 15px; margin: 12px 0; color: var(--text);
+  }
+  .note b { color: var(--accent); }
+  .warn {
+    background: #e5393512; border-left: 4px solid #e53935; border-radius: 4px;
+    padding: 12px 16px; font-size: 15px; margin: 12px 0; color: var(--text);
+  }
+  .warn b { color: #e53935; }
+  code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 14.5px; }
+  pre.sql {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px 16px; font-size: 13.5px; overflow-x: auto; white-space: pre; margin: 0;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+  th, td { border: 1px solid var(--border); padding: 8px 11px; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); }
+  td code, th code { white-space: nowrap; }
+  .pk { color: var(--accent); font-weight: 700; }
+  .fk { color: #fb8c00; font-weight: 700; }
+  .badge {
+    display: inline-block; font-size: 12px; font-weight: 700; border-radius: 10px;
+    padding: 1px 8px; margin-left: 6px; vertical-align: middle;
+  }
+  .badge.confirmed { background: #1e88e520; color: var(--accent); border: 1px solid var(--accent); }
+  .badge.estimate { background: #fb8c0020; color: #fb8c00; border: 1px solid #fb8c00; }
+  .badge.testdata { background: #43a04720; color: #43a047; border: 1px solid #43a047; }
+  .badge.new { background: #8e24aa20; color: #ab47bc; border: 1px solid #ab47bc; }
+  .badge.nochange { background: #43a04720; color: var(--after); border: 1px solid var(--after); }
+  .badge.optional { background: #64748b20; color: var(--muted); border: 1px solid var(--muted); }
+  .cols-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 900px) { .cols-2 { grid-template-columns: 1fr; } }
+  .colhead-before { color: var(--before); font-weight: 700; }
+  .colhead-after { color: var(--after); font-weight: 700; }
+  .diffcell-same { color: var(--muted); }
+  .diffcell-changed { background: #43a04715; }
+  footer { color: var(--muted); font-size: 14px; padding: 22px 40px 44px; }
+  .src { font-size: 13.5px; color: var(--muted); margin-top: -4px; margin-bottom: 10px; }
+  ol, ul { font-size: 15.5px; }
+  ol li, ul li { margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<div id="layout">
+<nav>
+  <h2>과금 구간 링크 판정 설계</h2>
+  <a href="#overview">0. 배경·설계 원칙</a>
+  <a href="#summary">1. 변경 요약 (Before/After)</a>
+  <div class="grp">변경 전</div>
+  <a href="#before">2. 기존 테이블 원본 (변경 전)</a>
+  <div class="grp">변경 후</div>
+  <a href="#after-tollgate">3. base_tollgate — 변경 후</a>
+  <a href="#after-newtable">4. (선택) 신규 base_roadlink_link</a>
+  <a href="#after-config">5. MapMatchSvr 설정값 (DB 아님)</a>
+  <div class="grp">적용</div>
+  <a href="#flow">6. 판정 흐름 적용 예시</a>
+  <a href="#migration">7. 적용 순서</a>
+  <a href="#risks">8. 미해결·전제조건</a>
+  <div class="grp">참고</div>
+  <a href="../index.html">← 웹 뷰어로</a>
+  <a href="charge-tables.html">← 과금 전체 테이블 구조(원본)</a>
+  <a href="charge-flow.html">← 도로이용 과금 알고리즘 Flow</a>
+  <a href="charge-issues.html">← 유형별 문제점·대응방안 요약</a>
+  <a href="charge-open-gate-test.html">← 개방식 임시 게이트 테스트 DDL</a>
+  <a href="charge-unified-table-design.html">→ 4유형 통합설계(신버전, 구간단속·주정차 포함)</a>
+</nav>
+<main>
+  <h1>개방형·폐쇄형 과금 구간 — 링크 판정 설계</h1>
+  <p class="subtitle">
+    "지금 맵매칭된 링크가 개방형·폐쇄형 과금 구간(게이트)에 해당하는가"를 판정하기 위해 필요한 컬럼을 설계합니다.
+    원칙은 <b>기존 4개 테이블(<code>base_roadlink</code>/<code>base_tollgate</code>/<code>base_tollfare</code>/<code>base_tollsection</code>)의
+    스키마를 한 컬럼도 바꾸지 않는 것</b>입니다.
+  </p>
+
+  <div class="note">
+    <b>후속 문서 있음</b>: 이 문서(개방·폐쇄형 전용)를 구간단속·주정차까지 포함해 4유형 전체로 확장하고,
+    브릿지 테이블 제안을 철회한 <a href="charge-unified-table-design.html">charge-unified-table-design.html</a>이
+    이후에 작성됐습니다. 새로 설계를 검토하신다면 그쪽을 우선 참고하세요 — 이 문서는 개방·폐쇄형 세부 근거
+    자료로 유효합니다.
+  </div>
+
+  <div class="warn">
+    <b>전제: "게이트 점 이벤트" 모델 기준입니다.</b>
+    <a href="charge-tables.html#road_link">charge-tables.html I-7</a>에서 개방형이 정말 "게이트 통과 즉시 1건"인지
+    "링크 hop마다 누적"인지 실측 데이터로 확정되지 않았다고 정리된 바 있습니다. 이 문서는 원래 설계 가정(점 이벤트)을
+    따릅니다 — 담당자 확인 후 실제로 hop 누적형이라면 6절 판정 흐름만 교체하면 되고, 아래 테이블 설계 자체는
+    영향받지 않습니다(어느 쪽이든 "현재 링크 → 게이트/도로 매칭"은 동일하게 필요).
+  </div>
+
+  <section id="overview">
+    <h2>0. 배경·설계 원칙</h2>
+    <div class="intro">
+      <a href="charge-tables.html#base_tollgate">charge-tables.html</a>에서 이미 확인된 문제: <code>base_tollgate.link_id</code>는
+      "소프트 참조"라고 코멘트에 적혀 있지만 참조 대상이 <code>road_link.link_id</code>(MapMatchSvr가 실제로 쓰는
+      표준노드링크)가 아니라 <code>base_mapinfo.link_id</code>이고, 그마저 실데이터 3건 전부 <code>NULL</code>입니다.
+      즉 <b>지금 매칭된 링크가 과금 게이트/도로에 해당하는지 ID로 조인할 방법이 없습니다.</b>
+    </div>
+    <ol>
+      <li><b>컬럼을 늘리지 않는다</b> — <code>base_tollgate.link_id</code>는 이미 있는 컬럼이다. 참조 대상 정정 + 데이터 백필만 한다.</li>
+      <li><b>신규 테이블은 최소 1개, 그것도 선택사항으로</b> — 게이트 판정(요금 계산)엔 <code>base_tollgate</code>만으로 충분하다.
+        "지금 이 링크가 어느 과금도로 위에 있는가"라는 구간 소속 질문에만 별도 브릿지 테이블이 필요하다.</li>
+      <li><b>핫패스 DB 왕복 0회</b> — 기존에 합의된 원칙(<code>doc/README.txt</code> F절, <code>PostgrePool.cpp:264</code>
+        <code>keepPoolAlive()</code> 패턴)을 그대로 따른다. 게이트/구간 데이터는 MapMatchSvr 프로세스 메모리에
+        전량 캐시하고, GPS 처리마다 DB를 조회하지 않는다.</li>
+    </ol>
+  </section>
+
+  <section id="summary">
+    <h2>1. 변경 요약 (Before → After)</h2>
+    <div class="card">
+      <table>
+        <tr><th>테이블</th><th>컬럼 변경</th><th>데이터/코멘트 변경</th><th>비고</th></tr>
+        <tr><td><code>base_roadlink</code></td><td class="diffcell-same">없음</td><td class="diffcell-same">없음</td><td>그대로 사용 (<code>road_kind</code>로 유형만 참조)</td></tr>
+        <tr class="diffcell-changed"><td><code>base_tollgate</code></td><td class="diffcell-same">없음 (0건 추가)</td><td><b>link_id 백필</b> NULL→<code>road_link.link_id</code></td><td>컬럼 코멘트 정정만, DDL 불변</td></tr>
+        <tr><td><code>base_tollfare</code></td><td class="diffcell-same">없음</td><td class="diffcell-same">없음</td><td>그대로 사용</td></tr>
+        <tr><td><code>base_tollsection</code></td><td class="diffcell-same">없음</td><td class="diffcell-same">없음</td><td>그대로 사용 — (진입ID,출구ID) PK가 이미 짝짓기 키</td></tr>
+        <tr class="diffcell-changed"><td><code>base_roadlink_link</code> <span class="badge new" style="margin:0;">신규</span></td><td>테이블 1개 신설</td><td>공간매칭으로 채움</td><td><span class="badge optional" style="margin:0;">선택</span> 구간소속 조회용, 요금계산엔 불필요</td></tr>
+        <tr class="diffcell-changed"><td>MapMatchSvr <code>config.ini</code></td><td>—</td><td>파라미터 1개 추가(<code>gate_radius</code>)</td><td>DB 아님, C++ 설정값</td></tr>
+      </table>
+    </div>
+    <div class="note">
+      결론: <b>기존 운영 스키마(4개 테이블)는 컬럼 단위로 0건 변경</b>입니다. "구간 테이블"에 새 컬럼을 추가하는 대신,
+      이미 있던 미사용 컬럼(<code>link_id</code>) 하나를 제 용도로 채우는 것만으로 게이트 판정에 필요한 최소 요건이 충족됩니다.
+    </div>
+  </section>
+
+  <section id="before">
+    <h2>2. 기존 테이블 원본 (변경 전) <span class="badge confirmed">확인됨</span></h2>
+    <div class="src">출처: <code>doc/RUC_과금DB_스키마_기준선_v1.0.md</code>, <a href="charge-tables.html">charge-tables.html</a></div>
+    <div class="card">
+      <h3 style="margin-top:0; font-size:16px;">base_tollgate (변경 전)</h3>
+      <table>
+        <tr><th>컬럼</th><th>타입</th><th>PK/FK</th><th>설명 (변경 전)</th></tr>
+        <tr><td class="pk">tollgate_id</td><td>varchar(20)</td><td class="pk">PK</td><td>영업소 ID</td></tr>
+        <tr><td>road_id</td><td>varchar(20)</td><td class="fk">FK</td><td>→ base_roadlink.road_id</td></tr>
+        <tr><td>tollgate_nm</td><td>varchar(100)</td><td>—</td><td>영업소명</td></tr>
+        <tr><td>gate_div</td><td>varchar(1)</td><td>—</td><td>M 개방식본선 / I 입구 / O 출구 / B 겸용</td></tr>
+        <tr><td>lon / lat</td><td>numeric(10,6)</td><td>—</td><td>경도/위도(WGS84)</td></tr>
+        <tr class="diffcell-changed"><td>link_id</td><td>varchar(20)</td><td>소프트</td><td>
+          <b>base_mapinfo.link_id 소프트 참조 — 실데이터 3건 전부 NULL</b>. 표준노드링크(road_link)와 무관해
+          MapMatchSvr가 조인할 수 없음</td></tr>
+        <tr><td>use_yn</td><td>varchar(1)</td><td>—</td><td>사용 여부</td></tr>
+        <tr><td>reg_dt / upd_dt</td><td>timestamp</td><td>—</td><td>등록/수정일시</td></tr>
+      </table>
+    </div>
+    <div class="warn">
+      이 상태로는 MapMatchSvr가 <code>qwLinkID</code>(<code>ProcessManager.h</code>의 매칭 결과 링크 ID,
+      <code>uint64</code>)를 아무리 들고 있어도 <code>base_tollgate</code> 어느 행과도 매칭시킬 ID가 없습니다.
+      유일한 대안은 <code>lon/lat</code> 좌표거리 비교뿐인데, 이것도 임계값이 정해진 적이 없습니다.
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0; font-size:16px;">참고 — road_link (표준노드링크, 변경 없음)</h3>
+      <table>
+        <tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
+        <tr><td class="pk">link_id</td><td>varchar(10)</td><td>링크 ID (표준노드링크) — "과금 판정/원천용"이라고 테이블 코멘트에 명시됨</td></tr>
+        <tr><td>f_node / t_node</td><td>varchar(10)</td><td>시작/종료 노드 ID</td></tr>
+        <tr><td>coords</td><td>jsonb</td><td>좌표열 (WGS84, MultiLineString)</td></tr>
+        <tr><td>min/max lon/lat</td><td>numeric</td><td>경계상자(지역 필터용)</td></tr>
+      </table>
+      <div class="note">
+        <code>road_link</code> 테이블 코멘트가 이미 "과금 판정/원천용, 지도 표출(base_mapinfo)과 분리"라고 밝히고
+        있습니다. 즉 <code>base_tollgate.link_id</code>가 애초에 참조했어야 할 대상은 <code>base_mapinfo.link_id</code>가
+        아니라 <b><code>road_link.link_id</code></b>였다고 보는 게 테이블 설계 의도에 맞습니다 (자세한 내용은
+        <a href="charge-tables.html#road_link">charge-tables.html road_link 절</a> 참고).
+      </div>
+    </div>
+  </section>
+
+  <section id="after-tollgate">
+    <h2>3. base_tollgate — 변경 후 <span class="badge nochange">DDL 불변</span></h2>
+    <div class="easy-name">컬럼 추가 0건 — 기존 link_id 컬럼 용도 정정 + 데이터 백필만</div>
+    <div class="cols-2">
+      <div class="card">
+        <h3 style="margin-top:0; font-size:15px;" class="colhead-before">변경 전</h3>
+        <pre class="sql">link_id  varchar(20)  DEFAULT NULL
+-- 참조: base_mapinfo.link_id (소프트)
+-- 실데이터: 3건 전부 NULL</pre>
+      </div>
+      <div class="card">
+        <h3 style="margin-top:0; font-size:15px;" class="colhead-after">변경 후</h3>
+        <pre class="sql">link_id  varchar(20)  DEFAULT NULL   -- 타입·컬럼명 동일
+-- 참조: road_link.link_id (소프트, 1회성 공간매칭으로 백필)
+-- 실데이터: 게이트 좌표(lon,lat) 최근접 링크로 채움</pre>
+      </div>
+    </div>
+    <div class="card">
+      <table>
+        <tr><th>컬럼</th><th>변경 전 설명</th><th>변경 후 설명</th></tr>
+        <tr><td>link_id</td>
+          <td>base_mapinfo.link_id 소프트참조, 전부 NULL</td>
+          <td><b>road_link.link_id 소프트참조</b>. 게이트 (lon,lat) 기준 <code>road_link.coords</code> 최근접 링크를
+            1회성 스크립트로 채움. gate_div=M(개방형 본선)·I/O(폐쇄형 입출구) 전부 동일 방식.</td></tr>
+      </table>
+    </div>
+    <div class="note">
+      <b>왜 컬럼을 안 늘려도 되는가</b>: <code>link_id</code>는 이미 <code>varchar(20)</code>로 <code>road_link.link_id</code>
+      (<code>varchar(10)</code>)를 담기에 충분한 길이입니다. "소프트 참조"이므로 하드 FK도 새로 걸 필요 없습니다
+      (road_link가 <code>road_link.link_id</code>에 대해 UNIQUE 여부가 <a href="charge-tables.html#road_link">확인 안 됨</a> —
+      확인 전까지 소프트 참조 유지가 안전).
+    </div>
+    <div class="warn">
+      <b>좌표거리 매칭이 유일한 경로일 때의 리스크</b>: 게이트가 매우 짧은 링크 위에 있거나 두 링크 경계에 걸쳐 있으면
+      최근접 링크가 모호할 수 있습니다. 백필 스크립트는 최근접 1건 + 거리(m)를 같이 출력해, 거리가 큰 행(예: 30m 초과)은
+      수동 확인 대상으로 별도 표시할 것을 권장합니다.
+    </div>
+  </section>
+
+  <section id="after-newtable">
+    <h2>4. (선택) 신규 base_roadlink_link <span class="badge new">신규</span> <span class="badge optional">선택</span></h2>
+    <div class="easy-name">표준노드링크 ↔ 과금도로(base_roadlink) 구간 소속 브릿지 테이블</div>
+    <div class="intro">
+      <b>요금 계산 자체에는 필요 없습니다.</b> 개방형은 게이트(M) 통과, 폐쇄형은 입구(I)+출구(O) 게이트 짝만으로
+      <code>base_tollfare</code>/<code>base_tollsection</code>에서 정액을 바로 조회하므로, "현재 링크가 도로 구간
+      내부 어디쯤인지"는 금액 산정과 무관합니다 (<code>base_roadlink</code>는 위상 없는 "가상 링크"이고 실제 요금도
+      이동거리 계산이 아니라는 점이 <a href="charge-tables.html#base_roadlink">charge-tables.html</a>에 이미 정리돼 있음).
+      <br/><br/>
+      그럼에도 아래 두 상황에 쓸모가 있어 <b>선택 옵션으로만</b> 제안합니다:
+    </div>
+    <ul>
+      <li><b>폐쇄형 휴게소 장시간 정차(I-8 이슈)</b> — 진입 게이트 세션이 TTL로 소실됐을 때, "지금 링크가 그래도
+        이 폐쇄도로(<code>road_id</code>) 위인가"를 보조 판단 근거로 쓸 수 있음 (durable 기록 설계의 보조 데이터,
+        <a href="charge-issues.html">charge-issues.html</a> 참고).</li>
+      <li><b>지도 관리 화면</b> — 관리자가 등록한 과금 구간을 표준노드링크 단위로 하이라이트 표시.</li>
+    </ul>
+    <div class="card">
+      <table>
+        <tr><th>컬럼</th><th>타입</th><th>기본값</th><th>PK/FK</th><th>설명</th></tr>
+        <tr><td class="pk">road_id</td><td>varchar(20)</td><td>—</td><td class="pk">PK-1 / <span class="fk">FK</span></td><td>→ base_roadlink.road_id (하드 FK)</td></tr>
+        <tr><td class="pk">link_id</td><td>varchar(10)</td><td>—</td><td class="pk">PK-2 / 소프트</td><td>→ road_link.link_id (소프트 — UNIQUE 미확인 상태라 하드 FK 보류)</td></tr>
+        <tr><td>seq</td><td>integer</td><td>NULL</td><td>—</td><td>도로 내 진행 순서(선택) — base_roadlink엔 위상(f_node/t_node)이 없어 순번으로만 방향 표현 가능</td></tr>
+        <tr><td>reg_dt</td><td>varchar(14)</td><td><code>NOW()</code> 포맷</td><td>—</td><td>등록일시(백필 스크립트 실행 시각)</td></tr>
+      </table>
+    </div>
+    <div class="note">
+      <b>기존 4개 테이블과의 관계</b>: 이 테이블은 <code>base_roadlink</code>/<code>base_tollgate</code>를 참조만 하고
+      역으로 참조당하지 않으므로, 지워도 기존 과금 판정(게이트 이벤트)에는 영향이 없습니다 — 순수 부가 기능입니다.
+      우선순위가 낮다면 3절(<code>base_tollgate.link_id</code> 백필)만 먼저 적용해도 개방형·폐쇄형 게이트 판정은 동작합니다.
+    </div>
+  </section>
+
+  <section id="after-config">
+    <h2>5. MapMatchSvr 설정값 (DB 아님) <span class="badge new">신규</span></h2>
+    <div class="intro">
+      좌표거리 폴백 매칭(링크 ID가 정확히 안 맞을 때 대비)용 임계값입니다. 기존 <code>[mapmatch]</code>
+      섹션의 <code>radius</code>/<code>radius_min</code>/<code>radius_max</code>/<code>radius_skip</code>과
+      동일한 네이밍 규칙(짧은 접두사, 밑줄 최대 1개, 단위는 이름이 아니라 주석에)을 따릅니다.
+    </div>
+    <div class="card">
+<pre class="sql"># config.ini [mapmatch] 섹션 추가안
+# gate_radius                      - 게이트 좌표거리 폴백 매칭 반경 m       (기본값 결정 필요, 예: 30)
+gate_radius=30</pre>
+    </div>
+    <div class="note">
+      <code>ConfigDefaults.h</code>에 <code>CFG_DEF_GATE_RADIUS</code> 형태로 추가하면 기존 <code>CFG_DEF_RADIUS*</code>
+      네이밍과 일관됩니다. 실제 기본값(30m 등)은 담당자 확인 필요 — 이 문서는 설계 자리만 마련합니다.
+    </div>
+  </section>
+
+  <section id="flow">
+    <h2>6. 판정 흐름 적용 예시</h2>
+    <div class="card">
+      <h3 style="margin-top:0; font-size:16px;">개방형 (gate_div=M)</h3>
+      <ol>
+        <li>MapMatchSvr 시작 시 <code>base_tollgate</code>(use_yn='Y') 전량 SELECT → 인메모리 해시맵
+          <code>link_id → tollgate_id</code> 구성 (<code>DataLoader.h</code>의 <code>m_mapLinkInfoList</code> 패턴 재사용).</li>
+        <li>GPS hop마다 매칭된 <code>qwLinkID</code>를 문자열 변환해 해시맵 조회. 히트하면 게이트 통과로 판정.</li>
+        <li>미스면 폴백: 매칭 좌표와 캐시된 게이트 lon/lat 간 거리가 <code>gate_radius</code> 이내인 게이트가 있는지 확인.</li>
+        <li>확정되면 <code>base_tollfare</code>(tollgate_id, car_type, fare_date≤오늘 중 최신)로 정액 조회 →
+          <code>prim_chargehand</code> 적재 → <code>prim_tollcharge</code> 확정.</li>
+      </ol>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0; font-size:16px;">폐쇄형 (gate_div=I/O)</h3>
+      <ol>
+        <li>동일한 <code>link_id → tollgate_id</code> 해시맵에서 <code>gate_div</code>도 함께 보유.</li>
+        <li>입구(I) 히트 → <code>VEHICLE_TRIP_SESSION</code>에 진입 게이트ID 저장(<code>doc/README.txt</code> G절
+          <code>GatePairID</code> 명명 참고), durable 기록 여부는 I-8 대응방안 별도 결정.</li>
+        <li>출구(O) 히트 → 세션의 진입 게이트ID + 이번 출구 게이트ID + car_type + fare_date로
+          <code>base_tollsection</code> 조회 → 고정 구간요금 확정.</li>
+        <li>4절 <code>base_roadlink_link</code>를 도입했다면, 세션이 없을 때(TTL 소실) "현재 링크가 이 road_id
+          위인가"로 보조 판단해 I-8 시나리오 완화 가능(선택).</li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="migration">
+    <h2>7. 적용 순서</h2>
+    <ol>
+      <li><code>road_link</code>에서 <code>base_tollgate</code>의 (lon, lat) 기준 최근접 링크 + 거리(m)를 산출하는
+        1회성 스크립트 작성 (SQL <code>ORDER BY point <-&gt; geom LIMIT 1</code> 류 또는 Python haversine).</li>
+      <li>결과 검토 — 거리가 큰 행(임계값 초과)은 수동 확인 목록으로 분리.</li>
+      <li><code>UPDATE base_tollgate SET link_id = ...</code> — DDL 변경 없이 데이터만 채움.</li>
+      <li><code>COMMENT ON COLUMN base_tollgate.link_id IS '...'</code> — 참조 대상 정정(선택, 문서화 목적).</li>
+      <li>(선택) 4절 <code>base_roadlink_link</code> DDL 실행 + 동일 방식으로 <code>base_roadlink.coords</code>
+        선분을 따라가며 <code>road_link</code> 후보들을 채우는 배치 작성.</li>
+      <li>MapMatchSvr <code>config.ini</code>에 <code>gate_radius</code> 추가, <code>ConfigDefaults.h</code>에
+        기본값 정의 (이후 캐시 클래스·판정 코드는 별도 구현 과제 — <code>doc/README.txt</code> H절 4·5번).</li>
+    </ol>
+  </section>
+
+  <section id="risks">
+    <h2>8. 미해결·전제조건</h2>
+    <ul>
+      <li><b>I-7 미해결</b> — 개방형이 정말 "게이트 점 이벤트"인지 자체가 실측과 안 맞는 상태. 이 설계는 점 이벤트
+        가정 하의 매칭 방법론이며, 담당자 확인 후 모델이 바뀌면 6절 판정 흐름만 재검토하면 됨.</li>
+      <li><b>road_link 스냅샷 정합성</b> — road_link 코멘트상 "2025-07-16판". MapMatchSvr가 실제 맵매칭에 쓰는
+        <code>link.psf</code>(<code>CreateData</code> 생성물)가 동일 시점 데이터인지 확인 필요 — 다르면 같은
+        도로도 <code>link_id</code>가 다를 수 있어 백필 매칭이 어긋남.</li>
+      <li><b>gate_radius 값 미정</b> — 30m는 예시일 뿐, 실제 게이트 근방 표준노드링크 밀도를 보고 정할 것.</li>
+      <li><b>gate_div=B(겸용) 미관측</b> — 실데이터 3건 모두 M/I/O만 존재. B 케이스가 실제로 나오면 해시맵에
+        입구·출구 두 역할을 동시에 매핑하는 처리가 추가로 필요.</li>
+      <li><b>road_link.link_id UNIQUE 여부 미확인</b> — 4절 브릿지 테이블의 FK를 하드로 걸지 소프트로 둘지는
+        이 확인 이후 결정.</li>
+    </ul>
+  </section>
+
+  <footer>
+    관련 문서: <a href="charge-tables.html">charge-tables.html</a>(테이블 구조 원본) ·
+    <a href="charge-flow.html">charge-flow.html</a>(전체 알고리즘 Flow) ·
+    <a href="charge-issues.html">charge-issues.html</a>(유형별 이슈) ·
+    <a href="charge-open-gate-test.html">charge-open-gate-test.html</a>(개방형 테스트 스캐폴드) ·
+    <code>doc/README.txt</code> E·F·G·H·I절
+  </footer>
+</main>
+</div>
+</body>
+</html>

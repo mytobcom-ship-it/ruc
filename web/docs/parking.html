@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>주정차단속 — 원본 GPS 좌표 + 속도/체류시간 판정 설계</title>
+<style>
+  :root {
+    --bg: #f8fafc; --panel: #ffffff; --text: #1e293b; --muted: #64748b;
+    --border: #e2e8f0; --accent: #f57f17; --code-bg: #f1f5f9; --after: #43a047;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a; --panel: #1e293b; --text: #e2e8f0; --muted: #94a3b8;
+      --border: #334155; --accent: #fdd835; --code-bg: #0b1220; --after: #66bb6a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", sans-serif;
+    line-height: 1.65; font-size: 18px;
+  }
+  #layout { display: flex; min-height: 100vh; }
+  nav {
+    width: 280px; flex: none; background: var(--panel); border-right: 1px solid var(--border);
+    padding: 22px 16px; position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  }
+  nav h2 { font-size: 15px; margin: 0 0 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  nav a { display: block; font-size: 15px; color: var(--text); text-decoration: none; padding: 6px 9px; border-radius: 6px; line-height: 1.4; }
+  nav a:hover { background: var(--code-bg); }
+  nav .grp { margin-top: 16px; font-size: 12.5px; color: var(--muted); font-weight: 700; padding: 0 9px; }
+  main { flex: 1; padding: 32px 40px 90px; max-width: 1200px; }
+  h1 { font-size: 26px; margin: 0 0 8px; }
+  .subtitle { color: var(--muted); font-size: 16.5px; margin-bottom: 26px; }
+  section { margin-bottom: 46px; scroll-margin-top: 16px; }
+  section h2 { font-size: 22px; border-bottom: 3px solid var(--accent); padding-bottom: 8px; margin-bottom: 8px; }
+  .intro {
+    background: var(--code-bg); border-radius: 8px;
+    padding: 10px 16px; margin: 0 0 14px; font-size: 15.5px; color: var(--text);
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px; overflow-x: auto; margin-bottom: 14px;
+  }
+  .note {
+    background: var(--code-bg); border-left: 4px solid var(--accent); border-radius: 4px;
+    padding: 12px 16px; font-size: 15px; margin: 12px 0; color: var(--text);
+  }
+  .note b { color: var(--accent); }
+  code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 14.5px; }
+  pre.pseudo, pre.ascii {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px 16px; font-size: 13.5px; overflow-x: auto; white-space: pre; margin: 0;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+  th, td { border: 1px solid var(--border); padding: 8px 11px; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); }
+  ul { font-size: 15.5px; }
+  ul li { margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<div id="layout">
+<nav>
+  <h2>주정차단속 판정 설계</h2>
+  <a href="#why-raw">0. 왜 원본 GPS인가</a>
+  <a href="#not-enough">1. 원본 좌표만으론 부족한 이유</a>
+  <a href="#defense">2. 2단 방어 — 속도·체류시간</a>
+  <a href="#logic">3. 판정 로직(의사코드)</a>
+  <div class="grp">참고</div>
+  <a href="../index.html">← 웹 뷰어로</a>
+  <a href="table.html">← 구간단속 2테이블 재사용 설계</a>
+  <a href="charge-spatial-model.html">← 과금 유형별 공간모델</a>
+  <a href="columns.html">→ 4유형별 PRIM_CHARGEHAND 컬럼 비교</a>
+</nav>
+<main>
+  <h1>주정차단속 — 원본 GPS 좌표 + 속도/체류시간 판정</h1>
+  <p class="subtitle">
+    POLY(주정차) 구역 판정에 맵매칭 좌표 대신 원본 GPS를 쓰는 이유와, 그로 인한 오탐(false positive)을
+    막는 방법을 정리한 문서입니다.
+  </p>
+
+  <section id="why-raw">
+    <h2>0. 왜 원본 GPS인가</h2>
+    <div class="intro">
+      맵매칭은 "차량이 도로 링크 위에 있다"는 전제로 GPS를 가장 가까운 링크에 스냅합니다. 주정차 판정엔
+      이 전제가 맞지 않습니다.
+    </div>
+    <div class="card">
+      <table>
+        <tr><th>문제</th><th>내용</th></tr>
+        <tr>
+          <td>스냅으로 인한 위치 왜곡</td>
+          <td>주정차는 갓길·주차구역 등 도로 중심선 밖인 경우가 많음 — 맵매칭이 강제로 가까운 링크에
+            스냅시키면, 실제로는 금지구역 안인데 스냅 때문에 밖으로 밀려나 <b>위음성(놓침)</b> 발생 가능</td>
+        </tr>
+        <tr>
+          <td>정차 중 맵매칭 불안정</td>
+          <td>맵매칭은 진행방향·이전 링크와의 연속성을 근거로 삼는데, 정차 중엔 움직임이 없어 이 근거가
+            사라짐 — 매칭 실패 또는 엉뚱한 링크로 튈 수 있음</td>
+        </tr>
+      </table>
+    </div>
+    <div class="note">
+      그래서 LINE 타입(개방·폐쇄·구간단속)은 맵매칭 좌표를, <b>POLY 타입(주정차)은 맵매칭 성공/실패와
+      무관하게 처음부터 원본 GPS 좌표</b>를 판정에 사용합니다.
+    </div>
+  </section>
+
+  <section id="not-enough">
+    <h2>1. 원본 좌표만으론 부족한 이유</h2>
+    <div class="intro">
+      원본 좌표는 정확도는 높지만 튐(jitter)은 그대로 남습니다. 도로 위를 서행 중인 차량의 GPS가 우연히
+      한두 번 튀어 폴리곤 안에 찍히면, 그 순간만 보고 판정할 경우 <b>오탐(false positive)</b>이 생깁니다.
+    </div>
+  </section>
+
+  <section id="defense">
+    <h2>2. 2단 방어 — 속도·체류시간</h2>
+    <div class="card">
+      <table>
+        <tr><th>단계</th><th>조건</th><th>역할</th></tr>
+        <tr>
+          <td>1. 위치</td>
+          <td>원본 GPS로 point-in-polygon</td>
+          <td>1차 필터 — "지금 이 순간 폴리곤 안인가"</td>
+        </tr>
+        <tr>
+          <td>2. 속도/주행상태</td>
+          <td><code>nDriveStatus=PARKED</code> 또는 속도≈0</td>
+          <td>서행 차량 배제 — 진짜 멈췄는지 확인</td>
+        </tr>
+        <tr>
+          <td>3. 체류시간</td>
+          <td>1·2번이 동시에 <b>10분 이상 지속</b></td>
+          <td>최종 위반 확정 — 순간적인 튐만으로는 도달 불가</td>
+        </tr>
+      </table>
+    </div>
+    <div class="note">
+      서행 차량은 2단계(속도 조건)에서 걸러집니다 — GPS가 순간적으로 폴리곤 안에 튀어도
+      <code>nDriveStatus</code>가 PARKED가 아니므로 정차 세션 자체가 시작되지 않거나 곧바로 끊깁니다.
+      10분 연속 체류를 요구하는 한 한두 번의 튐만으로 과금까지 이어지지 않습니다.
+    </div>
+  </section>
+
+  <section id="logic">
+    <h2>3. 판정 로직</h2>
+    <div class="note">
+      C++ 의사코드는 문서에서 제거하고 별도로 기억해두었습니다 — 실제 소스 코딩 시 참조합니다. 핵심 골자는
+      2절의 3단계(위치→속도→체류시간)를 그대로 상태머신으로 구현하는 것이며, 위치·속도가 동시에 성립할 때만
+      세션을 시작·유지하고, 조건이 중간에 깨지면 체류시간을 확인해 임계치 이상일 때만 위반으로 확정합니다.
+    </div>
+  </section>
+</main>
+</div>
+</body>
+</html>

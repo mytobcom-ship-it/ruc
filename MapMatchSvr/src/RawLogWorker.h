@@ -13,6 +13,7 @@
 #include "Thread.h"
 #include "PostgrePool.h"
 #include "ProcessManager.h"
+#include "ChargeDataLoader.h"
 
 using namespace std;
 
@@ -41,6 +42,12 @@ typedef struct sVehicleTripSession
 
 	char							szTripId[60+1];						// 현재 세션의 TRIP_ID — 신규 trip 감지(END/START 누락 대비) (2026-07-08 최정우 추가)
 
+	// 개방형 게이트 트랙 — "마지막 통과 게이트"가 아니라 "현재 게이트 링크 위에 있는가"(엣지 감지) 의미.
+	//   매칭 링크가 게이트 링크가 아니게 되는 순간 반드시 빈 값으로 리셋해야 동일 게이트 재통과 시
+	//   정상 재부과됨(리셋 안 하면 재통과가 부과 누락됨) (2026-08-12 최정우 추가)
+	char							szActiveGateId[20+1];					// 현재 진입해 있는 게이트 TOLLGATE_ID, 없으면 빈 문자열
+	int								nChargeSeq;							// 이 trip 의 다음 PRIM_CHARGEHAND.trip_seq(1부터, 신규 trip 시작 시 리셋)
+
 	sVehicleTripSession() :
 		qwLinkID(0),
 		dtLastSeen(0),
@@ -56,9 +63,11 @@ typedef struct sVehicleTripSession
 		dfLastMatchLinkPos(0.0),							// (2026-07-20 최정우 추가)
 		bHasPrevLinkPos(false),								// (2026-07-20 최정우 추가)
 		nReverseStreak(0),									// (2026-07-21 최정우 추가)
-		bLastPointOk(true)									// (2026-07-21 최정우 추가)
+		bLastPointOk(true),									// (2026-07-21 최정우 추가)
+		nChargeSeq(1)										// (2026-08-12 최정우 추가)
 	{
 		szTripId[0] = '\0';									// (2026-07-08 최정우 추가)
+		szActiveGateId[0] = '\0';							// (2026-08-12 최정우 추가)
 	}
 } VEHICLE_TRIP_SESSION, *PVEHICLE_TRIP_SESSION;
 
@@ -81,6 +90,34 @@ typedef struct sRawLogUpdateRow
 } RAW_LOG_UPDATE_ROW, *PRAW_LOG_UPDATE_ROW;
 
 /**
+ * @struct sChargeInsertRow
+ * @brief [charge_insert] bulk INSERT 1행 파라미터 — 개방형(OPEN_ROAD) 게이트 통과 1건 (2026-08-12 최정우 추가)
+ * @remark PRIM_CHARGEHAND 컬럼 순서(query.sql [charge_insert] 와 반드시 일치): trip_id, device_key,
+ *   trip_seq, charge_type, charge_unit, link_id, from_id, to_id, from_lat, from_lon, to_lat, to_lon,
+ *   zone_id, zone_name, occur_dt, trip_start_dt, tollgate_id
+*/
+typedef struct sChargeInsertRow
+{
+	string							strTripId;
+	string							strDeviceKey;
+	string							strChargeSeq;						// PRIM_CHARGEHAND.trip_seq
+	string							strChargeType;						// 1=OPEN_ROAD 고정
+	string							strChargeUnit;						// 1=LINK 고정
+	string							strLinkId;
+	string							strFromId;							// 링크 시작 노드 ID
+	string							strToId;							// 링크 종료 노드 ID
+	string							strFromLat;
+	string							strFromLon;
+	string							strToLat;
+	string							strToLon;
+	string							strZoneId;							// base_roadlink.road_id (없으면 빈 문자열)
+	string							strZoneName;						// base_roadlink.road_nm (없으면 빈 문자열)
+	string							strOccurDt;							// YYYYMMDDHH24MISS
+	string							strTripStartDt;						// YYYYMMDDHH24MISS (trip_id 에서 추출)
+	string							strTollgateId;
+} CHARGE_INSERT_ROW, *PCHARGE_INSERT_ROW;
+
+/**
  * @struct sRawLogWorkerConfig
  * @brief 워커 공유 설정
 */
@@ -88,8 +125,9 @@ typedef struct sRawLogWorkerConfig
 {
 	CPostgrePool					*pcPostgrePool;
 	CProcessManager					*pcProcessManager;
+	CChargeDataLoader					*pcChargeDataLoader;					// 게이트·구역 캐시 — 개방형 과금 판정용(nullptr=과금 비활성) (2026-08-12 최정우 추가)
 	string							strUpdateSQL;						// [rawgps_update] 완료(1/3/4) 및 release(0) 공용
-	string							strChargeInsertSQL;						// [charge_insert] #10 보류 — 재설계 후 INSERT
+	string							strChargeInsertSQL;						// [charge_insert] 개방형 게이트 통과 bulk INSERT (비어있으면 비활성) (2026-08-12 최정우 수정)
 	int								nWorkerThreads;
 	int								nTtlSec;							// trip_id 세션 유지 시간 (초, 0=비활성)
 	int								nMatchTimeoutMs;					// 1 GPS 맵매칭 처리 임계 (ms, 초과 시 ERROR 격리, 0=비활성)
@@ -128,9 +166,16 @@ public:
 private:
 	// pstSession: 배치 임시 세션(in-memory). bulk 성공 후에만 m_vtTripSessions 에 반영
 	bool ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo,
-		vector<RAW_LOG_UPDATE_ROW> *pvtUpdates, VEHICLE_TRIP_SESSION *pstSession, bool *pbTripEnded);
+		vector<RAW_LOG_UPDATE_ROW> *pvtUpdates, vector<CHARGE_INSERT_ROW> *pvtChargeInserts,
+		VEHICLE_TRIP_SESSION *pstSession, bool *pbTripEnded);
 	bool RunMapMatch(int nThreadId, const sRawLogInfo& stRawLogInfo, VEHICLE_TRIP_SESSION *pstSession,
 		MATCH_LINK_INFO *pstMatchLinkInfo);
+	// 개방형 게이트 통과 판정 — 엣지 감지(진입 시 1건 적재), 링크가 게이트 아니게 되면 세션 리셋 (2026-08-12 최정우 추가)
+	void ProcessOpenGateCharge(int nThreadId, const sRawLogInfo& stRawLogInfo,
+		const MATCH_LINK_INFO& stMatchLinkInfo, VEHICLE_TRIP_SESSION *pstSession,
+		vector<CHARGE_INSERT_ROW> *pvtChargeInserts);
+	bool BulkInsertCharges(PGconn *pcConn, const vector<CHARGE_INSERT_ROW>& vtCharges);
+	static string FormatDateTime14(time_t dtValue);
 	static bool AppendUpdateRow(vector<RAW_LOG_UPDATE_ROW> *pvtUpdates,
 		const sRawLogInfo& stRawLogInfo, sint16 nStatus, int nIntersectLen = -1,
 		const double *pdfMatchLat = nullptr, const double *pdfMatchLon = nullptr,

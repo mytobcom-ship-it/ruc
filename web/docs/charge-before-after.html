@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>과금 설계 — 수정 전/후 비교</title>
+<style>
+  :root {
+    --bg: #f8fafc; --panel: #ffffff; --text: #1e293b; --muted: #64748b;
+    --border: #e2e8f0; --accent: #1e88e5; --code-bg: #f1f5f9;
+    --before: #94a3b8; --after: #43a047;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a; --panel: #1e293b; --text: #e2e8f0; --muted: #94a3b8;
+      --border: #334155; --accent: #60a5fa; --code-bg: #0b1220;
+      --before: #64748b; --after: #66bb6a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", sans-serif;
+    line-height: 1.65; font-size: 18px;
+  }
+  #layout { display: flex; min-height: 100vh; }
+  nav {
+    width: 260px; flex: none; background: var(--panel); border-right: 1px solid var(--border);
+    padding: 22px 16px; position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  }
+  nav h2 { font-size: 15px; margin: 0 0 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  nav a { display: block; font-size: 15px; color: var(--text); text-decoration: none; padding: 6px 9px; border-radius: 6px; line-height: 1.4; }
+  nav a:hover { background: var(--code-bg); }
+  nav .grp { margin-top: 16px; font-size: 12.5px; color: var(--muted); font-weight: 700; padding: 0 9px; }
+  main { flex: 1; padding: 32px 40px 90px; max-width: 1340px; }
+  h1 { font-size: 30px; margin: 0 0 8px; }
+  .subtitle { color: var(--muted); font-size: 16.5px; margin-bottom: 26px; }
+  section { margin-bottom: 44px; scroll-margin-top: 16px; }
+  section > h2 { font-size: 22px; border-bottom: 3px solid var(--accent); padding-bottom: 8px; margin-bottom: 14px; }
+  .intro {
+    background: var(--code-bg); border-radius: 8px;
+    padding: 10px 16px; margin: 0 0 14px; font-size: 15.5px;
+  }
+  .note {
+    background: var(--code-bg); border-left: 4px solid var(--accent); border-radius: 4px;
+    padding: 12px 16px; font-size: 15px; margin: 12px 0;
+  }
+  .note b { color: var(--accent); }
+  code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 14.5px; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 14px; font-size: 13px; overflow-x: auto; white-space: pre; margin: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); }
+
+  /* 핵심: 좌우 비교 레이아웃 */
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid var(--border);
+    border-radius: 12px; overflow: hidden; margin-bottom: 10px; }
+  @media (max-width: 860px) { .compare { grid-template-columns: 1fr; } }
+  .before, .after { padding: 14px 16px; background: var(--panel); }
+  .before { border-right: 1px solid var(--border); }
+  @media (max-width: 860px) { .before { border-right: none; border-bottom: 1px solid var(--border); } }
+  .col-head { font-size: 13px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase;
+    padding: 4px 10px; border-radius: 6px; display: inline-block; margin-bottom: 10px; }
+  .before .col-head { color: var(--before); background: color-mix(in srgb, var(--before) 15%, transparent); }
+  .after .col-head { color: var(--after); background: color-mix(in srgb, var(--after) 15%, transparent); }
+  .compare table { font-size: 13px; }
+  .status-badge { display: inline-block; font-size: 12px; font-weight: 700; border-radius: 10px;
+    padding: 2px 9px; margin-bottom: 10px; }
+  .status-badge.live { background: #1e88e520; color: var(--accent); border: 1px solid var(--accent); }
+  .status-badge.design { background: #ab47bc20; color: #ab47bc; border: 1px solid #ab47bc; }
+  footer { color: var(--muted); font-size: 14px; padding: 22px 40px 44px; }
+</style>
+</head>
+<body>
+<div id="layout">
+<nav>
+  <h2>수정 전/후 비교</h2>
+  <a href="#status">0. 현재 실제 상태</a>
+  <a href="#tollgate">1. base_tollgate.link_id</a>
+  <a href="#roadlink">2. base_roadlink</a>
+  <a href="#session">3. VEHICLE_TRIP_SESSION</a>
+  <a href="#matchlogic">4. 판정 로직</a>
+  <a href="#chargehand">5. PRIM_CHARGEHAND</a>
+  <a href="#config">6. config.ini</a>
+  <div class="grp">참고</div>
+  <a href="../index.html">← 웹 뷰어로</a>
+  <a href="charge-unified-table-design.html">← 4유형 통합 설계(상세)</a>
+  <a href="charge-section-link-design.html">← 개방·폐쇄형 구간 링크 판정 설계</a>
+</nav>
+<main>
+  <h1>과금 설계 — 수정 전/후 비교</h1>
+  <p class="subtitle">
+    왼쪽 = <b style="color:var(--before);">지금 실제 상태</b>(2026-08-10 원격 DB 재확인 기준),
+    오른쪽 = <b style="color:var(--after);">설계상 제안</b>(<a href="charge-unified-table-design.html">4유형 통합 설계</a> 기준).
+    오른쪽은 <b>아직 실행되지 않은 제안</b>입니다 — DB에 실제로 반영된 건 없습니다.
+  </p>
+
+  <section id="status">
+    <h2>0. 현재 실제 상태 요약</h2>
+    <div class="note">
+      <b>이번 대화에서 원격 DB에 실행한 쓰기 작업은 0건</b>입니다. 아래 모든 "수정 후" 칸은 방금 재확인한
+      실제 값이 아니라 <b>설계 문서상의 제안값(예시)</b>입니다.
+    </div>
+  </section>
+
+  <section id="tollgate">
+    <h2>1. base_tollgate.link_id</h2>
+    <div class="compare">
+      <div class="before">
+        <span class="col-head">수정 전</span>
+        <span class="status-badge live">실제 값(재확인함)</span>
+        <table>
+          <tr><th>tollgate_id</th><th>gate_div</th><th>link_id</th></tr>
+          <tr><td>TG00007</td><td>I</td><td><i>NULL</i></td></tr>
+          <tr><td>TG00008</td><td>O</td><td><i>NULL</i></td></tr>
+          <tr><td>TG00009</td><td>M</td><td><i>NULL</i></td></tr>
+        </table>
+      </div>
+      <div class="after">
+        <span class="col-head">수정 후</span>
+        <span class="status-badge design">설계 제안(미실행)</span>
+        <table>
+          <tr><th>tollgate_id</th><th>gate_div</th><th>link_id</th></tr>
+          <tr><td>TG00007</td><td>I</td><td><code>2040xxxxxx</code>(근접 링크로 백필)</td></tr>
+          <tr><td>TG00008</td><td>O</td><td><code>2040yyyyyy</code></td></tr>
+          <tr><td>TG00009</td><td>M</td><td><code>2040zzzzzz</code></td></tr>
+        </table>
+      </div>
+    </div>
+    <div class="note">
+      컬럼 자체(타입·이름)는 <b>바뀌지 않습니다</b> — UPDATE로 값만 채우는 것. 스키마 변경 아님.
+    </div>
+  </section>
+
+  <section id="roadlink">
+    <h2>2. base_roadlink (스키마)</h2>
+    <div class="compare">
+      <div class="before">
+        <span class="col-head">수정 전</span>
+        <span class="status-badge live">실제 값(재확인함)</span>
+        <table>
+          <tr><th>컬럼</th></tr>
+          <tr><td>road_id, road_kind, road_nm, geom_type, coords, speed_limit_kmh, use_yn, reg_dt, upd_dt, admin_id</td></tr>
+        </table>
+        <p style="margin:8px 0 0;">6행 존재 (제2판교 개방/폐쇄식 등)</p>
+      </div>
+      <div class="after">
+        <span class="col-head">수정 후</span>
+        <span class="status-badge design">설계 제안(미실행)</span>
+        <table>
+          <tr><th>컬럼</th></tr>
+          <tr><td>동일 — <b>컬럼 추가 0건</b></td></tr>
+        </table>
+        <p style="margin:8px 0 0;">신규 테스트용 행(격리된 road_id) 추가 여부는 별도 결정 필요</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="session">
+    <h2>3. VEHICLE_TRIP_SESSION (C++ 구조체)</h2>
+    <div class="compare">
+      <div class="before">
+        <span class="col-head">수정 전</span>
+        <span class="status-badge live">실제 코드(재확인함)</span>
+        <pre>과금 관련 필드: 0개
+(qwLinkID, dtLastSeen, szTripId 등
+ 맵매칭 전용 필드만 존재)</pre>
+      </div>
+      <div class="after">
+        <span class="col-head">수정 후</span>
+        <span class="status-badge design">설계 제안(미실행)</span>
+        <pre>게이트 트랙(5): bInGateRoad, szActiveGateRoadId,
+  szEntryTollgateId, dtGateEnterTime, dfGateEnterX/Y
+구간단속 트랙(4): bInSpeedZone, szActiveSpeedRoadId,
+  dtSpeedZoneEnterTime, dfSpeedZoneEnterX/Y
+주정차 트랙(3): bParked, dtParkStartTime,
+  dfParkStartX/Y</pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="matchlogic">
+    <h2>4. 판정 로직 (RawLogWorker.cpp)</h2>
+    <div class="compare">
+      <div class="before">
+        <span class="col-head">수정 전</span>
+        <span class="status-badge live">실제 코드(재확인함)</span>
+        <pre>base_roadlink/base_tollgate/base_tollsection/
+base_tollfare/base_mapinfo/base_fare 참조: 0건
+strChargeInsertSQL 실행: 0건(로드만 됨)</pre>
+      </div>
+      <div class="after">
+        <span class="col-head">수정 후</span>
+        <span class="status-badge design">설계 제안(미실행)</span>
+        <pre>MatchZone()  — 4유형 공통 구역 진입/이탈 판정
+MatchGate()  — 개방·폐쇄형 게이트 감지(전역, road_id 무관)
+기존 strChargeInsertSQL 훅에 실행 코드 연결</pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="chargehand">
+    <h2>5. PRIM_CHARGEHAND</h2>
+    <div class="compare">
+      <div class="before">
+        <span class="col-head">수정 전</span>
+        <span class="status-badge live">실제 상태</span>
+        <p>MapMatchSvr가 이 테이블에 쓰는 코드가 없어 <b>실시간 맵매칭으로 생성되는 행 없음</b>.</p>
+      </div>
+      <div class="after">
+        <span class="col-head">수정 후</span>
+        <span class="status-badge design">설계 제안(미실행)</span>
+        <table>
+          <tr><th>유형</th><th>예시</th></tr>
+          <tr><td>개방형</td><td>charge_type=1, from_id=to_id=게이트ID</td></tr>
+          <tr><td>폐쇄형</td><td>charge_type=2, from_id=진입, to_id=진출</td></tr>
+          <tr><td>구간단속</td><td>charge_type=3, speed_kmh/speed_limit_kmh 채움</td></tr>
+          <tr><td>주정차</td><td>charge_type=4, stay_seconds 채움</td></tr>
+        </table>
+        <p style="margin:8px 0 0;">컬럼 추가 0건 — 상세 예제는 <a href="charge-unified-table-design.html#chargehand">4유형 통합 설계 9절</a></p>
+      </div>
+    </div>
+  </section>
+
+  <section id="config">
+    <h2>6. MapMatchSvr config.ini</h2>
+    <div class="compare">
+      <div class="before">
+        <span class="col-head">수정 전</span>
+        <span class="status-badge live">실제 값(재확인함)</span>
+        <pre>[mapmatch]
+radius=50
+radius_scale=2.5
+radius_min=20
+radius_max=75
+radius_skip=50
+(gate_radius / zone_radius 없음)</pre>
+      </div>
+      <div class="after">
+        <span class="col-head">수정 후</span>
+        <span class="status-badge design">설계 제안(미실행)</span>
+        <pre>[mapmatch]
+... 기존 항목 동일 ...
+gate_radius=30   # 게이트 좌표 폴백 반경(m), 값 미정
+zone_radius=??   # 구역 LINE 버퍼 폭(m), 값 미정</pre>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    "수정 전" 값은 2026-08-10 <code>psql</code> 재조회로 확인한 실제 값입니다. "수정 후" 값은 전부
+    <a href="charge-unified-table-design.html">charge-unified-table-design.html</a> 설계안이며 아직 어떤 형태로도
+    실행되지 않았습니다.
+  </footer>
+</main>
+</div>
+</body>
+</html>

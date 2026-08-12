@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>과금 5유형별 PRIM_CHARGEHAND 컬럼 값 비교</title>
+<style>
+  :root {
+    --bg: #f8fafc; --panel: #ffffff; --text: #1e293b; --muted: #64748b;
+    --border: #e2e8f0; --accent: #1e88e5; --code-bg: #f1f5f9;
+    --node: #43a047; --open: #f9a825; --closed: #e53935; --speed: #8e24aa; --parking: #f57f17;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a; --panel: #1e293b; --text: #e2e8f0; --muted: #94a3b8;
+      --border: #334155; --accent: #60a5fa; --code-bg: #0b1220;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", sans-serif;
+    line-height: 1.6; font-size: 16px; padding: 28px 32px 60px; max-width: 1280px; margin: 0 auto;
+  }
+  h1 { font-size: 22px; margin: 0 0 6px; }
+  h2 { font-size: 16px; margin: 22px 0 8px; }
+  .subtitle { color: var(--muted); font-size: 14px; margin: 0 0 20px; }
+  .badge {
+    display: inline-block; font-size: 11px; font-weight: 700; border-radius: 10px;
+    padding: 1px 8px; margin-left: 6px; vertical-align: middle;
+    background: #43a04720; color: #2e7d32; border: 1px solid #43a047;
+  }
+  .note {
+    background: var(--code-bg); border-left: 4px solid var(--accent); border-radius: 4px;
+    padding: 10px 14px; font-size: 13px; margin: 0 0 14px; line-height: 1.55;
+  }
+  .note b { color: var(--accent); }
+  .good {
+    background: #43a04712; border-left: 4px solid #43a047; border-radius: 4px;
+    padding: 10px 14px; font-size: 13px; margin: 0 0 14px; line-height: 1.55;
+  }
+  .good b { color: #2e7d32; }
+  .warn {
+    background: #e5393512; border-left: 4px solid #e53935; border-radius: 4px;
+    padding: 10px 14px; font-size: 13px; margin: 0 0 14px; line-height: 1.55;
+  }
+  .warn b { color: #e53935; }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 11.5px; }
+  .wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  th, td { border: 1px solid var(--border); padding: 5px 7px; text-align: left; vertical-align: top; }
+  thead th { background: var(--code-bg); font-size: 11px; position: sticky; top: 0; }
+  th.col-name { min-width: 108px; background: var(--code-bg); font-weight: 700; }
+  td.col-name { background: var(--code-bg); font-weight: 700; white-space: nowrap; }
+  th.ty { color: #fff; font-size: 12px; text-align: center; }
+  th.ty-node { background: var(--node); }
+  th.ty-open { background: var(--open); }
+  th.ty-closed { background: var(--closed); }
+  th.ty-speed { background: var(--speed); }
+  th.ty-parking { background: var(--parking); }
+  .na { color: var(--muted); font-style: italic; }
+  .grp-row td { background: var(--code-bg); font-weight: 700; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+  footer { color: var(--muted); font-size: 12px; margin-top: 22px; }
+  footer a { color: var(--accent); }
+</style>
+</head>
+<body>
+  <h1>과금 5유형별 PRIM_CHARGEHAND 컬럼 값 비교 <span class="badge">v1.8 문서 기준 갱신</span></h1>
+  <p class="subtitle">
+    행 = 컬럼, 열 = 과금 유형. <code>RUC_위치검증서버_테이블설계서_v1.8.docx</code>(문서번호 RUC-DB-LOC-2026-001,
+    작성 2026.06, 에스트래픽㈜)를 1차 근거로, <code>charge-unified-table-design.html</code> 9-3절의 예시값을
+    참고로 병기.
+  </p>
+
+  <div class="good">
+    <b>[해결됨, 2026-08-12 재확정]</b> 개방형은 <b>게이트 통과 시 요금 부과</b>(점 이벤트)가 맞습니다 — "링크 hop마다
+    누적"이 아닙니다. 실측 <code>prim_chargehand</code> 293건에서 관측된 "링크 hop 체인" 패턴(from_id≠to_id가
+    연속 행에서 이어지는 형태)은 <b>정상 동작이 아니라 잘못 시딩된 데이터</b>로 판단됩니다
+    (<code>doc/README.txt</code> I-7에서 이미 "prim_chargehand·prim_tollcharge가 서로 다른 시점에 독립적으로
+    시딩된 것으로 추정"이라 의심했던 것과 일치).
+    <br/><br/>
+    v1.8 문서에 <code>TOLLGATE_ID</code>/<code>ENTRY_TOLLGATE_ID</code>/<code>EXIT_TOLLGATE_ID</code> **전용
+    컬럼**이 별도로 있는 것 자체는 유효한 발견입니다 — 개방형은 <code>TOLLGATE_ID</code>에 통과한 게이트ID가
+    들어갑니다. 다만 <code>FROM_ID</code>/<code>TO_ID</code>가 "링크/노드 ID 전용"이라는 이전 결론은 재검토
+    필요 — 기존 설계(<code>from_id=to_id=게이트ID</code>)와 이 표의 값(아래 게이트 그룹 참고)이 실제로
+    어떻게 공존하는지는 <b>아직 미확인</b>입니다.
+  </div>
+
+  <div class="warn">
+    <b>[미확인, 중요]</b> v1.8 문서(4절)는 "과금서버가 <code>settings.ini</code> 요율로 직접 계산"이라고
+    명시하는데, 오늘까지의 설계 전체(<code>charge-tables.html</code> 등)는 <code>base_tollfare</code>/
+    <code>base_tollsection</code>/<code>base_fare</code> <b>DB 테이블 조회</b> 기반이었습니다. 두 기준 중
+    어느 쪽이 최신/맞는지 담당자 확인 필요 — 이 문서의 표는 일단 v1.8(컬럼 정의)을 그대로 반영했지만, 요금
+    계산 로직 자체는 재검증이 필요합니다.
+  </div>
+
+  <div class="warn">
+    <b>[미확인]</b> 일반도로(<code>NODE_STEP</code>)의 <code>CHARGE_UNIT</code>(0=NODE/1=LINK) — 값 정의만
+    있고 <b>어느 상황에 어느 값을 쓰는지 기준이 문서에 없습니다.</b> 다른 4유형은 전부 <code>0(NODE)</code>
+    고정이라 문제없었는데, 일반도로만 두 값이 다 가능하다고 정의돼 있어 구현 전 담당자 확인 필요.
+  </div>
+
+  <div class="note">
+    <b>문서 자체의 오류로 보이는 부분</b>: v1.8 3.1절 ⑦단계가 "<code>BASE_CUSTINFO</code> 조인 →
+    <code>VEHICLE_TYPE</code> 확인"이라고 하는데, <code>BASE_CUSTINFO</code>엔 <code>DEVICE_KEY</code>도
+    <code>VEHICLE_TYPE</code>도 없습니다. <code>DEVICE_KEY</code>+<code>CAR_TYPE</code>을 가진 건
+    <code>BASE_CARINFO</code>입니다 — 원문서 오타로 추정, 여기서는 <code>BASE_CARINFO</code> 기준으로 표기.
+  </div>
+
+  <h2>PK — TRIP_ID + DEVICE_KEY + TRIP_SEQ (복합키, 5유형 공통)</h2>
+
+  <div class="wrap">
+  <table>
+    <thead>
+      <tr>
+        <th class="col-name">컬럼</th>
+        <th class="ty ty-node">일반도로<br/>charge_type=0<br/>NODE_STEP</th>
+        <th class="ty ty-open">개방형<br/>charge_type=1<br/>OPEN_ROAD</th>
+        <th class="ty ty-closed">폐쇄형<br/>charge_type=2<br/>CLOSED_ROAD</th>
+        <th class="ty ty-speed">구간단속<br/>charge_type=3<br/>SPEED</th>
+        <th class="ty ty-parking">주정차<br/>charge_type=4<br/>PARKING</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr class="grp-row"><td colspan="6">식별/기본</td></tr>
+      <tr>
+        <td class="col-name">trip_id</td>
+        <td colspan="5">{device_key}_{YYYYMMDDHH24MISS} — 5유형 공통, PK-1</td>
+      </tr>
+      <tr>
+        <td class="col-name">device_key</td>
+        <td colspan="5">차량 고유 식별키 — 5유형 공통, PK-2</td>
+      </tr>
+      <tr>
+        <td class="col-name">trip_seq</td>
+        <td>1(예시)</td><td>3(예시)</td><td>7(예시)</td><td>6(예시)</td><td>9(예시)</td>
+      </tr>
+      <tr>
+        <td class="col-name">charge_type</td>
+        <td>0</td><td>1</td><td>2</td><td>3</td><td>4</td>
+      </tr>
+      <tr>
+        <td class="col-name">charge_unit</td>
+        <td>0(NODE) 또는 1(LINK) — <b>선택 기준 문서에 없음, 미확정</b></td>
+        <td>0(NODE)</td><td>0(NODE)</td><td>0(NODE)</td><td>0(NODE)</td>
+      </tr>
+      <tr>
+        <td class="col-name">charge_yn</td>
+        <td>Y(일반 통행도 과금 대상)</td>
+        <td>Y</td><td>Y</td><td>Y(제한 초과 확정)</td><td>Y(10분 초과 확정)</td>
+      </tr>
+      <tr>
+        <td class="col-name">non_charge_reason</td>
+        <td colspan="5" class="na">charge_yn='N'일 때만 채움 — 5유형 공통 예외 처리용, 값 목록 미정</td>
+      </tr>
+
+      <tr class="grp-row"><td colspan="6">위치/거리(구간 식별)</td></tr>
+      <tr>
+        <td class="col-name">link_id</td>
+        <td>일반도로 링크ID(charge_unit=LINK일 때만)</td>
+        <td class="na">NULL(NODE 단위)</td><td class="na">NULL(NODE 단위)</td><td class="na">NULL(NODE 단위)</td><td class="na">NULL(NODE 단위)</td>
+      </tr>
+      <tr>
+        <td class="col-name">from_id</td>
+        <td>구간 시작 노드ID</td>
+        <td>진입 링크ID(hop 체인 시작)</td>
+        <td>진입 링크ID</td>
+        <td>회랑 진입 지점 링크ID</td>
+        <td>정차 위치(=to_id)</td>
+      </tr>
+      <tr>
+        <td class="col-name">to_id</td>
+        <td>구간 종료 노드ID</td>
+        <td>다음 링크ID(hop 체인 다음)</td>
+        <td>진출 링크ID</td>
+        <td>회랑 이탈 지점 링크ID</td>
+        <td>정차 위치(=from_id)</td>
+      </tr>
+      <tr>
+        <td class="col-name">from_lat/lon</td>
+        <td>구간 시작 좌표</td>
+        <td>진입 시점 좌표</td>
+        <td>진입 시점 좌표(<code>dfGateEnterX/Y</code>)</td>
+        <td>회랑 진입 좌표(<code>dfSpeedZoneEnterX/Y</code>)</td>
+        <td>정차 시작 좌표(<code>dfParkStartX/Y</code>)</td>
+      </tr>
+      <tr>
+        <td class="col-name">to_lat/lon</td>
+        <td>구간 종료 좌표</td>
+        <td>진출(다음 hop) 좌표</td>
+        <td>진출 시점 좌표</td>
+        <td>회랑 이탈 좌표</td>
+        <td>정차 시작 좌표와 동일</td>
+      </tr>
+      <tr>
+        <td class="col-name">dist_m</td>
+        <td>구간 거리</td>
+        <td class="na">미사용</td>
+        <td class="na">미사용(거리 계산 없음, 게이트조합 정액)</td>
+        <td>실시간 누적 이동거리(예: 1,200)</td>
+        <td class="na">미사용</td>
+      </tr>
+
+      <tr class="grp-row"><td colspan="6">속도/체류(위반 판단)</td></tr>
+      <tr>
+        <td class="col-name">speed_kmh</td>
+        <td class="na">미사용</td><td class="na">미사용</td><td class="na">미사용</td>
+        <td>구간 실측/평균 속도(예: 112)</td><td class="na">미사용</td>
+      </tr>
+      <tr>
+        <td class="col-name">speed_limit_kmh</td>
+        <td class="na">미사용</td><td class="na">미사용</td><td class="na">미사용</td>
+        <td>base_roadlink.speed_limit_kmh(예: 100), 0이면 해당없음</td><td class="na">미사용</td>
+      </tr>
+      <tr>
+        <td class="col-name">stay_seconds</td>
+        <td class="na">미사용</td><td class="na">미사용</td><td class="na">미사용</td><td class="na">미사용</td>
+        <td>체류시간(예: 900=15분)</td>
+      </tr>
+
+      <tr class="grp-row"><td colspan="6">게이트(전용 컬럼 — from_id/to_id와 별개)</td></tr>
+      <tr>
+        <td class="col-name">tollgate_id</td>
+        <td class="na">미사용</td>
+        <td>본선 영업소(<code>base_tollgate</code>, gate_div=M) — 예: <code>TG00009</code></td>
+        <td class="na">미사용(entry/exit 컬럼 사용)</td>
+        <td class="na">미사용</td><td class="na">미사용</td>
+      </tr>
+      <tr>
+        <td class="col-name">entry_tollgate_id</td>
+        <td class="na">미사용</td><td class="na">미사용</td>
+        <td>입구 영업소(gate_div I/B) — 예: <code>TG00007</code></td>
+        <td class="na">미사용(구간단속은 게이트 개념이 base_tollgate 재사용이지만 이 컬럼 용도는 폐쇄형 전용으로 보임 — 확인 필요)</td>
+        <td class="na">미사용</td>
+      </tr>
+      <tr>
+        <td class="col-name">exit_tollgate_id</td>
+        <td class="na">미사용</td><td class="na">미사용</td>
+        <td>출구 영업소(gate_div O/B) — 예: <code>TG00008</code></td>
+        <td class="na">미사용(위와 동일 확인 필요)</td>
+        <td class="na">미사용</td>
+      </tr>
+
+      <tr class="grp-row"><td colspan="6">구역/시각</td></tr>
+      <tr>
+        <td class="col-name">zone_id</td>
+        <td class="na">일반적으로 미사용</td>
+        <td>RL-Z00009</td>
+        <td>RL-Z00005(진입 기준)</td>
+        <td>구간단속용 road_id(예: RL-Z00003)</td>
+        <td>주정차금지 구역 road_id(RL-Z00001)</td>
+      </tr>
+      <tr>
+        <td class="col-name">zone_name</td>
+        <td class="na">일반적으로 미사용</td>
+        <td>제2판교 개방식 구역</td>
+        <td>제2판교 폐쇄식 구역</td>
+        <td>단속구간명</td>
+        <td>구역명</td>
+      </tr>
+      <tr>
+        <td class="col-name">occur_dt</td>
+        <td>구간 종료 시각</td>
+        <td>게이트 통과 시각</td>
+        <td>진출 시각</td>
+        <td>회랑 이탈(평균속도 확정) 시각</td>
+        <td>이동 재개(정차 종료) 시각</td>
+      </tr>
+      <tr>
+        <td class="col-name">trip_start_dt / trip_end_dt</td>
+        <td colspan="5">운행 시작/종료 시각 — 5유형 공통, 같은 trip_id의 모든 행에 동일값</td>
+      </tr>
+
+      <tr class="grp-row"><td colspan="6">상태/메타</td></tr>
+      <tr>
+        <td class="col-name">charge_status</td>
+        <td colspan="5">0:PENDING, 1:PROCESSING, 2:CHARGED, 3:AUDIT(심사대상), 4:SKIP — 5유형 공통, 위치검증서버가 0/4로 INSERT</td>
+      </tr>
+      <tr>
+        <td class="col-name">reg_dt / upd_dt</td>
+        <td colspan="5">등록/최종수정 일시 — 5유형 공통</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="note">
+    <b>공통</b>: 차종(<code>VEHICLE_TYPE</code>/<code>CAR_TYPE</code>)은 5유형 전부 다운스트림 과금서버가
+    <code>BASE_CARINFO.DEVICE_KEY = PRIM_CHARGEHAND.DEVICE_KEY</code> 조인으로 확정해 <code>PRIM_TOLLCHARGE</code>
+    INSERT 시 기록 — 우리 코드(위치검증서버) 책임이 아님. 금액(<code>FARE_AMOUNT</code> 등)·범칙금
+    (<code>FINE_AMOUNT</code>) 컬럼은 <code>PRIM_CHARGEHAND</code>에 아예 없음 — 전부 다운스트림
+    <code>PRIM_TOLLCHARGE</code>/<code>PRIM_VLTNCHARGE</code> 소관.
+  </div>
+
+  <footer>
+    1차 근거: <code>doc/RUC_위치검증서버_테이블설계서_v1.8.docx</code>(문서번호 RUC-DB-LOC-2026-001) · 참고:
+    <a href="charge-unified-table-design.html">charge-unified-table-design.html</a> 9-3절(예시값 출처) ·
+    <a href="table.html">table.html</a>(구간단속 게이트 설계) ·
+    <a href="parking.html">parking.html</a>(주정차 판정 설계) ·
+    <a href="../nodelink-geumto.html">nodelink-geumto.html</a>(지도)
+  </footer>
+</body>
+</html>

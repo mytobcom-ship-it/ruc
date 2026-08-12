@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>구간단속 — 기존 2테이블(base_roadlink+base_tollgate) 재사용 설계</title>
+<style>
+  :root {
+    --bg: #f8fafc; --panel: #ffffff; --text: #1e293b; --muted: #64748b;
+    --border: #e2e8f0; --accent: #8e24aa; --code-bg: #f1f5f9; --after: #43a047;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a; --panel: #1e293b; --text: #e2e8f0; --muted: #94a3b8;
+      --border: #334155; --accent: #ab47bc; --code-bg: #0b1220; --after: #66bb6a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", sans-serif;
+    line-height: 1.65; font-size: 18px;
+  }
+  #layout { display: flex; min-height: 100vh; }
+  nav {
+    width: 300px; flex: none; background: var(--panel); border-right: 1px solid var(--border);
+    padding: 22px 16px; position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  }
+  nav h2 { font-size: 15px; margin: 0 0 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  nav a { display: block; font-size: 15px; color: var(--text); text-decoration: none; padding: 6px 9px; border-radius: 6px; line-height: 1.4; }
+  nav a:hover { background: var(--code-bg); }
+  nav .grp { margin-top: 16px; font-size: 12.5px; color: var(--muted); font-weight: 700; padding: 0 9px; }
+  main { flex: 1; padding: 32px 40px 90px; max-width: 1300px; }
+  h1 { font-size: 26px; margin: 0 0 8px; }
+  .subtitle { color: var(--muted); font-size: 16.5px; margin-bottom: 26px; }
+  section { margin-bottom: 46px; scroll-margin-top: 16px; }
+  section h2 { font-size: 22px; border-bottom: 3px solid var(--accent); padding-bottom: 8px; margin-bottom: 8px; }
+  section h3 { font-size: 17px; margin: 20px 0 8px; }
+  .intro {
+    background: var(--code-bg); border-radius: 8px;
+    padding: 10px 16px; margin: 0 0 14px; font-size: 15.5px; color: var(--text);
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px; overflow-x: auto; margin-bottom: 14px;
+  }
+  .note {
+    background: var(--code-bg); border-left: 4px solid var(--accent); border-radius: 4px;
+    padding: 12px 16px; font-size: 15px; margin: 12px 0; color: var(--text);
+  }
+  .note b { color: var(--accent); }
+  code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 14.5px; }
+  pre.pseudo, pre.ascii {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px 16px; font-size: 13.5px; overflow-x: auto; white-space: pre; margin: 0;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+  th, td { border: 1px solid var(--border); padding: 8px 11px; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); }
+  .pk { color: var(--accent); font-weight: 700; }
+  .fk { color: #fb8c00; font-weight: 700; }
+  .idx { color: #00897b; font-weight: 700; }
+  .same { color: var(--muted); }
+  .reuse { color: var(--accent); font-weight: 700; }
+  .badge {
+    display: inline-block; font-size: 12px; font-weight: 700; border-radius: 10px;
+    padding: 1px 8px; margin-left: 6px; vertical-align: middle;
+  }
+  .badge.nochange { background: #43a04720; color: var(--after); border: 1px solid var(--after); }
+  .badge.live { background: #8e24aa20; color: var(--accent); border: 1px solid var(--accent); }
+  footer { color: var(--muted); font-size: 14px; padding: 22px 40px 44px; }
+  ol, ul { font-size: 15.5px; }
+  ol li, ul li { margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<div id="layout">
+<nav>
+  <h2>구간단속 — 2테이블 재사용 설계</h2>
+  <a href="#background">0. 배경·해결 방식</a>
+  <a href="#roadlink">1. base_roadlink 전체 컬럼</a>
+  <a href="#tollgate">2. base_tollgate 전체 컬럼</a>
+  <a href="#example">3. 실제 적용 사례 (RL-Z00003, RL-Z00006)</a>
+  <a href="#logic">4. 판정 로직(의사코드)</a>
+  <a href="#exception">5. 예외 처리 — 중간 교차로 이탈</a>
+  <a href="#tradeoffs">6. 주의사항</a>
+  <div class="grp">참고</div>
+  <a href="../index.html">← 웹 뷰어로</a>
+  <a href="charge-unified-table-design.html">← 과금 4유형 통합 테이블 설계</a>
+  <a href="charge-spatial-model.html">← 과금 유형별 공간모델</a>
+  <a href="../nodelink-geumto.html">← 금토로 노드링크 뷰어</a>
+  <a href="parking.html">→ 주정차단속 원본 GPS 판정 설계</a>
+  <a href="columns.html">→ 4유형별 PRIM_CHARGEHAND 컬럼 비교</a>
+</nav>
+<main>
+  <h1>구간단속 — 기존 2테이블 재사용 설계 <span class="badge nochange">신규 테이블·컬럼 0개</span></h1>
+  <p class="subtitle">
+    새 테이블이나 새 컬럼 없이, 개방형·폐쇄형에 이미 쓰고 있는 <code>base_roadlink</code> +
+    <code>base_tollgate</code> 두 테이블만으로 구간단속을 구현하는 방안입니다.
+  </p>
+
+  <section id="background">
+    <h2>0. 배경·해결 방식</h2>
+    <div class="intro">
+      기존 설계는 구간단속을 <code>base_roadlink</code>의 <code>LINE</code> 좌표를 버퍼링한 폴리곤 하나로만
+      판정합니다. 이 방식의 한계와, <b>구간단속을 "거리·평균속도를 계산하는 폐쇄형"으로 취급</b>했을 때의
+      해결 방식을 함께 정리하면 다음과 같습니다.
+    </div>
+    <div class="card">
+      <table>
+        <tr><th>문제</th><th>원인</th><th>해결 방식</th></tr>
+        <tr>
+          <td>인접 상/하행 도로와 간격이 좁으면(3~10m) 방향 구분 불가</td>
+          <td>point-in-polygon은 좌표 근접만 보는데, GPS 오차 감안한 <code>zone_radius</code>가 그 간격보다 큼</td>
+          <td><code>base_tollgate.link_id</code>로 진입/진출을 정확히 매칭 — 반대 방향은 ID 자체가 달라 안 걸림</td>
+        </tr>
+        <tr>
+          <td>회랑이 링크 중간에서 시작·종료되면 거리 오차</td>
+          <td><code>base_roadlink.coords</code>가 4~9점짜리 단순화된 좌표라 실제 도로 곡선보다 짧게 잡힘</td>
+          <td><code>base_tollgate.lon/lat</code>는 링크 중간 아무 곳이나 찍을 수 있는 점 좌표 — 회랑 좌표
+            대신 <b>진입~진출 사이 실시간 누적 이동거리</b>로 계산</td>
+        </tr>
+      </table>
+    </div>
+    <pre class="ascii">진입점(I) 감지 → 세션 시작(진입시각, 누적거리=0)
+    │  GPS 올 때마다: 누적거리 += 실제 이동거리   (중간 링크를 미리 알 필요 없음)
+진출점(O) 감지 → 평균속도 = 누적거리 ÷ 경과시간 → speed_limit_kmh 비교 → 위반 판정</pre>
+    <div class="note">
+      <code>base_roadlink</code>는 역할이 그대로입니다 — <b>Layer 1 후보 필터</b>(이 GPS가 구역 근처에 왔는지)만
+      담당하고, 정밀 판정·거리계산은 <code>base_tollgate</code>+세션 누적으로 넘어갑니다. 그래서
+      <code>coords</code>의 정밀도는 더 이상 중요하지 않습니다.
+    </div>
+  </section>
+
+  <section id="roadlink">
+    <h2>1. base_roadlink 전체 컬럼</h2>
+    <div class="intro"><b>변경 없음.</b> 전체 컬럼과 구간단속에서의 역할입니다.</div>
+    <div class="card">
+      <table>
+        <tr><th>컬럼</th><th>타입</th><th>NULL</th><th>기본값</th><th>PK</th><th>공통 의미</th><th>구간단속 역할</th></tr>
+        <tr>
+          <td><code>road_id</code></td><td>varchar(20)</td><td>NOT NULL</td><td>—</td><td class="pk">PK</td>
+          <td>구역 식별자</td><td class="same">그대로(예: <code>RL-Z00006</code>)</td>
+        </tr>
+        <tr>
+          <td><code>road_kind</code></td><td>varchar(2)</td><td>NOT NULL</td><td>—</td><td>—</td>
+          <td>0일반/1개방/2폐쇄/3구간단속/4주정차</td><td class="same">그대로 — <code>'3'</code></td>
+        </tr>
+        <tr>
+          <td><code>road_nm</code></td><td>varchar(100)</td><td>NOT NULL</td><td>—</td><td>—</td>
+          <td>구역명</td><td class="same">그대로</td>
+        </tr>
+        <tr>
+          <td><code>geom_type</code></td><td>varchar(4)</td><td>NOT NULL</td><td>—</td><td>—</td>
+          <td>LINE/POLY 구분</td><td class="same">그대로 — 항상 <code>LINE</code></td>
+        </tr>
+        <tr>
+          <td><code>coords</code></td><td>jsonb</td><td>NOT NULL</td><td>—</td><td>—</td>
+          <td>도형 좌표열</td>
+          <td class="reuse">역할 축소 — Layer 1 후보 필터 전용, 정밀도 무관</td>
+        </tr>
+        <tr>
+          <td><code>speed_limit_kmh</code></td><td>numeric</td><td>NULL 허용</td><td>—</td><td>—</td>
+          <td>참고용</td>
+          <td class="reuse">역할 격상 — <b>실제 위반 판정 기준값</b>(유일한 필수 컬럼)</td>
+        </tr>
+        <tr>
+          <td><code>use_yn</code></td><td>char(1)</td><td>NOT NULL</td><td>'Y'</td><td>—</td>
+          <td>사용여부</td><td class="same">그대로</td>
+        </tr>
+        <tr>
+          <td><code>reg_dt</code> / <code>upd_dt</code></td><td>varchar(14)</td><td>NOT NULL</td>
+          <td><code>YYYYMMDDHH24MISS</code></td><td>—</td>
+          <td>등록/수정시각</td><td class="same">그대로</td>
+        </tr>
+        <tr>
+          <td><code>admin_id</code></td><td>varchar(20)</td><td>NULL 허용</td><td>—</td><td>—</td>
+          <td>관리자</td><td class="same">그대로</td>
+        </tr>
+      </table>
+    </div>
+  </section>
+
+  <section id="tollgate">
+    <h2>2. base_tollgate 전체 컬럼</h2>
+    <div class="intro">
+      <b>변경 없음.</b> 진입/진출점을 <code>gate_div='I'</code>/<code>'O'</code> 행으로 추가만 하면 됩니다 —
+      폐쇄형 게이트와 완전히 같은 방식입니다.
+    </div>
+    <div class="card">
+      <table>
+        <tr><th>컬럼</th><th>타입</th><th>NULL</th><th>기본값</th><th>PK/FK</th><th>공통 의미</th><th>구간단속 역할</th></tr>
+        <tr>
+          <td><code>tollgate_id</code></td><td>varchar(20)</td><td>NOT NULL</td><td>—</td><td class="pk">PK</td>
+          <td>게이트 ID</td><td class="same">그대로 — 새 ID 채번</td>
+        </tr>
+        <tr>
+          <td><code>road_id</code></td><td>varchar(20)</td><td>NOT NULL</td><td>—</td><td class="fk">FK</td>
+          <td>소속 구역 → base_roadlink.road_id</td><td class="same">그대로</td>
+        </tr>
+        <tr>
+          <td><code>tollgate_nm</code></td><td>varchar(100)</td><td>NOT NULL</td><td>—</td><td>—</td>
+          <td>게이트명</td><td class="same">그대로</td>
+        </tr>
+        <tr>
+          <td><code>gate_div</code></td><td>varchar(1)</td><td>NOT NULL</td><td>—</td><td>CHECK</td>
+          <td>M본선/I입구/O출구/B겸용</td>
+          <td class="reuse"><b>의미 재해석</b> — I/O를 그대로 구간단속 진입/진출로 재사용(신규 값·제약 변경 없음)</td>
+        </tr>
+        <tr>
+          <td><code>lon</code> / <code>lat</code></td><td>numeric(11,7)/(10,7)</td><td>NULL 허용</td><td>—</td><td>—</td>
+          <td>게이트 물리 좌표</td><td class="same">그대로 — 링크 중간이어도 무관</td>
+        </tr>
+        <tr>
+          <td><code>link_id</code></td><td>varchar(20)</td><td>NULL 허용</td><td>—</td><td>—</td>
+          <td>매칭용 표준노드링크 ID</td><td class="same">그대로 — 방향까지 포함해 정확히 매칭</td>
+        </tr>
+        <tr>
+          <td><code>use_yn</code></td><td>varchar(1)</td><td>NOT NULL</td><td>'Y'</td><td>—</td>
+          <td>사용여부</td><td class="same">그대로</td>
+        </tr>
+        <tr>
+          <td><code>reg_dt</code></td><td>timestamp</td><td>NOT NULL</td><td><code>now()</code></td><td>—</td>
+          <td>등록시각</td><td class="same">그대로</td>
+        </tr>
+        <tr>
+          <td><code>upd_dt</code></td><td>timestamp</td><td>NULL 허용</td><td>—</td><td>—</td>
+          <td>수정시각(UPDATE 시 명시적으로 채움)</td><td class="same">그대로</td>
+        </tr>
+      </table>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0;">기존 인덱스 — 그대로 활용</h3>
+      <table>
+        <tr><th>이름</th><th>대상</th><th>용도</th></tr>
+        <tr><td><code>pk_base_tollgate</code></td><td class="pk">PK (tollgate_id)</td><td class="same">그대로</td></tr>
+        <tr><td><code>ix_tollgate_road</code></td><td class="idx">INDEX (road_id)</td><td class="same">그대로</td></tr>
+        <tr><td><code>idx_base_tollgate_gate_div</code></td><td class="idx">INDEX (gate_div, use_yn='Y')</td>
+          <td class="reuse">기존 폐쇄형 조회 로직에 구간단속 게이트도 자동 포함(별도 인덱스 불필요)</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section id="example">
+    <h2>3. 실제 적용 사례 <span class="badge live">DB 반영 완료</span></h2>
+    <div class="intro">
+      구간단속 구역 2건(<code>RL-Z00003</code>, <code>RL-Z00006</code>) 모두에 실제 게이트를 등록했습니다 —
+      회랑이 링크 1개로 끝나는 경우와 여러 링크에 걸치는 경우 둘 다 같은 방식으로 처리됨을 보여줍니다.
+    </div>
+    <div class="card">
+      <table>
+        <tr><th>tollgate_id</th><th>road_id</th><th>tollgate_nm</th><th>gate_div</th><th>lon</th><th>lat</th><th>link_id</th></tr>
+        <tr><td>TG00012</td><td>RL-Z00003</td><td>제2판교 구간단속 진입점</td><td>I</td><td>127.0860261</td><td>37.4062009</td><td>2040424301</td></tr>
+        <tr><td>TG00013</td><td>RL-Z00003</td><td>제2판교 구간단속 진출점</td><td>O</td><td>127.0895352</td><td>37.4069850</td><td>2040424301</td></tr>
+        <tr><td>TG00010</td><td>RL-Z00006</td><td>구간단속 테스트 진입점</td><td>I</td><td>127.0902726</td><td>37.4059347</td><td>2040424901</td></tr>
+        <tr><td>TG00011</td><td>RL-Z00006</td><td>구간단속 테스트 진출점</td><td>O</td><td>127.0997285</td><td>37.4122166</td><td>2040390202</td></tr>
+      </table>
+    </div>
+    <div class="note">
+      <b>RL-Z00003</b>: 진입·진출 지점이 전부 링크 하나(<code>2040424301</code>, 331.7m)의 양 끝(f_node/t_node)에
+      대응됩니다 — 진입은 f_node, 진출은 t_node 좌표(폐쇄형 <code>TG00007</code>/<code>TG00008</code>과 같은
+      "한 링크를 두 게이트가 공유" 패턴). 링크 자체의 f_node→t_node 방향이 입구→출구 방향과 일치하도록
+      맞춤(처음엔 반대로(t_node=입구) 넣었다가 방향 불일치 발견돼 정정). <code>base_roadlink.coords</code>도
+      이 링크의 실제 좌표(11점)를 f_node→t_node 순(=입구→출구 순) 그대로 반영 — 4점 단순화본에서 표준노드링크
+      원본과 정확히 일치하는 값으로 교체됨.<br/>
+      <b>RL-Z00006</b>: 진입(<code>2040424901</code>)~진출(<code>2040390202</code>) 사이를 실제 링크 6개
+      (<code>2040424901→2040426401→2040403000→2040403001→2040390200→2040390202</code>, 총 1,265.4m)로
+      전부 연결 확인 후, <code>base_roadlink.coords</code> 자체를 이 6개 링크의 실제 좌표를 이어붙인 값으로
+      교체했습니다 — 회랑 좌표가 단순화본이 아니라 표준노드링크 원본과 정확히 일치하는 상태입니다. 진입/진출
+      게이트 좌표도 각각 <code>2040424901</code>의 f_node, <code>2040390202</code>의 t_node로 맵매칭.
+      (최초엔 한 링크 건너뛴 <code>2040426401</code>을 진입으로 잘못 지정했다가 정정한 이력 있음 — 그
+      과정에서 진출점도 임의의 최근접 링크(<code>2040390300</code>)가 아니라 실제 연결된 체인의 끝
+      (<code>2040390202</code>)으로 재확인됨.)
+    </div>
+  </section>
+
+  <section id="logic">
+    <h2>4. 판정 로직</h2>
+    <div class="note">
+      C++ 의사코드는 문서에서 제거하고 별도로 기억해두었습니다 — 실제 소스 코딩 시 참조합니다. 골자는
+      <code>base_tollgate</code>의 <code>gate_div='I'</code> 진입을 <code>link_id</code>로 정확히 매칭해
+      세션을 시작하고, 세션 진행 중엔 매 GPS마다 <code>base_roadlink</code> 폴리곤으로 "아직 회랑 안인지"를
+      재확인(벗어나면 5절 방식대로 조용히 폐기)하면서 실제 이동거리를 누적하다가, <code>gate_div='O'</code>
+      진출을 만나면 누적거리÷경과시간으로 평균속도를 계산해 위반 여부를 확정하는 것입니다. 폐쇄형 판정 함수와
+      거의 동일한 코드 경로라 <code>gate_div</code>만 다르고 나머지는 재사용 가능합니다.
+    </div>
+  </section>
+
+  <section id="exception">
+    <h2>5. 예외 처리 — 중간 교차로 이탈</h2>
+    <div class="intro">
+      구간단속 구역은 폐쇄형(톨게이트)과 달리 <b>물리적으로 막혀있지 않은 일반 공용도로</b>입니다. 중간 교차로에서
+      다른 길로 빠지는 건 완전히 합법적인 정상 주행이라, 막을 수도 없고 막아서도 안 됩니다.
+    </div>
+    <div class="card">
+      <table>
+        <tr><th>구분</th><th>폐쇄형(톨게이트)</th><th>구간단속</th></tr>
+        <tr><td>중간 이탈 가능 여부</td><td>불가능(물리적으로 차단된 구조)</td><td>가능(일반도로, 정상 주행)</td></tr>
+        <tr><td>이탈 시 의미</td><td>요금 누락 위험 → 확인 필요</td><td>측정 데이터 미완성 → 애초에 판정 불가</td></tr>
+        <tr><td>처리 방식</td><td>미종결(AUDIT)로 <b>기록 남김</b></td><td>세션만 조용히 폐기, <b>기록 없음</b></td></tr>
+      </table>
+    </div>
+    <div class="note">
+      진입~진출 구간 전체를 완주하지 않으면 평균속도 자체를 계산할 근거가 없으므로, 위반이든 통과든 판정할
+      수 없습니다. 그래서 폐쇄형의 "미종결 AUDIT" 패턴을 그대로 가져오지 않고, <b>그냥 정상적인 무관한
+      주행으로 취급해 세션만 초기화</b>합니다.
+    </div>
+    <div class="card">
+      <table>
+        <tr><th>감지 방법</th><th>내용</th></tr>
+        <tr>
+          <td>1차 — Layer 1 재사용</td>
+          <td><code>base_roadlink</code> 폴리곤 판정을 진입 시점뿐 아니라 <b>세션이 열려있는 동안 매 GPS마다
+            계속</b> 수행. 폴리곤을 벗어나면 즉시 세션 폐기 — 교차로 이탈을 지체 없이 감지</td>
+        </tr>
+        <tr>
+          <td>2차 — TTL 안전망</td>
+          <td>터널·GPS 음영구간 등으로 일시적으로 매칭이 끊겨 Layer 1이 오탐할 가능성에 대비한 백업. 정상
+            주행 시간보다 충분히 긴 TTL로 설정해, Layer 1이 놓친 경우만 뒤늦게 정리</td>
+        </tr>
+      </table>
+    </div>
+  </section>
+
+  <section id="tradeoffs">
+    <h2>6. 주의사항</h2>
+    <div class="card">
+      <ul>
+        <li><b>테이블 코멘트 갱신 권장</b> — <code>base_tollgate</code> 코멘트가 "영업소 마스터"로 돼 있는데,
+          구간단속 진입점은 영업소가 아닙니다. 기능엔 무관하지만 "폐쇄식·구간단속 공용 입출구"로 갱신 권장.</li>
+        <li><b>세션 누적거리 로직 전제</b> — 폐쇄형 설계에 이미 언급된 누적거리 단계가 구현돼 있어야
+          그대로 재사용 가능합니다.</li>
+        <li><b>게이트 link_id 공유 시 동시 트리거 가능성</b> — 세션의 <code>inSpeedZone</code> 플래그로
+          순서를 구분하므로 문제는 없지만, 등록 시 인지 필요.</li>
+        <li><b>모든 구간에 필요한 건 아님</b> — 상/하행 혼동 우려가 없는 단순 도로는 기존 폴리곤 방식만으로도
+          충분할 수 있어, 필요한 구간에만 선택적으로 적용하면 됩니다.</li>
+      </ul>
+    </div>
+  </section>
+</main>
+</div>
+</body>
+</html>

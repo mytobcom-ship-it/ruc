@@ -39,6 +39,8 @@ typedef struct sConfig
 	string							strRawLogSelectSession;				// GPS 로그 조회·예약 SQL
 	string							strRawLogUpdateSession;				// GPS 로그 갱신 SQL
 	string							strChargeInsertSession;				// 과금 INSERT SQL (#10 보류, 비어 있으면 비활성)
+	string							strGateSelectSession;				// 과금 게이트(BASE_TOLLGATE) 전량 조회 SQL, 비어 있으면 CChargeDataLoader 게이트 캐시 비활성 (2026-08-12 최정우 추가)
+	string							strZoneSelectSession;				// 과금 구역(BASE_ROADLINK) 전량 조회 SQL, 비어 있으면 CChargeDataLoader 구역 캐시 비활성 (2026-08-12 최정우 추가)
 
 	// 피더 (DB poll)
 	int								nFetchLimit;						// 1회 조회·예약 최대 건수 (건)
@@ -76,6 +78,8 @@ typedef struct sConfig
 	int								nReverseConfirm;					// reverse_confirm — 연속 역행 확정 포인트 수 (2026-07-21 최정우 추가)
 	double							dfSpeedFactor;					// speed_factor (2026-07-20 최정우 추가)
 	int								nSpeedMargin;					// speed_margin (km/h) (2026-07-20 최정우 추가)
+
+	int								nGateReloadSec;						// [charge] gate_reload (단위: sec, 0=재조회 없음) (2026-08-12 최정우 추가)
 } CONFIG, *PCONFIG;
 
 #define CONFIG_SIZE												sizeof(CONFIG)

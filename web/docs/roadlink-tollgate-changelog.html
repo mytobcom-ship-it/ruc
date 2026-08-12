@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>RL-Z00004/TG00009 변경 이력 · RUC 과금 데이터</title>
+<style>
+  :root {
+    --bg: #f2f4f7;
+    --surface: #ffffff;
+    --surface-2: #eaedf2;
+    --border: #d9dee6;
+    --text: #1a2028;
+    --muted: #5c6673;
+    --muted-2: #838d99;
+    --accent: #b8842a;
+    --accent-soft: #b8842a1a;
+    --kept: #2f8f4e;
+    --kept-soft: #2f8f4e14;
+    --deleted: #c23b32;
+    --deleted-soft: #c23b3212;
+    --renamed: #5b5bd6;
+    --renamed-soft: #5b5bd614;
+    --shadow: 0 1px 2px rgba(20,24,30,.04), 0 8px 24px -12px rgba(20,24,30,.12);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #11151b;
+      --surface: #171c24;
+      --surface-2: #1e242e;
+      --border: #2b323e;
+      --text: #e7eaee;
+      --muted: #9aa4b2;
+      --muted-2: #6b7482;
+      --accent: #d9a94b;
+      --accent-soft: #d9a94b1f;
+      --kept: #5cc17c;
+      --kept-soft: #5cc17c1a;
+      --deleted: #ea6b60;
+      --deleted-soft: #ea6b601a;
+      --renamed: #9494ef;
+      --renamed-soft: #9494ef1c;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #11151b;
+    --surface: #171c24;
+    --surface-2: #1e242e;
+    --border: #2b323e;
+    --text: #e7eaee;
+    --muted: #9aa4b2;
+    --muted-2: #6b7482;
+    --accent: #d9a94b;
+    --accent-soft: #d9a94b1f;
+    --kept: #5cc17c;
+    --kept-soft: #5cc17c1a;
+    --deleted: #ea6b60;
+    --deleted-soft: #ea6b601a;
+    --renamed: #9494ef;
+    --renamed-soft: #9494ef1c;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font-family: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont,
+      "Malgun Gothic", "Apple SD Gothic Neo", "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", "Consolas", "D2Coding", monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .page { max-width: 980px; margin: 0 auto; padding: 56px 24px 96px; }
+
+  header.top { margin-bottom: 44px; }
+  .eyebrow {
+    font-size: 12.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 10px;
+  }
+  h1 {
+    font-size: 30px; line-height: 1.25; margin: 0 0 12px; font-weight: 800;
+    text-wrap: balance; letter-spacing: -0.01em;
+  }
+  .lede {
+    font-size: 15.5px; line-height: 1.65; color: var(--muted); margin: 0; max-width: 62ch;
+  }
+  .meta-row {
+    display: flex; gap: 20px; flex-wrap: wrap; margin-top: 20px;
+    font-size: 12.5px; color: var(--muted-2);
+  }
+  .meta-row span b { color: var(--muted); font-weight: 600; }
+
+  section { margin-bottom: 52px; }
+  h2 {
+    font-size: 12.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 18px; padding-bottom: 10px; border-bottom: 1px solid var(--border);
+  }
+
+  /* ---- timeline ---- */
+  .timeline { display: flex; flex-direction: column; gap: 14px; }
+  .step {
+    display: grid; grid-template-columns: 34px 1fr; gap: 16px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 18px 20px; box-shadow: var(--shadow);
+  }
+  .step-num {
+    width: 34px; height: 34px; border-radius: 50%; background: var(--surface-2);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 800; color: var(--muted); flex: none;
+  }
+  .step-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+  .step-title { font-size: 15.5px; font-weight: 700; }
+  .step-date { font-size: 12px; color: var(--muted-2); }
+  .step-why { font-size: 13.5px; color: var(--muted); line-height: 1.6; margin: 0 0 14px; }
+  .diffs { display: flex; flex-direction: column; gap: 6px; }
+  .diff-row {
+    display: grid; grid-template-columns: 140px 1fr auto 1fr; align-items: center; gap: 10px;
+    font-size: 13px; padding: 7px 10px; border-radius: 7px; background: var(--surface-2);
+  }
+  .diff-field { color: var(--muted); font-size: 12px; }
+  .diff-from { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--deleted); text-decoration-thickness: 1.5px; }
+  .diff-arrow { color: var(--muted-2); font-size: 12px; }
+  .diff-to { color: var(--text); font-weight: 600; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 700;
+    padding: 3px 9px; border-radius: 100px; letter-spacing: .01em;
+  }
+  .badge.deleted { background: var(--deleted-soft); color: var(--deleted); }
+  .badge.renamed { background: var(--renamed-soft); color: var(--renamed); }
+  .badge.restored { background: var(--kept-soft); color: var(--kept); }
+  .badge-list { display: flex; flex-direction: column; gap: 5px; margin-top: 10px; }
+  .badge-list .diff-row { grid-template-columns: 1fr auto; }
+
+  /* ---- tables ---- */
+  .table-wrap {
+    overflow-x: auto; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; box-shadow: var(--shadow);
+  }
+  table { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 13px; }
+  thead th {
+    text-align: left; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+    color: var(--muted); padding: 12px 14px; border-bottom: 1px solid var(--border);
+    background: var(--surface-2); white-space: nowrap; position: sticky; top: 0;
+  }
+  tbody td { padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: top; white-space: nowrap; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--surface-2); }
+  td.id { color: var(--accent); font-weight: 700; }
+  td.wrap { white-space: normal; min-width: 220px; color: var(--muted); }
+  td.num { text-align: right; }
+  td.empty { color: var(--muted-2); }
+  .table-note { font-size: 12px; color: var(--muted-2); padding: 10px 14px 14px; }
+
+  footer.credit {
+    margin-top: 60px; padding-top: 20px; border-top: 1px solid var(--border);
+    font-size: 12px; color: var(--muted-2); line-height: 1.7;
+  }
+
+  @media (max-width: 640px) {
+    .diff-row { grid-template-columns: 1fr; grid-auto-rows: auto; gap: 2px; }
+    .diff-arrow { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="top">
+    <p class="eyebrow">RUC 과금 데이터 · 변경 이력</p>
+    <h1>base_roadlink / base_tollgate 변경 기록</h1>
+    <p class="lede">
+      "제2판교 개방식 구역" 존(zone)과 그 게이트에 대해 이번 세션에서 적용한 변경 내역(이름 정리 → 삭제 → 복구)과,
+      <code class="mono">ruc.base_roadlink</code> · <code class="mono">ruc.base_tollgate</code>
+      두 테이블의 현재 전체 값을 함께 정리했습니다.
+    </p>
+    <div class="meta-row">
+      <span><b>DB</b> 127.0.0.1 / ruc (local)</span>
+      <span><b>대상</b> base_roadlink, base_tollgate, base_tollfare</span>
+      <span><b>기준일</b> 2026-08-12</span>
+    </div>
+  </header>
+
+  <section>
+    <h2>변경 이력</h2>
+    <div class="timeline">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>
+          <div class="step-head">
+            <span class="step-title">RL-Z00004 → RL-Z00009 이름 정리 <span class="badge renamed">RENAMED</span></span>
+            <span class="step-date">2026-08-12</span>
+          </div>
+          <p class="step-why">
+            게이트(TG00009)와 zone(road_id) 번호가 서로 달라 대응 관계가 한눈에 안 들어온다는 점을 정리하기 위해,
+            road_id를 게이트 번호와 동일하게 맞춤. FK 제약(<code class="mono">base_tollgate_road_id_fkey</code>,
+            ON UPDATE NO ACTION)이 있어 신규 행 INSERT → 자식 UPDATE → 기존 행 DELETE 순으로 처리.
+          </p>
+          <div class="diffs">
+            <div class="diff-row">
+              <span class="diff-field">base_roadlink.road_id</span>
+              <span class="diff-from mono">RL-Z00004</span>
+              <span class="diff-arrow">→</span>
+              <span class="diff-to mono">RL-Z00009</span>
+            </div>
+            <div class="diff-row">
+              <span class="diff-field">base_tollgate.road_id</span>
+              <span class="diff-from mono">RL-Z00004</span>
+              <span class="diff-arrow">→</span>
+              <span class="diff-to mono">RL-Z00009</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>
+          <div class="step-head">
+            <span class="step-title">RL-Z00009 / TG00009 존·게이트 전체 삭제 <span class="badge deleted">DELETED</span></span>
+            <span class="step-date">2026-08-12</span>
+          </div>
+          <p class="step-why">
+            link_ids가 게이트와 동일한 링크 1개(<code class="mono">2040423603</code>, 99.8m)뿐인 스텁 데이터로 확인되어,
+            실제 도로 구간을 채워넣는 대신 사용자 요청에 따라 완전 삭제. FK 순서상 base_tollfare → base_tollgate →
+            base_roadlink 순으로 제거.
+          </p>
+          <div class="badge-list">
+            <div class="diff-row">
+              <span class="diff-field mono">ruc.base_tollfare</span>
+              <span class="diff-to">tollgate_id=TG00009 6건 삭제 (car_type 1~6, 요금 100~600원)</span>
+            </div>
+            <div class="diff-row">
+              <span class="diff-field mono">ruc.base_tollgate</span>
+              <span class="diff-to">TG00009 (제2 판교 개방식, gate_div=M, link_id=2040423603) 1건 삭제</span>
+            </div>
+            <div class="diff-row">
+              <span class="diff-field mono">ruc.base_roadlink</span>
+              <span class="diff-to">RL-Z00009 (제2판교 개방식 구역, road_kind=1) 1건 삭제</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>
+          <div class="step-head">
+            <span class="step-title">RL-Z00009 / TG00009 존·게이트·요금 복구 <span class="badge restored">RESTORED</span></span>
+            <span class="step-date">2026-08-12</span>
+          </div>
+          <p class="step-why">
+            사용자 요청으로 삭제 전 캡처해둔 값 그대로 재삽입. base_roadlink → base_tollgate → base_tollfare 순으로
+            FK를 만족시키며 INSERT. <code class="mono">base_roadlink.coords</code>만 원본을 별도로 백업해두지 못해서,
+            같은 <code class="mono">link_id=2040423603</code>의 <code class="mono">ruc.road_link.coords</code>로
+            재구성(3개 점) — 다른 단일링크 zone들도 전부 이 패턴이라 원본과 사실상 동일할 것으로 판단.
+          </p>
+          <div class="badge-list">
+            <div class="diff-row">
+              <span class="diff-field mono">ruc.base_roadlink</span>
+              <span class="diff-to">RL-Z00009 재삽입 (coords는 road_link.2040423603 기준 재구성, 나머지 값은 삭제 전 원본 그대로)</span>
+            </div>
+            <div class="diff-row">
+              <span class="diff-field mono">ruc.base_tollgate</span>
+              <span class="diff-to">TG00009 재삽입 (lon/lat/link_id/reg_dt/upd_dt 전부 삭제 전 원본 값)</span>
+            </div>
+            <div class="diff-row">
+              <span class="diff-field mono">ruc.base_tollfare</span>
+              <span class="diff-to">tollgate_id=TG00009 6건 재삽입 (car_type 1~6, 요금 100~600원, 원본 값)</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>현재 전체 값 · ruc.base_roadlink <span style="text-transform:none; font-weight:400; color:var(--muted-2);">(6행)</span></h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>road_id</th><th>kind</th><th>road_nm</th><th>geom</th>
+            <th class="num">speed</th><th>link_ids</th><th>use</th><th>reg_dt</th><th>upd_dt</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="id mono">RL-Z00001</td><td class="mono">4</td><td>제2판교 주정차단속</td><td class="mono">POLY</td>
+            <td class="num mono empty">—</td><td class="wrap empty">—</td><td class="mono">Y</td>
+            <td class="mono">20260731 13:25:11</td><td class="mono">20260811 18:04:00</td>
+          </tr>
+          <tr>
+            <td class="id mono">RL-Z00002</td><td class="mono">0</td><td>제2판교 과금구역</td><td class="mono">LINE</td>
+            <td class="num mono empty">—</td><td class="wrap mono">2040425701, 2040424401</td><td class="mono">Y</td>
+            <td class="mono">20260731 13:26:22</td><td class="mono">20260811 16:59:46</td>
+          </tr>
+          <tr>
+            <td class="id mono">RL-Z00003</td><td class="mono">3</td><td>제2판교 구간단속구역</td><td class="mono">LINE</td>
+            <td class="num mono">60</td><td class="wrap mono">2040424301</td><td class="mono">Y</td>
+            <td class="mono">20260731 13:26:46</td><td class="mono">20260811 17:43:56</td>
+          </tr>
+          <tr>
+            <td class="id mono">RL-Z00005</td><td class="mono">2</td><td>제2판교 폐쇄식 구역</td><td class="mono">LINE</td>
+            <td class="num mono empty">—</td><td class="wrap mono">2040423801</td><td class="mono">Y</td>
+            <td class="mono">20260731 13:27:52</td><td class="mono">20260811 15:26:28</td>
+          </tr>
+          <tr>
+            <td class="id mono">RL-Z00006</td><td class="mono">3</td><td>구간단속 테스트</td><td class="mono">LINE</td>
+            <td class="num mono">50</td>
+            <td class="wrap mono">2040424901, 2040426401, 2040403000, 2040390200, 2040390202</td>
+            <td class="mono">Y</td>
+            <td class="mono">20260804 09:02:39</td><td class="mono">20260811 15:26:15</td>
+          </tr>
+          <tr>
+            <td class="id mono">RL-Z00009</td><td class="mono">1</td><td>제2판교 개방식 구역</td><td class="mono">LINE</td>
+            <td class="num mono empty">—</td><td class="wrap mono">2040423603</td><td class="mono">Y</td>
+            <td class="mono">20260731 13:27:31</td><td class="mono">20260811 15:26:40</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="table-note">RL-Z00004(舊)는 이름 정리로 RL-Z00009가 됐고, 한 차례 삭제됐다가 복구됐습니다(위 변경 이력 참고).</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>현재 전체 값 · ruc.base_tollgate <span style="text-transform:none; font-weight:400; color:var(--muted-2);">(7행)</span></h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>tollgate_id</th><th>road_id</th><th>tollgate_nm</th><th>div</th>
+            <th class="num">lon</th><th class="num">lat</th><th>link_id</th><th>use</th><th>upd_dt</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="id mono">TG00007</td><td class="mono">RL-Z00005</td><td>제2판교 폐쇄식 입구</td><td class="mono">I</td>
+            <td class="num mono">127.0901428</td><td class="num mono">37.4059799</td><td class="mono">2040423801</td>
+            <td class="mono">Y</td><td class="mono">2026-08-11 07:28:01</td>
+          </tr>
+          <tr>
+            <td class="id mono">TG00008</td><td class="mono">RL-Z00005</td><td>제2 판교 폐쇄식 출구</td><td class="mono">O</td>
+            <td class="num mono">127.0861555</td><td class="num mono">37.4050789</td><td class="mono">2040423801</td>
+            <td class="mono">Y</td><td class="mono">2026-08-11 07:28:01</td>
+          </tr>
+          <tr>
+            <td class="id mono">TG00009</td><td class="mono">RL-Z00009</td><td>제2 판교 개방식</td><td class="mono">M</td>
+            <td class="num mono">127.0859650</td><td class="num mono">37.4057790</td><td class="mono">2040423603</td>
+            <td class="mono">Y</td><td class="mono">2026-08-11 06:41:35</td>
+          </tr>
+          <tr>
+            <td class="id mono">TG00010</td><td class="mono">RL-Z00006</td><td>구간단속 테스트 진입점</td><td class="mono">I</td>
+            <td class="num mono">127.0902726</td><td class="num mono">37.4059347</td><td class="mono">2040424901</td>
+            <td class="mono">Y</td><td class="mono">2026-08-11 11:57:46</td>
+          </tr>
+          <tr>
+            <td class="id mono">TG00011</td><td class="mono">RL-Z00006</td><td>구간단속 테스트 진출점</td><td class="mono">O</td>
+            <td class="num mono">127.0997285</td><td class="num mono">37.4122166</td><td class="mono">2040390202</td>
+            <td class="mono">Y</td><td class="mono">2026-08-11 17:16:35</td>
+          </tr>
+          <tr>
+            <td class="id mono">TG00012</td><td class="mono">RL-Z00003</td><td>제2판교 구간단속 진입점</td><td class="mono">I</td>
+            <td class="num mono">127.0860261</td><td class="num mono">37.4062009</td><td class="mono">2040424301</td>
+            <td class="mono">Y</td><td class="mono">2026-08-11 17:43:56</td>
+          </tr>
+          <tr>
+            <td class="id mono">TG00013</td><td class="mono">RL-Z00003</td><td>제2판교 구간단속 진출점</td><td class="mono">O</td>
+            <td class="num mono">127.0895352</td><td class="num mono">37.4069850</td><td class="mono">2040424301</td>
+            <td class="mono">Y</td><td class="mono">2026-08-11 17:43:56</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="table-note">TG00009는 road_id가 RL-Z00004→RL-Z00009로 바뀌었고, 한 차례 삭제됐다가 원본 값 그대로 복구됐습니다(위 변경 이력 참고).</div>
+    </div>
+  </section>
+
+  <footer class="credit">
+    로컬 <span class="mono">ruc</span> DB(127.0.0.1:5432)에서 직접 조회한 값입니다. RL-Z00003/RL-Z00005/RL-Z00009 모두
+    link_ids가 게이트와 동일 링크 1개뿐인 동일한 스텁 상태이며, 아직 해소되지 않았습니다.
+  </footer>
+
+</div>
+</body>
+</html>

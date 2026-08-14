@@ -133,11 +133,20 @@ static bool LoadConfig(const string& strFile, SIM_CONFIG& stConfig, int& nLogLev
 	if (stConfig.dfOutlierProb < 0.0) stConfig.dfOutlierProb = 0.0;
 	if (stConfig.dfOutlierProb > 1.0) stConfig.dfOutlierProb = 1.0;
 	if (stConfig.dfOutlierMaxM < stConfig.dfOutlierMinM) stConfig.dfOutlierMaxM = stConfig.dfOutlierMinM;
+	// 서행/정차 시 노이즈 확대 (2026-08-13 최정우 추가)
+	stConfig.dfNoiseSlowKmh = GetProfileDouble(cIni, "noise", "slow_kmh", 20.0);
+	stConfig.dfNoiseSlowMult = GetProfileDouble(cIni, "noise", "slow_mult", 2.5);
+	if (stConfig.dfNoiseSlowMult < 1.0) stConfig.dfNoiseSlowMult = 1.0;
 
 	// [speed]
 	stConfig.dfSpeedFactorMin = GetProfileDouble(cIni, "speed", "factor_min", 0.5);
 	stConfig.dfSpeedFactorMax = GetProfileDouble(cIni, "speed", "factor_max", 1.0);
 	stConfig.dfDefaultMaxSpd = GetProfileDouble(cIni, "speed", "default_max_kmh", 50.0);
+
+	// [status] DRIVE_STATUS 속도 구간 (2026-08-13 최정우 추가)
+	stConfig.dfOnRoadKmh = GetProfileDouble(cIni, "status", "onroad_kmh", 30.0);
+	stConfig.dfParkKmh = GetProfileDouble(cIni, "status", "park_kmh", 10.0);
+	if (stConfig.dfParkKmh > stConfig.dfOnRoadKmh) stConfig.dfParkKmh = stConfig.dfOnRoadKmh;
 
 	// [deadzone] — 터널·지하차도 GPS 신호 두절 시뮬레이션 (2026-07-21 최정우 추가)
 	stConfig.dfDeadZoneProb = GetProfileDouble(cIni, "deadzone", "drop_prob", 0.9);

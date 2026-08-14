@@ -171,7 +171,11 @@ bool CLoggerManager::SetRemoveLogFile(time_t dtRmTime, string strLogPath)
 		else													// 파일이면 ...
 		{
 			string strExten = ".log";
-			if (strFilePath.rfind(strExten) != string::npos)
+			// rfind 는 문자열 어디든 ".log" 가 있으면 매치되어(예: foo.log-20260101) 확장자가
+			//   아닌 파일도 삭제 대상에 걸릴 수 있었음 — 반드시 "끝이 .log 로 끝나는지" 검사로
+			//   변경(2026-08-14 최정우 수정 — "소스상 문제" 검토 중 발견)
+			if ((strFilePath.size() >= strExten.size()) &&
+				(strFilePath.compare(strFilePath.size() - strExten.size(), strExten.size(), strExten) == 0))
 			{
 				if (stStatInfo.st_mtim.tv_sec < dtRmTime)
 				{

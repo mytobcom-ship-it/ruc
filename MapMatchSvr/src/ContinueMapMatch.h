@@ -62,7 +62,10 @@ public:
 private:
 	bool LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, 
 		DEPTH_LINK_INFO_DATA& stDepthLinkInfoData, list<MATCH_ENTRY> *plistMatchEntryList);
-	bool GetLinkDepthInfo(set<uint32> *psetSearchHistoryLinkList, listDepthLinkInfo *plistDepthLinkInfoList);
+	// 링크 ID 는 uint64(전국 10자리 코드 기준 지역코드 43 이상은 2^32 초과) — set<uint32> 로 받으면
+	//   삽입/조회 시 조용히 하위 32비트로 잘려 서로 다른 링크가 충돌할 수 있었음(2026-08-14 최정우
+	//   수정 — "소스상 문제" 검토 중 발견, BeginMapMatch 의 동일 목적 집합은 원래부터 set<uint64>)
+	bool GetLinkDepthInfo(set<uint64> *psetSearchHistoryLinkList, listDepthLinkInfo *plistDepthLinkInfoList);
 	void GetMatchEntry(list<MATCH_ENTRY> *plistMatchEntryList, PMATCH_ENTRY pstMatchEntry,
 		PMATCH_TRACE_CTX pstTraceCtx = nullptr, const SGMT_MATCH_INPUT& stSgmtMatchInput = SGMT_MATCH_INPUT());
 	// 최적 후보가 링크 경계(시작/끝)에 스냅(클램프)됐는지 — 클램프면 다음 depth 확장해 연결 링크와 비교 (2026-07-15 최정우 추가)

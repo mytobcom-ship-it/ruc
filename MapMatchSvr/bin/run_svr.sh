@@ -1,5 +1,56 @@
 #!/bin/bash
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-# shellcheck source=../../test_lib.sh
-source "$ROOT/test_lib.sh"
-engine_start "$MM_BIN"
+# MapMatchSvr 단독 기동 — 독립 실행(test_lib.sh 등 외부 의존 없음)
+BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+MM_BIN="$BIN_DIR/MapMatchSvr"
+PIDFILE="$BIN_DIR/MapMatchSvr.pid"
+LOG="$BIN_DIR/MapMatchSvr_launcher.log"
+STOP_WAIT=35
+
+[ -x "$MM_BIN" ] || { echo "오류: $MM_BIN 없음 — MapMatchSvr/src 에서 make"; exit 1; }
+
+find_pid() {
+	local pid found=""
+	if [ -f "$PIDFILE" ]; then
+		pid="$(tr -d ' \n' < "$PIDFILE")"
+		if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null \
+				&& [ "$(readlink -f "/proc/$pid/exe" 2>/dev/null)" = "$MM_BIN" ]; then
+			found="$pid"
+		fi
+		[ -z "$found" ] && rm -f "$PIDFILE"
+	fi
+	if [ -z "$found" ]; then
+		for pid in $(pgrep -x MapMatchSvr 2>/dev/null); do
+			if [ "$(readlink -f "/proc/$pid/exe" 2>/dev/null)" = "$MM_BIN" ]; then
+				found="$pid"
+				break
+			fi
+		done
+	fi
+	echo "$found"
+}
+
+pid="$(find_pid)"
+if [ -n "$pid" ]; then
+	echo "기존 MapMatchSvr 종료 중... (pid: $pid)"
+	kill -TERM "$pid" 2>/dev/null
+	for ((i = 1; i <= STOP_WAIT; i++)); do
+		kill -0 "$pid" 2>/dev/null || break
+		sleep 1
+	done
+	if kill -0 "$pid" 2>/dev/null; then
+		echo "graceful stop timeout — SIGKILL (pid: $pid)"
+		kill -KILL "$pid" 2>/dev/null
+		sleep 1
+	fi
+	rm -f "$PIDFILE"
+fi
+
+cd "$BIN_DIR" || exit 1
+echo "==== $(date '+%F %T') start MapMatchSvr ====" >>"$LOG"
+# FD 상속 방지: 독립 세션에서 기동 (잠금 fd 등이 엔진에 물리지 않도록)
+nohup setsid "$MM_BIN" >>"$LOG" 2>&1 </dev/null &
+pid=$!
+echo "$pid" > "$PIDFILE"
+
+# 기동 확인 대기 없이 곧바로 복귀 — 실제 기동 성공 여부는 ps_svr.sh 로 별도 확인할 것
+echo "MapMatchSvr background start requested (pid=$pid)"

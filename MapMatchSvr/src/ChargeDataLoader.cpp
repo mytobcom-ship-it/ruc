@@ -6,6 +6,137 @@
 #include "CoordConvert.h"
 #include "GISUtil.h"
 
+// 재조회로 교체된 이전 세대 캐시를 몇 개까지 계속 살려둘지 — 댕글링 포인터 방지용(LoadGates/
+//   LoadZones 참고). 조회 함수가 반환한 포인터는 락 해제 직후 짧게(같은 함수 내 몇 줄)만 쓰이므로
+//   2세대(현재+직전 재조회분)면 충분한 여유 (2026-08-14 최정우 추가)
+static const size_t RETIRED_CACHE_GENERATIONS = 2;
+
+/**
+ * @brief COORDS(jsonb) 파싱 — "[[lon,lat],[lon,lat],...]" 형태에서 정점 목록 추출 (2026-08-13 최정우 추가)
+ * @param[in] strJson base_roadlink.coords 원본 텍스트(GEOM_TYPE='POLY')
+ * @param[out] pvtOut 파싱된 정점 목록(dfX=경도, dfY=위도)
+ * @remark 이 코드베이스에 JSON 파서가 없어 정식 파서 대신 이 컬럼의 고정 포맷([[lon,lat],...], 중첩
+ *   1단계)만 가정하고 직접 스캔. '[' 뒤에서 숫자 두 개(strtod) 파싱을 시도해 실패하면(예: 바깥쪽
+ *   '[[' 의 첫 '[') 그냥 건너뛰므로 중첩 구조에 안전함
+*/
+static void ParseCoordsJson(const string& strJson, vector<POINT> *pvtOut)
+{
+	pvtOut->clear();
+	const char *p = strJson.c_str();
+	while (*p != '\0')
+	{
+		if (*p == '[')
+		{
+			char *pAfterLon = nullptr;
+			double dfLon = strtod(p + 1, &pAfterLon);
+			if (pAfterLon != (p + 1))
+			{
+				const char *pLat = pAfterLon;
+				while ((*pLat == ',') || (*pLat == ' ')) pLat++;
+				char *pAfterLat = nullptr;
+				double dfLat = strtod(pLat, &pAfterLat);
+				if (pAfterLat != pLat)
+				{
+					POINT stPt;
+					stPt.dfX = dfLon;
+					stPt.dfY = dfLat;
+					pvtOut->push_back(stPt);
+					p = pAfterLat;
+					continue;
+				}
+			}
+		}
+		p++;
+	}
+}
+
+/**
+ * @brief LINK_IDS(jsonb) 파싱 — ["2040425701", "2040424401"] 형태에서 link_id 목록 추출 (2026-08-13 최정우 추가)
+ * @param[in] strJson base_roadlink.link_ids 원본 텍스트(문자열 배열)
+ * @param[out] pvtOut 파싱된 link_id 목록(uint64)
+ * @remark ParseCoordsJson 과 동일한 이유로 정식 JSON 파서 대신 직접 스캔 — 큰따옴표 안의 숫자만
+ *   strtoull 로 추출. 큰따옴표가 아닌 곳(대괄호·쉼표·공백)은 건너뜀
+*/
+static void ParseLinkIdsJson(const string& strJson, vector<uint64> *pvtOut)
+{
+	pvtOut->clear();
+	const char *p = strJson.c_str();
+	while (*p != '\0')
+	{
+		if (*p == '"')
+		{
+			char *pAfter = nullptr;
+			uint64 qwLinkID = strtoull(p + 1, &pAfter, 10);
+			if (pAfter != (p + 1))
+			{
+				pvtOut->push_back(qwLinkID);
+				p = pAfter;
+				continue;
+			}
+		}
+		p++;
+	}
+}
+
+/**
+ * @brief 점 P 가 폴리곤 내부인지 — 표준 ray-casting(even-odd) 판정 (2026-08-13 최정우 추가)
+ * @param[in] dfLon 점 경도, dfLat 점 위도
+ * @param[in] vtPoly 폴리곤 정점 목록(닫힌 도형 가정 — 첫/끝 정점 별도 처리 불필요)
+ * @return true=내부(경계 포함 판정은 버퍼 거리 검사가 별도로 처리)
+*/
+static bool IsPointInPolygon(double dfLon, double dfLat, const vector<POINT>& vtPoly)
+{
+	if (vtPoly.size() < 3) return false;
+
+	bool bInside = false;
+	size_t nCount = vtPoly.size();
+	for (size_t i = 0, j = nCount - 1; i < nCount; j = i++)
+	{
+		double dfXi = vtPoly[i].dfX, dfYi = vtPoly[i].dfY;
+		double dfXj = vtPoly[j].dfX, dfYj = vtPoly[j].dfY;
+		if (((dfYi > dfLat) != (dfYj > dfLat)) &&
+			(dfLon < (dfXj - dfXi) * (dfLat - dfYi) / (dfYj - dfYi) + dfXi))
+		{
+			bInside = !bInside;
+		}
+	}
+	return bInside;
+}
+
+/**
+ * @brief 점 P와 폴리곤 경계(각 변) 사이 최단거리(m) — 적응형 버퍼 판정용 (2026-08-13 최정우 추가)
+ * @remark 버퍼 거리가 수 m~십수 m 수준으로 짧아 P 주변 국소 평면(경위도→m 환산)으로 근사해도
+ *   오차가 무시할만함 — 하버사인을 변마다 반복 호출할 필요 없음
+*/
+static double DistanceToPolygonBoundaryMeters(double dfLon, double dfLat, const vector<POINT>& vtPoly)
+{
+	if (vtPoly.size() < 2) return 1e18;
+
+	const double dfMPerLon = 111320.0 * cos(RAD(dfLat));
+	const double dfMPerLat = 111320.0;
+
+	double dfMinDist = 1e18;
+	size_t nCount = vtPoly.size();
+	for (size_t i = 0, j = nCount - 1; i < nCount; j = i++)
+	{
+		double dfAx = (vtPoly[j].dfX - dfLon) * dfMPerLon;
+		double dfAy = (vtPoly[j].dfY - dfLat) * dfMPerLat;
+		double dfBx = (vtPoly[i].dfX - dfLon) * dfMPerLon;
+		double dfBy = (vtPoly[i].dfY - dfLat) * dfMPerLat;
+
+		double dfDx = dfBx - dfAx, dfDy = dfBy - dfAy;
+		double dfLen2 = dfDx * dfDx + dfDy * dfDy;
+		double dfT = (dfLen2 > 0.0) ? (((-dfAx) * dfDx + (-dfAy) * dfDy) / dfLen2) : 0.0;
+		if (dfT < 0.0) dfT = 0.0;
+		if (dfT > 1.0) dfT = 1.0;
+
+		double dfCx = dfAx + dfT * dfDx, dfCy = dfAy + dfT * dfDy;
+		double dfDist = sqrt(dfCx * dfCx + dfCy * dfCy);
+		if (dfDist < dfMinDist) dfMinDist = dfDist;
+	}
+	return dfMinDist;
+}
+
 /**
  * @brief 생성자
 */
@@ -95,6 +226,11 @@ bool CChargeDataLoader::LoadGates()
 	//   (query.sql [gate_select] 세션과 반드시 일치해야 함) (2026-08-12 최정우 추가)
 	CCoordConvert cCoordConvert;
 	mapGateInfo mapNewGateInfo;
+	// tollgate_id(PK) 중복 방어 — 정상 상황에선 DB PK 제약이 이미 막아주지만, 스키마 변경(제약 삭제/
+	//   우회)으로 중복이 들어오는 만일의 경우를 대비. link_id 기준 캐시라 중복이 있어도 그 자체로는
+	//   죽지 않지만, tollgate_id 문자열을 세션 추적 키로 쓰는 상위 로직(vtActiveGateIds 등)이 서로
+	//   다른 물리적 게이트를 같은 게이트로 오판할 수 있어 방어 필요 (2026-08-14 최정우 추가)
+	unordered_set<string> setSeenTollgateIds;
 	int nRows = PQntuples(pcResult);
 	for (int i = 0; i < nRows; i++)
 	{
@@ -111,6 +247,15 @@ bool CChargeDataLoader::LoadGates()
 		//   link_id 기반 캐시 키(unordered_map) 특성상 link_id 없는 행은 별도 vector 보관이 필요함.
 		//   지금은 스캐폴드 단계라 link_id 있는 행만 우선 적재 (2026-08-12 최정우 추가, TODO)
 		if (bLinkIdNull) continue;
+
+		// tollgate_id 중복(2번째부터) — 첫 행만 유지하고 이후는 스킵, 어떤 ID인지 에러로그로 남김
+		//   (2026-08-14 최정우 추가 — 정상 시엔 PK 위반으로 절대 안 나오는 케이스)
+		if (!setSeenTollgateIds.insert(pszTollgateID).second)
+		{
+			LOGFMTE("duplicate tollgate_id!skip 2nd+ row - gate id=[%s] road_id=[%s] link_id=[%s]",
+				pszTollgateID, pszRoadID, bLinkIdNull ? "" : pszLinkID);
+			continue;
+		}
 
 		GATE_INFO stGateInfo;
 		strncpy(stGateInfo.szTollgateID, pszTollgateID, sizeof(stGateInfo.szTollgateID) - 1);
@@ -130,7 +275,17 @@ bool CChargeDataLoader::LoadGates()
 	PQclear(pcResult);
 	m_pcPostgrePool->releaseConnection(pcConn);
 
-	m_mapGateInfo.swap(mapNewGateInfo);		// 짧은 스왑 — 조회 스레드와의 락 경합 최소화(doc/README.txt §F 패턴)
+	{
+		// 재조회 시점 교체 — m_cGateCacheMutex 로 조회 스레드(GetGateByLinkId 등)와 동기화(doc/README.txt
+		// §F 패턴, 2026-08-14 최정우 수정 — 락 없이 swap만 하던 걸 수정, "소스상 문제" 검토 중 발견).
+		// 단순 swap 만으로는 부족함 — 이전 세대를 즉시 파괴하지 않고 retired 목록에 보관해 댕글링
+		// 포인터를 막음(ChargeDataLoader.h m_dqRetiredGateInfo 주석 참고, 2026-08-14 최정우 추가)
+		lock_guard<CMutex> cLock(m_cGateCacheMutex);
+		m_dqRetiredGateInfo.push_back(std::move(m_mapGateInfo));
+		m_mapGateInfo = std::move(mapNewGateInfo);
+		while (m_dqRetiredGateInfo.size() > RETIRED_CACHE_GENERATIONS)
+			m_dqRetiredGateInfo.pop_front();
+	}
 	m_bLoad = true;
 
 	LOGFMTI("gate cache loaded!count=[%zu]", GetGateCount());
@@ -149,6 +304,7 @@ bool CChargeDataLoader::LoadGates()
 */
 PGATE_INFO CChargeDataLoader::GetGateByLinkId(const uint64 qwLinkID, const char cGateDiv)
 {
+	lock_guard<CMutex> cLock(m_cGateCacheMutex);
 	mapGateInfo::iterator it = m_mapGateInfo.find(qwLinkID);
 	if (it == m_mapGateInfo.end())
 		return nullptr;
@@ -165,6 +321,31 @@ PGATE_INFO CChargeDataLoader::GetGateByLinkId(const uint64 qwLinkID, const char 
 }
 
 /**
+ * @brief link_id+gate_div 로 일치하는 게이트 전부 조회 (2026-08-13 최정우 추가)
+ * @param[in] qwLinkID 매칭 링크 ID
+ * @param[in] cGateDiv 게이트 구분('M'/'I'/'O'/'B')
+ * @param[out] pvtOut 일치하는 게이트 포인터 목록(비우고 채움) — 없으면 빈 상태로 반환
+ * @remark GetGateByLinkId 는 첫 매치 1개만 반환해 같은 link_id 에 같은 gate_div 게이트가
+ *   2개 이상이면 나머지가 조회 자체가 안 됨(개방형 부과 누락 위험) — 이 함수는 전부 수집
+*/
+void CChargeDataLoader::GetGatesByLinkId(const uint64 qwLinkID, const char cGateDiv, vector<PGATE_INFO> *pvtOut)
+{
+	if (pvtOut == nullptr) return;
+	pvtOut->clear();
+
+	lock_guard<CMutex> cLock(m_cGateCacheMutex);
+	mapGateInfo::iterator it = m_mapGateInfo.find(qwLinkID);
+	if (it == m_mapGateInfo.end())
+		return;
+
+	for (size_t i = 0; i < it->second.size(); ++i)
+	{
+		if (cGateDiv == it->second[i].szGateDiv[0])
+			pvtOut->push_back(&(it->second[i]));
+	}
+}
+
+/**
  * @brief road_id+gate_div로 게이트 조회 — 폐쇄형/구간단속 진입~진출 짝짓기 전용 (2026-08-12 최정우 추가)
  * @remark
  *   별도 인덱스 없이 m_mapGateInfo(link_id 키)를 선형 탐색 — 게이트 총량이 작아(전국 기준도
@@ -176,6 +357,7 @@ PGATE_INFO CChargeDataLoader::GetGateByLinkId(const uint64 qwLinkID, const char 
 */
 PGATE_INFO CChargeDataLoader::GetGateByRoadId(const string& strRoadID, const char cGateDiv)
 {
+	lock_guard<CMutex> cLock(m_cGateCacheMutex);
 	for (mapGateInfo::iterator it = m_mapGateInfo.begin(); it != m_mapGateInfo.end(); ++it)
 	{
 		for (size_t i = 0; i < it->second.size(); ++i)
@@ -193,6 +375,7 @@ PGATE_INFO CChargeDataLoader::GetGateByRoadId(const string& strRoadID, const cha
 */
 size_t CChargeDataLoader::GetGateCount() const
 {
+	lock_guard<CMutex> cLock(m_cGateCacheMutex);
 	size_t nCount = 0;
 	for (mapGateInfo::const_iterator it = m_mapGateInfo.begin(); it != m_mapGateInfo.end(); ++it)
 		nCount += it->second.size();
@@ -217,6 +400,7 @@ PGATE_INFO CChargeDataLoader::GetGateNearby(const double dfLat, const double dfL
 	stCurPos.dfX = static_cast<double>(dwSearchLon);
 	stCurPos.dfY = static_cast<double>(dwSearchLat);
 
+	lock_guard<CMutex> cLock(m_cGateCacheMutex);
 	// 게이트 총량이 작아(전국 기준으로도 도로망 대비 극소수) 선형 탐색으로 충분 — 규모가 커지면
 	// GRID 분할(CDataLoader 패턴) 재검토 (2026-08-12 최정우 추가)
 	PGATE_INFO pstNearest = nullptr;
@@ -297,6 +481,17 @@ bool CChargeDataLoader::LoadZones()
 		const char *pszLastLon = PQgetvalue(pcResult, i, 11);
 		const char *pszLastLat = PQgetvalue(pcResult, i, 12);
 
+		// road_id 중복(2번째부터) — 첫 행만 유지하고 이후는 스킵, 어떤 ID인지 에러로그로 남김.
+		//   기존엔 mapNewZoneInfo[road_id]=값 대입이라 뒤 행이 앞 행을 조용히 덮어썼음(정상 시엔
+		//   PK 위반으로 절대 안 나오는 케이스지만, 스키마 변경으로 중복이 생기면 그동안은 어느 쪽이
+		//   남는지도 모른 채 유실됐음) (2026-08-14 최정우 추가)
+		if (mapNewZoneInfo.find(pszRoadID) != mapNewZoneInfo.end())
+		{
+			LOGFMTE("duplicate road_id!skip 2nd+ row - zone id=[%s] road_kind=[%s]",
+				pszRoadID, pszRoadKind);
+			continue;
+		}
+
 		ZONE_INFO stZoneInfo;
 		strncpy(stZoneInfo.szRoadID, pszRoadID, sizeof(stZoneInfo.szRoadID) - 1);
 		strncpy(stZoneInfo.szRoadKind, pszRoadKind, sizeof(stZoneInfo.szRoadKind) - 1);
@@ -312,13 +507,58 @@ bool CChargeDataLoader::LoadZones()
 		stZoneInfo.dfLastLon = atof(pszLastLon);
 		stZoneInfo.dfLastLat = atof(pszLastLat);
 
+		// POLY(주정차)만 PointInPolygon 판정용 정점 파싱 — LINE 은 LENGTH_M/FIRST/LAST 로 충분해
+		//   불필요한 파싱·메모리를 아낌 (2026-08-13 최정우 추가)
+		if (strcmp(stZoneInfo.szGeomType, "POLY") == 0)
+			ParseCoordsJson(stZoneInfo.strCoordsJson, &stZoneInfo.vtCoords);
+
+		// 일반도로(ROAD_KIND=0)·면제도로(ROAD_KIND=5)만 link_ids 파싱 — 게이트가 없어 매칭
+		//   링크→구역 역인덱스가 유일한 진입/이탈 판정 수단(다른 LINE 유형은 게이트 기반이라 불필요)
+		//   (2026-08-13 최정우 추가, 2026-08-14 두 차례 수정 — ROAD_KIND=5 기반 판정을 "모든 미등록
+		//   링크" 방식으로 재설계했다가 폐기하고, charge_type=0 통합 출력 방식으로 다시 zone 기반 부활)
+		if ((strcmp(stZoneInfo.szRoadKind, "0") == 0) || (strcmp(stZoneInfo.szRoadKind, "5") == 0))
+			ParseLinkIdsJson(stZoneInfo.strLinkIdsJson, &stZoneInfo.vtLinkIds);
+
 		mapNewZoneInfo[stZoneInfo.szRoadID] = stZoneInfo;
 	}
 
 	PQclear(pcResult);
 	m_pcPostgrePool->releaseConnection(pcConn);
 
-	m_mapZoneInfo.swap(mapNewZoneInfo);		// 짧은 스왑 — 조회 스레드와의 락 경합 최소화(doc/README.txt §F 패턴)
+	// 일반도로(NODE_STEP) link_id → road_id 역인덱스 재구성 (2026-08-14 최정우 추가)
+	unordered_map<uint64, string> mapNewNodeStepLinkToRoadId;
+	for (mapZoneInfo::iterator it = mapNewZoneInfo.begin(); it != mapNewZoneInfo.end(); ++it)
+	{
+		if (strcmp(it->second.szRoadKind, "0") != 0) continue;
+		for (size_t i = 0; i < it->second.vtLinkIds.size(); ++i)
+			mapNewNodeStepLinkToRoadId[it->second.vtLinkIds[i]] = it->second.szRoadID;
+	}
+
+	// 면제도로 link_id → road_id 역인덱스 재구성 (2026-08-14 최정우 부활)
+	unordered_map<uint64, string> mapNewExemptLinkToRoadId;
+	for (mapZoneInfo::iterator it = mapNewZoneInfo.begin(); it != mapNewZoneInfo.end(); ++it)
+	{
+		if (strcmp(it->second.szRoadKind, "5") != 0) continue;
+		for (size_t i = 0; i < it->second.vtLinkIds.size(); ++i)
+			mapNewExemptLinkToRoadId[it->second.vtLinkIds[i]] = it->second.szRoadID;
+	}
+
+	{
+		// 재조회 시점 교체 — m_cZoneCacheMutex 로 조회 스레드(GetZoneByRoadId/GetParkingZoneContaining 등)와
+		// 동기화(doc/README.txt §F 패턴, 2026-08-14 최정우 수정 — 락 없이 swap만 하던 걸 수정). 세 맵을
+		// 같은 락 안에서 함께 교체해 서로 항상 일관된 스냅샷 유지.
+		// m_mapZoneInfo 만 이전 세대를 즉시 파괴하지 않고 retired 목록에 보관 — GetZoneByRoadId 등이
+		// 반환하는 PZONE_INFO 는 그 주소를 외부에 노출하지만, 두 역인덱스 맵(link_id→road_id 문자열)은
+		// 내부에서 조회 즉시 GetZoneByRoadId 로 넘길 뿐 자기 주소를 외부에 노출한 적이 없어 단순 swap으로
+		// 충분함(ChargeDataLoader.h m_dqRetiredZoneInfo 주석 참고, 2026-08-14 최정우 추가)
+		lock_guard<CMutex> cLock(m_cZoneCacheMutex);
+		m_dqRetiredZoneInfo.push_back(std::move(m_mapZoneInfo));
+		m_mapZoneInfo = std::move(mapNewZoneInfo);
+		while (m_dqRetiredZoneInfo.size() > RETIRED_CACHE_GENERATIONS)
+			m_dqRetiredZoneInfo.pop_front();
+		m_mapNodeStepLinkToRoadId.swap(mapNewNodeStepLinkToRoadId);
+		m_mapExemptLinkToRoadId.swap(mapNewExemptLinkToRoadId);
+	}
 	m_bLoad = true;
 
 	LOGFMTI("zone cache loaded!count=[%zu]", GetZoneCount());
@@ -332,9 +572,70 @@ bool CChargeDataLoader::LoadZones()
 */
 PZONE_INFO CChargeDataLoader::GetZoneByRoadId(const string& strRoadID)
 {
+	lock_guard<CMutex> cLock(m_cZoneCacheMutex);
 	mapZoneInfo::iterator it = m_mapZoneInfo.find(strRoadID);
 	if (it == m_mapZoneInfo.end())
 		return nullptr;
 
 	return &(it->second);
+}
+
+/**
+ * @brief 주정차(POLY) 구역 중 (dfLon,dfLat) 포함 구역 조회 — 게이트가 없어 road_id 선판별 불가,
+ *   POLY 전량 순회 (2026-08-13 최정우 추가)
+ * @param[in] dfLon 판정 경도(raw GPS, 맵매칭 전)
+ * @param[in] dfLat 판정 위도
+ * @param[in] dfBufM 폴리곤 경계 버퍼(m). 0 이하면 버퍼 미적용(폴리곤 내부만 인정)
+ * @return 포함 구역, 없으면 nullptr
+*/
+PZONE_INFO CChargeDataLoader::GetParkingZoneContaining(const double dfLon, const double dfLat, const double dfBufM)
+{
+	lock_guard<CMutex> cLock(m_cZoneCacheMutex);
+	for (mapZoneInfo::iterator it = m_mapZoneInfo.begin(); it != m_mapZoneInfo.end(); ++it)
+	{
+		ZONE_INFO& stZone = it->second;
+		if (strcmp(stZone.szGeomType, "POLY") != 0) continue;
+		if (stZone.vtCoords.size() < 3) continue;
+
+		if (IsPointInPolygon(dfLon, dfLat, stZone.vtCoords))
+			return &stZone;
+
+		if ((dfBufM > 0.0) && (DistanceToPolygonBoundaryMeters(dfLon, dfLat, stZone.vtCoords) <= dfBufM))
+			return &stZone;
+	}
+	return nullptr;
+}
+
+/**
+ * @brief 일반도로(ROAD_KIND=0, NODE_STEP) 구역 조회 — 매칭 링크 ID로 역인덱스 O(1) 조회 (2026-08-14 최정우 추가)
+ * @param[in] qwLinkID 매칭 링크 ID
+ * @return 그 링크가 속한 일반도로 구역(없으면 nullptr)
+*/
+PZONE_INFO CChargeDataLoader::GetNodeStepZoneByLinkId(const uint64 qwLinkID)
+{
+	// m_cZoneCacheMutex 는 CMutex(재귀 락) — 아래 GetZoneByRoadId() 가 같은 락을 다시 잡아도
+	// 같은 스레드면 데드락 없음 (2026-08-14 최정우 추가)
+	lock_guard<CMutex> cLock(m_cZoneCacheMutex);
+	unordered_map<uint64, string>::iterator itLink = m_mapNodeStepLinkToRoadId.find(qwLinkID);
+	if (itLink == m_mapNodeStepLinkToRoadId.end())
+		return nullptr;
+
+	return GetZoneByRoadId(itLink->second);
+}
+
+/**
+ * @brief 면제도로(ROAD_KIND=5) 구역 조회 — 매칭 링크 ID로 역인덱스 O(1) 조회 (2026-08-14 최정우 부활)
+ * @param[in] qwLinkID 매칭 링크 ID
+ * @return 그 링크가 속한 면제도로 구역(없으면 nullptr)
+*/
+PZONE_INFO CChargeDataLoader::GetExemptZoneByLinkId(const uint64 qwLinkID)
+{
+	// m_cZoneCacheMutex 는 CMutex(재귀 락) — 아래 GetZoneByRoadId() 가 같은 락을 다시 잡아도
+	// 같은 스레드면 데드락 없음
+	lock_guard<CMutex> cLock(m_cZoneCacheMutex);
+	unordered_map<uint64, string>::iterator itLink = m_mapExemptLinkToRoadId.find(qwLinkID);
+	if (itLink == m_mapExemptLinkToRoadId.end())
+		return nullptr;
+
+	return GetZoneByRoadId(itLink->second);
 }

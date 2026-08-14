@@ -6,6 +6,7 @@
 #include "Util.h"
 #include <string.h>
 #include <stdlib.h>
+#include <algorithm>
 #include <libpq-fe.h>
 
 /**
@@ -250,6 +251,22 @@ bool CRawLogFetcher::FetchAndDispatch()
 	if (vtRawLogInfos.empty())
 		return false;
 
+	// GroupByTripId 는 device_key/trip_id/gps_dt/gps_seq 순 정렬을 전제로 인접 구간만 묶는데,
+	//   [rawgps_select]의 ORDER BY는 LIMIT 대상을 고르는 내부 서브쿼리에만 있어 바깥 UPDATE...
+	//   RETURNING 출력 순서까지 보장하지 않음(PostgreSQL 실행계획이 서브쿼리 정렬을 그대로 안 지킬
+	//   수 있음) — 여기서 직접 재정렬해 그 가정을 코드로 보장(2026-08-14 최정우 수정 — "소스상 문제"
+	//   검토 중 발견)
+	std::stable_sort(vtRawLogInfos.begin(), vtRawLogInfos.end(),
+		[](const sRawLogInfo& stLeft, const sRawLogInfo& stRight) -> bool
+		{
+			int nDeviceCmp = strcmp(stLeft.szDeviceKey, stRight.szDeviceKey);
+			if (nDeviceCmp != 0) return nDeviceCmp < 0;
+			int nTripCmp = strcmp(stLeft.szTripID, stRight.szTripID);
+			if (nTripCmp != 0) return nTripCmp < 0;
+			if (stLeft.dtGPS != stRight.dtGPS) return stLeft.dtGPS < stRight.dtGPS;
+			return stLeft.dwSeqNo < stRight.dwSeqNo;
+		});
+
 	vector<RAW_LOG_BATCH> vtBatches;
 	// 동일 trip_id 연속 구간을 batch 로 묶음 (2026-07-08 최정우 주석 추가)
 	GroupByTripId(vtRawLogInfos, &vtBatches);
@@ -347,13 +364,21 @@ bool CRawLogFetcher::ReserveFetchBatch(PGconn *pcConn, vector<sRawLogInfo> *pvtR
 				vtFailTripId.data(), vtFailGpsSeq.data(),
 				vtFailTripId.size()))
 		{
-			LOGFMTE("raw log fetcher: parse-fail release failed!count=[%d]",
+			// release 실패해도 이미 파싱 성공한 나머지 행(pvtRawLogInfos)까지 통째로 버리면 안 됨 —
+			//   여기서 false 를 반환하면 호출측(FetchAndDispatch)이 이미 정상 파싱된 행까지 전부
+			//   디스패치 안 하고 버려서, PROCESSING 예약만 된 채 다음 재시작(RunRecover)까지 고아로
+			//   남는 범위가 "파싱 실패한 몇 건"에서 "이번 배치 전체"로 커지는 문제였음(2026-08-14
+			//   최정우 수정 — "소스상 문제" 검토 중 발견). 실패한 소수 행만 PK 미확보 케이스(바로
+			//   위 분기)와 동일하게 고아로 남기고, 나머지는 정상 진행
+			LOGFMTE("raw log fetcher: parse-fail release failed!count=[%d] (PROCESSING orphan until "
+				"recover, parsed rows still dispatched)",
 				static_cast<int>(vtFailTripId.size()));
-			return false;
 		}
-
-		LOGFMTW("raw log fetcher: parse-fail released!PROCESSING→PENDING count=[%d]",
-			static_cast<int>(vtFailTripId.size()));
+		else
+		{
+			LOGFMTW("raw log fetcher: parse-fail released!PROCESSING→PENDING count=[%d]",
+				static_cast<int>(vtFailTripId.size()));
+		}
 	}
 
 	return true;

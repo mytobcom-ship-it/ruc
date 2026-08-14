@@ -61,7 +61,19 @@ void CThreadPoolWorker::stop(int nThreadId, void *context)
 
 	m_bStopped = true;
 	for (int i=0; i<pcThreadPool->m_nMaxThreads; ++i)
+	{
+		// 반드시 해당 워커의 뮤텍스를 잡은 채로 브로드캐스트할 것 — run()의 대기 루프는 predicate
+		// 검사(Count()==0 && !m_bStopped)와 wait() 호출을 같은 뮤텍스로 묶어서 하는데, 여기서 락
+		// 없이 브로드캐스트하면 "predicate 검사 통과 후 wait() 호출 직전"의 틈에 신호가 지나가버릴
+		// 수 있음 — 그 신호는 대기 등록된 스레드가 없어 유실되고, 뒤늦게 불린 wait()는 더 이상 올
+		// 신호가 없어 영영 안 깨어남(missed-wakeup, 셧다운 hang). 뮤텍스를 잡고 브로드캐스트하면
+		// worker 는 그 순간 반드시 락 밖(진입 전이거나 wait() 안에서 대기 등록된 상태)에 있으므로
+		// 신호를 놓치지 않거나, 다음 predicate 재검사에서 m_bStopped=true 를 직접 관측함
+		// (2026-08-14 최정우 수정 — "소스상 문제" 검토 중 발견)
+		pcThreadPool->m_paMutex[i].lock();
 		pcThreadPool->m_paCondition[i].broadcast();
+		pcThreadPool->m_paMutex[i].unlock();
+	}
 }
 
 /**

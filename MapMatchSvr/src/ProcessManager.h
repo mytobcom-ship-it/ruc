@@ -122,7 +122,6 @@ public:
 		const uint8& nCoordinateType, const sint16& nRadius, const uint32& dwMaxDistance,
 		const double& dfRadiusScale, const sint16& nRadiusMin, const sint16& nRadiusMax,
 		const ALTITUDE_SCORE_CONFIG& stAltitudeConfig);
-	bool StartProcess(const char *pszStartDate, const char *pszDriveID, const char *pszOperID);
 	bool ProcessRawLog(const sRawLogInfo& stRawLogInfo, uint64& qwInOutLinkID,
 		MATCH_LINK_INFO *pstMatchLinkInfo, const ALT_MATCH_CTX *pstAltCtx = nullptr);
 	// 반경 밖 최근접 세그먼트 탐색(진단용) — INTERSECT_LEN(GPS↔세그먼트 교차점 거리) 확보

@@ -349,10 +349,21 @@ void CVehicle::Tick(const char *pszGpsDt, vector<GPS_SAMPLE>& vtOut)
 	else
 		++m_qwGpsSeq;
 
+	// 서행/정차 시 GPS 노이즈 확대 — 저속일수록 스마트폰 GPS 멀티패스 영향이 커지는 현실 반영
+	//   (2026-08-13 최정우 추가, 사용자 지시) — DRIVE_STATUS 판정에도 재사용
+	double dfSpeedKmhNow = m_dfSpeedMps * 3.6;
+	double dfNoiseSigmaM = m_stConfig.dfNoiseSigmaM;
+	double dfNoiseMaxM = m_stConfig.dfNoiseMaxM;
+	if (dfSpeedKmhNow < m_stConfig.dfNoiseSlowKmh)
+	{
+		dfNoiseSigmaM *= m_stConfig.dfNoiseSlowMult;
+		dfNoiseMaxM *= m_stConfig.dfNoiseSlowMult;
+	}
+
 	// 도로 이탈 노이즈 (정규분포 거리 + 임의 방향) — 현실적 GPS 수준(대부분 ≤10m) (2026-07-16 최정우 수정)
-	normal_distribution<double> distNoise(0.0, m_stConfig.dfNoiseSigmaM);
+	normal_distribution<double> distNoise(0.0, dfNoiseSigmaM);
 	double dfOffset = fabs(distNoise(m_rng));
-	if (dfOffset > m_stConfig.dfNoiseMaxM) dfOffset = m_stConfig.dfNoiseMaxM;
+	if (dfOffset > dfNoiseMaxM) dfOffset = dfNoiseMaxM;
 
 	// 예외: 낮은 확률로 큰 튀는 좌표(멀티패스·도심협곡·순간이상) 주입 → 예외처리(SKIP 등) 검증 (2026-07-16 최정우 추가)
 	if (dist01(m_rng) < m_stConfig.dfOutlierProb)
@@ -384,10 +395,17 @@ void CVehicle::Tick(const char *pszGpsDt, vector<GPS_SAMPLE>& vtOut)
 	stSample.strTripId = m_strTripId;				// (2026-07-10 최정우 추가) 운행 trip_id 부여
 	stSample.uqGpsSeq = m_qwGpsSeq;					// (2026-07-10 최정우 추가) 운행 내 GPS 순번
 	stSample.nTripEvent = nEvent;
-	stSample.nDriveStatus = (m_dfSpeedMps < 0.5) ? SIM_DRIVE_STATUS_IDLE : SIM_DRIVE_STATUS_ON_ROAD;
+	// DRIVE_STATUS 3단계 — onroad_kmh 이상=ON_ROAD, park_kmh 미만=PARKED, 그 사이=IDLE(서행)
+	//   (2026-08-13 최정우 수정 — 기존엔 0.5m/s 미만만 IDLE, 나머지 전부 ON_ROAD인 2단계였음)
+	if (dfSpeedKmhNow >= m_stConfig.dfOnRoadKmh)
+		stSample.nDriveStatus = SIM_DRIVE_STATUS_ON_ROAD;
+	else if (dfSpeedKmhNow < m_stConfig.dfParkKmh)
+		stSample.nDriveStatus = SIM_DRIVE_STATUS_PARKED;
+	else
+		stSample.nDriveStatus = SIM_DRIVE_STATUS_IDLE;
 	stSample.dfLat = stNoisy.lat;
 	stSample.dfLon = stNoisy.lon;
-	stSample.dfSpeedKmh = m_dfSpeedMps * 3.6;
+	stSample.dfSpeedKmh = dfSpeedKmhNow;
 	stSample.dfHeading = m_dfLastHeading;
 	stSample.dfAltitude = m_dfAltitude + m_dfAltRoadOffset + distAlt(m_rng);		// (2026-07-20 최정우 수정) ROAD_TYPE 오프셋 반영
 	stSample.dfAccuracy = dfAcc;

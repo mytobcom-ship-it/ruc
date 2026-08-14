@@ -63,11 +63,21 @@ typedef struct sConfig
 	double		dfOutlierProb;		// 튀는 좌표 발생 확률 (0~1)
 	double		dfOutlierMinM;		// 튀는 좌표 최소 오프셋 (m)
 	double		dfOutlierMaxM;		// 튀는 좌표 최대 오프셋 (m)
+	// 서행/정차 시 GPS 노이즈 확대 — 실제로 저속·정지 상태에서 스마트폰 GPS 멀티패스 영향이
+	//   커지는 현상 반영(2026-08-13 최정우 추가, 사용자 지시)
+	double		dfNoiseSlowKmh;		// 이 속도(km/h) 미만일 때 노이즈 확대 적용
+	double		dfNoiseSlowMult;	// sigma_m·max_m 에 곱할 배율
 
 	// [speed] 속도 모델
 	double		dfSpeedFactorMin;	// 제한속도 대비 최소 비율
 	double		dfSpeedFactorMax;	// 제한속도 대비 최대 비율
 	double		dfDefaultMaxSpd;	// 제한속도 없을 때 기본값 (km/h)
+
+	// [status] DRIVE_STATUS 속도 구간 — 0(ON_ROAD)/1(IDLE=서행)/2(PARKED=주차) 3단계
+	//   (2026-08-13 최정우 추가, 사용자 지시 — 기존엔 0.5m/s 미만만 IDLE, 나머지 전부 ON_ROAD인
+	//   2단계였음). PARKED(정지 근접)가 IDLE(서행)보다 낮은 속도 구간
+	double		dfOnRoadKmh;		// 이 속도(km/h) 이상이면 DRIVE_STATUS=0(ON_ROAD)
+	double		dfParkKmh;			// 이 속도(km/h) 미만이면 DRIVE_STATUS=2(PARKED), 그 사이는 1(IDLE)
 
 	// [deadzone] GPS 음영구간(터널·지하차도) — 신호 두절 시뮬레이션 (2026-07-21 최정우 추가)
 	double		dfDeadZoneProb;		// 터널(002)·지하(004) 구간 tick 당 표본 미생성(신호 두절) 확률 (0~1)
@@ -81,7 +91,9 @@ typedef struct sConfig
 		nRouteMinM(2000), nRouteMaxLinks(20), nSeedCandidates(20),
 		dfNoiseSigmaM(4.0), dfNoiseMaxM(20.0),
 		dfOutlierProb(0.03), dfOutlierMinM(25.0), dfOutlierMaxM(80.0),
+		dfNoiseSlowKmh(20.0), dfNoiseSlowMult(2.5),
 		dfSpeedFactorMin(0.5), dfSpeedFactorMax(1.0), dfDefaultMaxSpd(50.0),
+		dfOnRoadKmh(30.0), dfParkKmh(10.0),
 		dfDeadZoneProb(0.9)
 	{}
 } SIM_CONFIG, *PSIM_CONFIG;

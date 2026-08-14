@@ -10,12 +10,12 @@
 --   1) rawgps_select      : PENDING 예약(Reserve) + RETURNING
 --   2) rawgps_update      : 맵매칭 결과 일괄 갱신 (MATCHED/SKIP/ERROR)
 --   3) gate_select         : BASE_TOLLGATE 전량 조회 — CChargeDataLoader 기동 시(또는 주기 재조회 시)
---                           1회 실행, 결과를 인메모리 캐시. 아직 CChargeDataLoader 배선 전(2026-08-12 최정우 추가)
+--                           1회 실행, 결과를 인메모리 캐시 (2026-08-12 최정우 추가)
 --   4) zone_select         : BASE_ROADLINK 전량 조회 — CChargeDataLoader::LoadZones() 가 gate_select 와
 --                           동일 주기로 실행, 결과를 인메모리 캐시(road_id 키) (2026-08-12 최정우 추가)
---   5) charge_insert      : 개방형(OPEN_ROAD) 게이트 통과 bulk INSERT — CRawLogWorker::BulkInsertCharges()
---                           가 배치 종료 시(rawgps_update 성공 후) 실행. 폐쇄형/구간단속/주정차는 미구현
---                           (2026-08-12 최정우 수정 — 개방형 한정 구현)
+--   5) charge_insert      : 개방형·폐쇄형·구간단속·주정차 4유형 공용 bulk INSERT —
+--                           CRawLogWorker::BulkInsertCharges() 가 배치 종료 시(rawgps_update 성공 후) 실행
+--                           (2026-08-13 최정우 수정 — 주정차 구현으로 4유형 전부 완료)
 --
 -- DRIVE_STATUS=4 : 맵매칭·결과 저장은 0/2/3 과 동일, 과금 판별·CHARGE_TARGET 적재만 생략 (2026-07-10 최정우 수정)
 --
@@ -35,7 +35,10 @@ WHERE
 
 -- ── 1. 조회 + 예약(Reserve) ────────────────────────────────────────────────
 -- [rawgps_select] PENDING(0) → PROCESSING(2) 예약, RETURNING 으로 행 반환
--- 제외: DRIVE_STATUS=1(IDLE), RAW_VLD<>TRUE. 4(OFF_ROAD)는 맵매칭 대상 포함 (2026-07-10 최정우 수정)
+-- 제외: RAW_VLD<>TRUE 뿐. DRIVE_STATUS 는 0(ON_ROAD)/1(IDLE)/2(PARKED)/3(TUNNELING)/4(OFF_ROAD)
+--   전부 맵매칭 대상(2026-08-13 최정우 수정 — 이전엔 DRIVE_STATUS=1(IDLE) 만 제외했었음. 서행
+--   구간(IDLE)이 맵매칭·주정차 판정에서 통째로 안 보이는 문제가 있어 사용자 지시로 제외 조건
+--   삭제 — "모든 맵 매칭 시 DRIVE_STATUS 에서 0/1/2 는 포함되어야 한다")
 -- $1 = LIMIT
 [rawgps_select]
 UPDATE RUC.PRIM_RAWGPS AS U
@@ -45,7 +48,6 @@ FROM (
 	SELECT TRIP_ID, GPS_SEQ
 	FROM RUC.PRIM_RAWGPS
 	WHERE MATCH_STATUS = 0
-	  AND DRIVE_STATUS <> 1
 	  AND RAW_VLD IS TRUE
 	ORDER BY DEVICE_KEY ASC, TRIP_ID ASC, GPS_DT ASC, GPS_SEQ ASC
 	LIMIT $1
@@ -195,9 +197,10 @@ FROM RUC.BASE_ROADLINK
 WHERE USE_YN = 'Y'
 ORDER BY ROAD_ID ASC;
 
--- ── 5. 개방형 게이트 통과 bulk INSERT ─────────────────────────────────────
+-- ── 5. 과금 판정 결과 bulk INSERT ─────────────────────────────────────
 -- [charge_insert] PRIM_CHARGEHAND — CRawLogWorker::BulkInsertCharges() 가 실행 (2026-08-12 최정우 추가)
--- 개방형(OPEN_ROAD)·폐쇄형(CLOSED_ROAD) 공용 — 폐쇄형은 DIST_M/ENTRY_TOLLGATE_ID/EXIT_TOLLGATE_ID 도 채움 (2026-08-12 최정우 수정)
+-- 개방형·폐쇄형·구간단속·주정차 4유형 공용 — 폐쇄형은 DIST_M/ENTRY_TOLLGATE_ID/EXIT_TOLLGATE_ID 도 채움,
+-- 주정차는 DIST_M(누적거리)/SPEED_KMH(평균속도) 채우고 CHARGE_YN='Y'/CHARGE_STATUS='0' 고정 (2026-08-13 최정우 수정)
 -- 파라미터 순서(RawLogWorker.cpp CHARGE_INSERT_ROW/BulkInsertCharges() 와 반드시 일치):
 --   $1=TRIP_ID[] $2=DEVICE_KEY[] $3=TRIP_SEQ[] $4=CHARGE_TYPE[](1=OPEN_ROAD/2=CLOSED_ROAD) $5=CHARGE_UNIT[](0=NODE/1=LINK,실측 확인)
 --   $6=LINK_ID[](실측상 항상 빈값) $7=FROM_ID[] $8=TO_ID[] $9=FROM_LAT[] $10=FROM_LON[]
@@ -205,13 +208,16 @@ ORDER BY ROAD_ID ASC;
 --   $17=SPEED_LIMIT_KMH[] $18=OCCUR_DT[] $19=TRIP_START_DT[] $20=TOLLGATE_ID[](실측상 항상 빈값)
 --   $21=ENTRY_TOLLGATE_ID[](폐쇄형 전용, 개방형은 빈값) $22=EXIT_TOLLGATE_ID[](폐쇄형 전용) $23=REG_DT[] $24=UPD_DT[](REG_DT와 항상 동일)
 --   $25=CHARGE_YN[](빈값=DB기본 Y, 폐쇄형 입/출구 게이트 이상 시 "N") $26=CHARGE_STATUS[](빈값=DB기본 0, 이상 시 "4"=SKIP)
+--   $27=STAY_SECONDS[](주정차 전용 — 체류시간 초. 컬럼 코멘트: "체류 시간(초). 주정차 위반 판단". 다른 3종은 빈값=DB기본 0) (2026-08-13 최정우 추가)
+--   $28=TRIP_END_DT[](주정차 TTL 만료 강제마감 전용 — 더 이상 GPS 수신 불가로 판단한 시각. 그 외는
+--     빈값=NULL 유지, 실제 TRIP_EVENT=2 수신 시 [trip_end] UPDATE 가 별도로 채움) (2026-08-13 최정우 추가)
 -- ON CONFLICT: 배치 release 후 재시도되는 케이스의 중복 INSERT 방어(정상 흐름에서는 trip_seq 가 매번 새 값)
 [charge_insert]
 INSERT INTO RUC.PRIM_CHARGEHAND (
 	TRIP_ID, DEVICE_KEY, TRIP_SEQ, CHARGE_TYPE, CHARGE_UNIT, LINK_ID, FROM_ID, TO_ID,
 	FROM_LAT, FROM_LON, TO_LAT, TO_LON, ZONE_ID, ZONE_NAME, DIST_M, SPEED_KMH, SPEED_LIMIT_KMH,
 	OCCUR_DT, TRIP_START_DT, TOLLGATE_ID, ENTRY_TOLLGATE_ID, EXIT_TOLLGATE_ID, REG_DT, UPD_DT,
-	CHARGE_YN, CHARGE_STATUS
+	CHARGE_YN, CHARGE_STATUS, STAY_SECONDS, TRIP_END_DT
 )
 SELECT
 	U.TRIP_ID,
@@ -239,17 +245,19 @@ SELECT
 	U.REG_DT,
 	U.UPD_DT,
 	CASE WHEN U.CHARGE_YN <> '' THEN U.CHARGE_YN ELSE 'Y' END,
-	CASE WHEN U.CHARGE_STATUS <> '' THEN U.CHARGE_STATUS::SMALLINT ELSE 0 END
+	CASE WHEN U.CHARGE_STATUS <> '' THEN U.CHARGE_STATUS::SMALLINT ELSE 0 END,
+	CASE WHEN U.STAY_SECONDS <> '' THEN U.STAY_SECONDS::INTEGER ELSE 0 END,
+	NULLIF(U.TRIP_END_DT, '')
 FROM UNNEST(
 	$1::TEXT[], $2::TEXT[], $3::TEXT[], $4::TEXT[], $5::TEXT[], $6::TEXT[], $7::TEXT[],
 	$8::TEXT[], $9::TEXT[], $10::TEXT[], $11::TEXT[], $12::TEXT[], $13::TEXT[], $14::TEXT[],
 	$15::TEXT[], $16::TEXT[], $17::TEXT[], $18::TEXT[], $19::TEXT[], $20::TEXT[], $21::TEXT[],
-	$22::TEXT[], $23::TEXT[], $24::TEXT[], $25::TEXT[], $26::TEXT[]
+	$22::TEXT[], $23::TEXT[], $24::TEXT[], $25::TEXT[], $26::TEXT[], $27::TEXT[], $28::TEXT[]
 ) AS U(
 	TRIP_ID, DEVICE_KEY, TRIP_SEQ, CHARGE_TYPE, CHARGE_UNIT, LINK_ID, FROM_ID, TO_ID,
 	FROM_LAT, FROM_LON, TO_LAT, TO_LON, ZONE_ID, ZONE_NAME, DIST_M, SPEED_KMH, SPEED_LIMIT_KMH,
 	OCCUR_DT, TRIP_START_DT, TOLLGATE_ID, ENTRY_TOLLGATE_ID, EXIT_TOLLGATE_ID, REG_DT, UPD_DT,
-	CHARGE_YN, CHARGE_STATUS
+	CHARGE_YN, CHARGE_STATUS, STAY_SECONDS, TRIP_END_DT
 )
 ON CONFLICT (trip_id, device_key, trip_seq) DO NOTHING;
 
@@ -267,3 +275,31 @@ FROM UNNEST(
 	$1::TEXT[], $2::TEXT[], $3::TEXT[]
 ) AS V(TRIP_ID, TRIP_END_DT, UPD_DT)
 WHERE T.TRIP_ID = V.TRIP_ID;
+
+-- ── 7. 세션 TTL 만료(비정상 종료) 시 미확정 레코드 마감(5유형 공용) ─────────
+-- [trip_abnormal_end] CRawLogWorker::UpdateAbnormalTripEnd() 가 ExpireTtlSessions() 안에서
+-- 실행(2026-08-13 최정우 추가, 2026-08-13 수정 — CHARGE_TYPE 제한 제거해 4유형 전부로 확대).
+-- "그 trip_id로 마지막 GPS 이후 TTL 넘게 신호가 없었는데(=트립이 정상 종료됐는지 끝내 확인 못함)
+-- 이미 INSERT된 레코드가 아직 TRIP_END_DT 를 못 받은 상태"를 charge_type 무관하게 "확정 데이터
+-- 아님"으로 표시(사용자 지시, 2026-08-13). CHARGE_STATUS=3(AUDIT=심사대상) — 완전 배제(SKIP=4)가
+-- 아니라 사람이 재확인하도록 표시(사용자 지시, 2026-08-13 — 원래 4였다가 3으로 정정).
+-- 2026-08-14 최정우 수정 — CHARGE_TYPE=5(면제도로)는 예외: 애초에 과금 대상이 아니라 재확인이
+-- 필요없다는 설계 의도로 CHARGE_STATUS=4(SKIP) 고정이 맞음(사용자 확인) — 이 UPDATE가 무조건
+-- 3으로 덮어쓰면 그 의도가 깨지므로, 면제도로만 4를 유지하도록 분기.
+-- TRIP_END_DT IS NULL 조건으로 이미 [trip_end] 로 정상 마감된 레코드는 건드리지 않음. 주정차의
+-- "지금 막 열려있는 세션"은 이 UPDATE 가 아니라 AppendExpiredParkingCharge() 가 별도로 처음부터
+-- N/3 로 INSERT하므로(이미 TRIP_END_DT 채워진 채로 들어감) 이 UPDATE 와 안 겹침 — 주정차 중
+-- "이전에 이미 정상 종료(Y/0)됐지만 그 트립 자체가 아직 안 끝난" 레코드만 이 UPDATE 대상이 됨
+-- (다른 유형과 동일 취급).
+-- $1=TRIP_ID[] $2=TRIP_END_DT[] $3=UPD_DT[]
+[trip_abnormal_end]
+UPDATE RUC.PRIM_CHARGEHAND AS T
+SET
+	TRIP_END_DT = V.TRIP_END_DT,
+	CHARGE_YN = 'N',
+	CHARGE_STATUS = CASE WHEN T.CHARGE_TYPE = 5 THEN 4 ELSE 3 END,
+	UPD_DT = V.UPD_DT
+FROM UNNEST(
+	$1::TEXT[], $2::TEXT[], $3::TEXT[]
+) AS V(TRIP_ID, TRIP_END_DT, UPD_DT)
+WHERE T.TRIP_ID = V.TRIP_ID AND T.TRIP_END_DT IS NULL;

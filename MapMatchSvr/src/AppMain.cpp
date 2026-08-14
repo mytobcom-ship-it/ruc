@@ -173,10 +173,28 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileStr("sql", "zone_select", "", pstConfig->strZoneSelectSession);
 	// [sql] trip_end (선택, 비어 있으면 trip_end_dt UPDATE 비활성) (2026-08-12 최정우 추가)
 	cIniReader.GetProfileStr("sql", "trip_end", "", pstConfig->strTripEndUpdateSession);
+	// [sql] abnormal_trip_end (선택, 비어 있으면 비활성) (2026-08-13 최정우 추가)
+	cIniReader.GetProfileStr("sql", "abnormal_trip_end", "", pstConfig->strAbnormalTripEndSession);
 	// [charge] gate_reload (단위: sec, 0=재조회 없음) (2026-08-12 최정우 추가)
 	cIniReader.GetProfileInt("charge", "gate_reload", CFG_DEF_GATE_RELOAD, pstConfig->nGateReloadSec);
 	if (pstConfig->nGateReloadSec < 0)
 		pstConfig->nGateReloadSec = CFG_DEF_GATE_RELOAD;
+	// [charge] park_buf (단위: m) — 구역판정 버퍼 상한(ACCURACY_M 캡) (2026-08-13 최정우 추가)
+	cIniReader.GetProfileInt("charge", "park_buf", CFG_DEF_PARK_BUF, pstConfig->nParkBuf);
+	if (pstConfig->nParkBuf < 0)
+		pstConfig->nParkBuf = CFG_DEF_PARK_BUF;
+	// [charge] park_exitcnt — 구역 이탈 확정 연속 GPS 건수(디바운스) (2026-08-13 최정우 추가)
+	cIniReader.GetProfileInt("charge", "park_exitcnt", CFG_DEF_PARK_EXITCNT, pstConfig->nParkExitCnt);
+	if (pstConfig->nParkExitCnt < 1)
+		pstConfig->nParkExitCnt = CFG_DEF_PARK_EXITCNT;
+	// [charge] park_regrace (단위: sec) — 재진입 유예시간 (2026-08-14 최정우 추가)
+	cIniReader.GetProfileInt("charge", "park_regrace", CFG_DEF_PARK_REGRACE, pstConfig->nParkRegraceSec);
+	if (pstConfig->nParkRegraceSec < 0)
+		pstConfig->nParkRegraceSec = CFG_DEF_PARK_REGRACE;
+	// [charge] exempt_regrace (단위: sec) — 재진입 유예시간 (2026-08-14 최정우 추가)
+	cIniReader.GetProfileInt("charge", "exempt_regrace", CFG_DEF_EXEMPT_REGRACE, pstConfig->nExemptRegraceSec);
+	if (pstConfig->nExemptRegraceSec < 0)
+		pstConfig->nExemptRegraceSec = CFG_DEF_EXEMPT_REGRACE;
 
 	// [feeder] (2026-07-11 최정우 주석 추가)
 	// [feeder] limit (단위: 건수) (2026-07-11 최정우 주석 추가)

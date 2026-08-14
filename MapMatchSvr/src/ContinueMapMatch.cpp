@@ -52,8 +52,9 @@ bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPU
 		return false;
 	}
 
-	// 검색된 목록 저장 (중복 검사 처리용)
-	set<uint32> setSearchHistoryLinkList;
+	// 검색된 목록 저장 (중복 검사 처리용) — 링크 ID는 uint64(2026-08-14 최정우 수정, set<uint32>였던
+	//   걸 원복 — "소스상 문제" 검토 중 발견, BeginMapMatch 의 동일 목적 집합은 원래부터 set<uint64>)
+	set<uint64> setSearchHistoryLinkList;
 
 	// 연결 링크 목록
 	listDepthLinkInfo listDepthLinkInfoList;
@@ -391,7 +392,7 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
  * @param[out] plistDepthLinkInfoList 연결 링크 UID 정보
  * @return true(성공), false(실패)
 */
-bool CContinueMapMatch::GetLinkDepthInfo(set<uint32> *psetSearchHistoryLinkList, listDepthLinkInfo *plistDepthLinkInfoList)
+bool CContinueMapMatch::GetLinkDepthInfo(set<uint64> *psetSearchHistoryLinkList, listDepthLinkInfo *plistDepthLinkInfoList)
 {
 	// 형상 데이터 로더 유효성·로드 상태 확인 (2026-07-08 최정우 주석 추가)
 	if ((m_pcDataLoader == nullptr) || (!m_pcDataLoader->IsLoad()))
@@ -420,7 +421,7 @@ bool CContinueMapMatch::GetLinkDepthInfo(set<uint32> *psetSearchHistoryLinkList,
 			if (!pstTurnInfo) continue;
 
 			// 이미 검사한 링크 ID 이면 제외
-			set<uint32>::iterator history_it = psetSearchHistoryLinkList->find(pstTurnInfo->qwOutLinkID);
+			set<uint64>::iterator history_it = psetSearchHistoryLinkList->find(pstTurnInfo->qwOutLinkID);
 			if (history_it != psetSearchHistoryLinkList->end())
 				continue;
 
@@ -428,13 +429,12 @@ bool CContinueMapMatch::GetLinkDepthInfo(set<uint32> *psetSearchHistoryLinkList,
 			PLINK_INFO pstLinkInfo = m_pcDataLoader->GetLinkInfo(pstTurnInfo->qwOutLinkID);
 			if (!pstLinkInfo) continue;
 
-			// 회전 정보가 없으면
-			if ((pstLinkInfo->dwTurnOffset == 0) && (pstLinkInfo->nTurnCount == 0))
-			{
-				psetSearchHistoryLinkList->insert(pstTurnInfo->qwOutLinkID);
-				continue;
-			}
-
+			// 회전 정보가 없는(막다른) 링크도 반드시 이번 depth 후보 목록에 넣어야 함 — 아래
+			//   push_back 안 하고 여기서 continue 해버리면 주차장 진입로·막힌 골목 같은 막다른
+			//   링크는 실제로 그 위에 있어도 LinkSgmtMapMatch 스코어링 대상에서 영원히 빠져
+			//   맵매칭이 안 됨(2026-08-14 최정우 수정 — "소스상 문제" 검토 중 발견). dwTurnOffset/
+			//   nTurnCount 가 0이면 아래에서 dwStartTurnOffset==dwEndTurnOffset 이 되어 다음 depth
+			//   확장은 자연히 안 일어나므로(line 414의 for 루프가 빈 범위) 별도 분기 불필요
 			stDepthLinkInfoData.qwLinkID = pstTurnInfo->qwOutLinkID;
 			stDepthLinkInfoData.dwStartTurnOffset = pstLinkInfo->dwTurnOffset;
 			stDepthLinkInfoData.dwEndTurnOffset = stDepthLinkInfoData.dwStartTurnOffset + pstLinkInfo->nTurnCount;

@@ -73,7 +73,7 @@ bool CPostgrePool::InitializePool(string strUserID, string strPassword, string s
 		}
 	}
 
-	if (pthread_create(&m_hThread, nullptr, KeepAliveThread, reinterpret_cast<void *>(this)) < 0)
+	if (pthread_create(&m_hThread, nullptr, KeepAliveThread, reinterpret_cast<void *>(this)) != 0)
 	{
 		UninitializePool();
 		return false;
@@ -93,11 +93,15 @@ void CPostgrePool::UninitializePool()
 
 	if (m_bIsValid)
 	{
-		m_cMutex.lock();
+		// m_cMutex 를 잡은 채로 cancel+join 하지 말 것 — keepPoolAlive() 는 sleep() 뒤 매 주기
+		// m_cMutex.lock() 을 다시 시도하는데(pthread_mutex_lock 은 취소 지점이 아님), 여기서 락을
+		// 쥔 채 pthread_join() 으로 대기하면 상대 스레드가 락을 못 잡아 취소 지점(sleep)에 영영
+		// 도달 못하고, 우리도 join 에서 영영 못 빠져나오는 데드락이 됨(2026-08-14 최정우 수정 —
+		// "소스상 문제" 검토 중 발견). cancel+join 구간은 m_dqQueue 등 공유 상태를 안 건드리므로
+		// 락 없이도 안전
 		pthread_cancel(m_hThread);
-		if (pthread_join(m_hThread, nullptr) < 0)
+		if (pthread_join(m_hThread, nullptr) != 0)
 			LOGFMTE("Can not join pthread for PostgreSQL Connection Pool!");
-		m_cMutex.unlock();
 	}
 
 	while (left > 0)

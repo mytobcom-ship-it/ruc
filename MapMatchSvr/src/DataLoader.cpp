@@ -91,7 +91,19 @@ bool CDataLoader::SetDataUpdate()
 		LOGFMTE("head memory allocate failed!");
 		return false;
 	}
-	fread(m_pstDataFileHead, 1, DATA_FILE_HEAD_SIZE, fp);
+	// fread 반환값(실제 읽은 바이트 수)을 반드시 확인할 것 — 확인 안 하면 파일이 잘렸거나 디스크
+	//   오류로 읽기가 짧게 끝나도 아무 로그·실패 없이 남은 버퍼가 초기화 안 된 값(new(nothrow)라
+	//   생성자 없는 POD 타입은 쓰레기값)인 채로 그대로 쓰임(2026-08-14 최정우 수정 — "소스상 문제"
+	//   검토 중 발견)
+	if (fread(m_pstDataFileHead, 1, DATA_FILE_HEAD_SIZE, fp) != DATA_FILE_HEAD_SIZE)
+	{
+		if (fp != nullptr) fclose(fp);
+		fp = nullptr;
+		if (m_pstDataFileHead != nullptr) delete m_pstDataFileHead;
+		m_pstDataFileHead = nullptr;
+		LOGFMTE("data file head read failed!short read or file truncated");
+		return false;
+	}
 
 	// 데이터 크기 검증
 	if ((m_pstDataFileHead->dwGridInfoCount * GRID_INFO_SIZE) != m_pstDataFileHead->dwGridInfoSize)
@@ -185,7 +197,15 @@ bool CDataLoader::SetDataUpdate()
 	LOGFMTT("grid info read end!");
 
 	fseek(fp, m_dwGridInfoStartOffset, SEEK_SET);
-	fread(m_pstGridInfoList, 1, m_dwGridInfoSize, fp);
+	if (fread(m_pstGridInfoList, 1, m_dwGridInfoSize, fp) != m_dwGridInfoSize)
+	{
+		if (fp != nullptr) fclose(fp);
+		fp = nullptr;
+		SetDataInit();
+		m_bLoad = false;
+		LOGFMTE("grid info read failed!short read or file truncated");
+		return false;
+	}
 
 	// 그리드별 세그먼트 정보 로딩 메모리
 	LOGFMTT("grid segment info read start!");
@@ -200,7 +220,15 @@ bool CDataLoader::SetDataUpdate()
 		return false;
 	}
 	fseek(fp, m_dwGridSgmtInfoStartOffset, SEEK_SET);
-	fread(m_pstGridSgmtInfoList, 1, m_dwGridSgmtInfoSize, fp);
+	if (fread(m_pstGridSgmtInfoList, 1, m_dwGridSgmtInfoSize, fp) != m_dwGridSgmtInfoSize)
+	{
+		if (fp != nullptr) fclose(fp);
+		fp = nullptr;
+		SetDataInit();
+		m_bLoad = false;
+		LOGFMTE("grid segment info read failed!short read or file truncated");
+		return false;
+	}
 	LOGFMTT("grid segment info read end!");
 
 	// 링크별 세그먼트 정보 로딩 메모리
@@ -216,7 +244,15 @@ bool CDataLoader::SetDataUpdate()
 		return false;
 	}
 	fseek(fp, m_dwLinkSgmtInfoStartOffset, SEEK_SET);
-	fread(m_pstLinkSgmtInfoList, 1, m_dwLinkSgmtInfoSize, fp);
+	if (fread(m_pstLinkSgmtInfoList, 1, m_dwLinkSgmtInfoSize, fp) != m_dwLinkSgmtInfoSize)
+	{
+		if (fp != nullptr) fclose(fp);
+		fp = nullptr;
+		SetDataInit();
+		m_bLoad = false;
+		LOGFMTE("link segment info read failed!short read or file truncated");
+		return false;
+	}
 	LOGFMTT("link segment info read end!");
 
 	// 세그먼트별 링크 정보
@@ -232,7 +268,17 @@ bool CDataLoader::SetDataUpdate()
 		return false;
 	}
 	fseek(fp, m_dwLinkInfoStartOffset, SEEK_SET);
-	fread(pstLinkInfoData, 1, m_dwLinkInfoSize, fp);
+	if (fread(pstLinkInfoData, 1, m_dwLinkInfoSize, fp) != m_dwLinkInfoSize)
+	{
+		if (fp != nullptr) fclose(fp);
+		fp = nullptr;
+		if (pstLinkInfoData != nullptr) delete [] pstLinkInfoData;
+		pstLinkInfoData = nullptr;
+		SetDataInit();
+		m_bLoad = false;
+		LOGFMTE("link data info read failed!short read or file truncated");
+		return false;
+	}
 	LOGFMTT("link data information read end!");
 
 	m_mapLinkInfoList = new (std::nothrow)mapLinkInfo;
@@ -279,7 +325,15 @@ bool CDataLoader::SetDataUpdate()
 		return false;
 	}
 	fseek(fp, m_dwTurnInfoStartOffset, SEEK_SET);
-	fread(m_pstTurnInfoList, 1, m_dwTurnInfoSize, fp);
+	if (fread(m_pstTurnInfoList, 1, m_dwTurnInfoSize, fp) != m_dwTurnInfoSize)
+	{
+		if (fp != nullptr) fclose(fp);
+		fp = nullptr;
+		SetDataInit();
+		m_bLoad = false;
+		LOGFMTE("turn info read failed!short read or file truncated");
+		return false;
+	}
 	LOGFMTT("turn info read end!");
 
 	if (fp != nullptr) fclose(fp);

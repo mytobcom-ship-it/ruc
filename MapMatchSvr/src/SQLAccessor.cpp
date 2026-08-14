@@ -76,9 +76,12 @@ bool CSQLAccessor::Load()
 	}
 	fseek(fp, 0, SEEK_SET);
 
-	while (!feof(fp))
+	// while(!feof()) 는 고전적인 실수 — 마지막 줄을 성공적으로 읽은 시점엔 아직 feof() 가 안 서서
+	//   루프가 한 번 더 돌고, 그 fgets() 는 EOF 에서 실패해 buf 를 안 건드린 채(직전 줄 내용이
+	//   그대로 남음) 다시 처리해버림. fgets() 자체의 반환값(nullptr=더 읽을 게 없음)으로 판정하는
+	//   게 정석(2026-08-14 최정우 수정 — "소스상 문제" 검토 중 발견)
+	while (fgets(buf, sizeof(buf)-1, fp) != nullptr)
 	{
-		fgets(buf, sizeof(buf)-1, fp);
 		read = (int)strlen(buf);
 
 		if (buf[0] == '#') continue;

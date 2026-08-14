@@ -47,10 +47,19 @@ CGISUtil::~CGISUtil()
 */
 const uint32 CGISUtil::GetGridID(double& dfX, double& dfY)
 {
-	uint32 dwRowNo = floor((dfY - WGS84GEO_LAT_MIN) / GRID_CELL_SIZE);
-	uint32 dwColNo = floor((dfX - WGS84GEO_LON_MIN) / GRID_CELL_SIZE);
+	// GetGridColNo/GetGridRowNo(바로 아래)는 범위를 벗어나면 INVALID_GRID_*_NO 를 반환하는데, 이
+	//   함수는 그 방어 없이 바로 곱셈해서 반환하고 있었음 — 그리드 테이블 실제 범위(X_GRID_COUNT×
+	//   GRID_CELL_SIZE)가 WGS84GEO_LON_MAX 보다 좁아서, 그 사이 경도값이 들어오면 dwColNo 가
+	//   X_GRID_COUNT 를 넘겨 엉뚱한 행의 GRID ID 와 충돌(aliasing)함 — 해당 좌표가 속한 그리드가
+	//   아니라 무관한 그리드를 조용히 조회하게 됨. GetGridColNo/GetGridRowNo 를 그대로 재사용해
+	//   범위를 벗어나면 INVALID_GRID_ID 반환(호출측인 BeginMapMatch 는 이미 GetGridInfo() null
+	//   체크로 "그리드 없음"을 정상 처리하므로 안전) (2026-08-14 최정우 수정 — "소스상 문제" 검토 중 발견)
+	sint32 nColNo = GetGridColNo(dfX);
+	sint32 nRowNo = GetGridRowNo(dfY);
+	if ((nColNo == INVALID_GRID_COL_NO) || (nRowNo == INVALID_GRID_ROW_NO))
+		return static_cast<uint32>(INVALID_GRID_ID);
 
-	return (dwRowNo * X_GRID_COUNT) + dwColNo;
+	return (static_cast<uint32>(nRowNo) * X_GRID_COUNT) + static_cast<uint32>(nColNo);
 }
 
 /**

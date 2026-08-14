@@ -80,6 +80,11 @@
       <div class="charge-panel">
         <h2>과금 유형 표시</h2>
         <label class="charge-check">
+          <input type="checkbox" id="chk-node" data-layer="node" />
+          <span class="dot" style="background:#6d4c41;"></span>
+          일반도로 <span class="charge-desc">— base_roadlink(LINE)</span>
+        </label>
+        <label class="charge-check">
           <input type="checkbox" id="chk-open" data-layer="open" />
           <span class="dot" style="background:#3949ab;"></span>
           개방형 <span class="charge-desc">— base_roadlink + base_tollgate(M)</span>
@@ -100,43 +105,46 @@
           주정차단속 <span class="charge-desc">— base_roadlink(POLY)</span>
         </label>
         <label class="charge-check">
-          <input type="checkbox" id="chk-node" data-layer="node" />
-          <span class="dot" style="background:#43a047;"></span>
-          일반도로 <span class="charge-desc">— 전용 구역 없음, 모든 링크가 대상(charge_type=0)</span>
+          <input type="checkbox" id="chk-exempt" data-layer="exempt" />
+          <span class="dot" style="background:#d81b60;"></span>
+          면제도로 <span class="charge-desc">— base_roadlink(LINE)</span>
         </label>
-        <label class="charge-check">
-          <input type="checkbox" id="chk-gps" data-layer="gps" checked />
-          <span class="dot" style="background:#1e88e5; border:2px solid #e53935;"></span>
-          실시간 GPS/매칭 <span class="charge-desc">— Simulator→MapMatchSvr 라이브(5초 갱신)</span>
-        </label>
-        <div id="gps-status" style="font-size:11px; color:var(--muted); margin:2px 0 4px 16px;">로딩 중…</div>
       </div>
 
       <div class="issue-panel">
-        <h2>과금 유형별 이슈·대응방안</h2>
+        <h2>과금 유형별 이슈·대응방안 <span style="font-weight:400;text-transform:none;letter-spacing:normal;">(미해결만 표시)</span></h2>
+
+        <div class="issue-card" style="border-left-color:#6d4c41;">
+          <div class="issue-title" style="color:#6d4c41;">일반도로 <span style="font-weight:400;font-size:11px;color:var(--muted);">CHARGE_TYPE=0</span></div>
+          <div class="issue-row" style="color:var(--muted);">미해결 이슈 없음 — 2026-08-14 zone(road_kind=0, link_ids) 기반 진입~이탈 판정으로 검증 완료. 실제 과금 대상이라 이탈·트립종료 시 항상 charge_yn='Y'/charge_status='0'으로 기록, occur_dt/upd_dt는 진출 시각 — RawLogWorker.cpp::ProcessNodeStepCharge()/AppendExpiredNodeStepCharge()</div>
+        </div>
 
         <div class="issue-card" style="border-left-color:#3949ab;">
-          <div class="issue-title" style="color:#3949ab;">개방형</div>
-          <div class="issue-row"><b class="label-issue">이슈(해결됨)</b> 실측 prim_chargehand(293건)가 "게이트 점 이벤트" 설계 가정과 안 맞아 보였음 — 링크 hop마다 쌓이는 체인 패턴으로 관측됨</div>
-          <div class="issue-row"><b class="label-fix">대응</b> 2026-08-12 확인 — 개방형은 게이트 통과 시 요금 부과 방식이 맞음(링크 hop 누적 아님). 점 이벤트 가정 그대로 진행</div>
+          <div class="issue-title" style="color:#3949ab;">개방형 <span style="font-weight:400;font-size:11px;color:var(--muted);">CHARGE_TYPE=1</span></div>
+          <div class="issue-row" style="color:var(--muted);">미해결 이슈 없음 — 2026-08-12 구현·실측검증(23건) 완료</div>
         </div>
 
         <div class="issue-card" style="border-left-color:#e53935;">
-          <div class="issue-title" style="color:#b71c1c;">폐쇄형</div>
-          <div class="issue-row"><b class="label-issue">이슈</b> ① 인접 상/하행 링크 간격이 좁아 좌표만으론 방향 구분 불가 ② 진입·출구 게이트가 같은 link_id 공유 시 동시 트리거 가능 ③ 휴게소 장시간 정차 시 진입정보 유실 위험</div>
-          <div class="issue-row"><b class="label-fix">대응</b> ① link_id 정확 매칭으로 방향 구분 ② 세션 진입상태 플래그로 순서 구분 ③ DB durable 기록 + 전용 장기 TTL + 일 배치 스윕</div>
+          <div class="issue-title" style="color:#b71c1c;">폐쇄형 <span style="font-weight:400;font-size:11px;color:var(--muted);">CHARGE_TYPE=2</span></div>
+          <div class="issue-row"><b class="label-issue">이슈(미해결)</b> 휴게소 장시간 정차 시 진입정보 유실 위험 — TTL(기본 3600s) 만료 시 세션이 조용히 지워지고 기록이 안 남음</div>
+          <div class="issue-row"><b class="label-fix">대응</b> 아직 미해결 — 주정차(PARKING)에 적용한 TTL 만료 강제마감 패턴(RawLogWorker.cpp::AppendExpiredParkingCharge, 2026-08-13 추가)을 폐쇄형에도 재사용할지 검토 필요</div>
         </div>
 
         <div class="issue-card" style="border-left-color:#8e24aa;">
-          <div class="issue-title" style="color:#6a1b9a;">구간단속</div>
-          <div class="issue-row"><b class="label-issue">이슈</b> ① 인접 상/하행 도로 혼동(point-in-polygon 한계) ② 회랑 좌표 단순화로 실거리보다 짧게 계산 ③ 중간 교차로로 정상 이탈 시 처리</div>
-          <div class="issue-row"><b class="label-fix">대응</b> ① base_tollgate link_id 정확 매칭 ② 회랑 좌표 대신 실시간 누적 이동거리 사용 ③ Layer 1 재확인으로 세션 조용히 폐기(기록 없음)</div>
+          <div class="issue-title" style="color:#6a1b9a;">구간단속 <span style="font-weight:400;font-size:11px;color:var(--muted);">CHARGE_TYPE=3</span></div>
+          <div class="issue-row"><b class="label-issue">이슈(미해결)</b> 중간 교차로로 정상 이탈 시 처리 — 진입~진출 사이 구역 진입/이탈 재확인이나 TTL 강제마감 로직이 없어, 중간에 다른 도로로 빠지거나 GPS가 끊기면 세션이 조용히 유실될 수 있음</div>
+          <div class="issue-row"><b class="label-fix">대응</b> 아직 미해결 — 폐쇄형과 동일한 잔여 이슈, 같이 검토 필요</div>
         </div>
 
         <div class="issue-card" style="border-left-color:#fdd835;">
-          <div class="issue-title" style="color:#f57f17;">주정차단속</div>
-          <div class="issue-row"><b class="label-issue">이슈</b> ① 맵매칭 좌표는 도로로 스냅돼 실제(도로 밖) 위치와 다를 수 있음 ② 원본 GPS만 쓰면 서행 중 튐으로 오탐 위험</div>
-          <div class="issue-row"><b class="label-fix">대응</b> ① 맵매칭 성공 여부와 무관하게 원본 GPS 좌표 사용 ② 위치+속도(nDriveStatus)+체류시간(10분) 3중 조건 충족 시만 확정</div>
+          <div class="issue-title" style="color:#f57f17;">주정차단속 <span style="font-weight:400;font-size:11px;color:var(--muted);">CHARGE_TYPE=4</span></div>
+          <div class="issue-row"><b class="label-issue">이슈(미해결)</b> park_buf(15m)·park_exitcnt(3회) 기본값이 추정치라 실측 GPS 튐 패턴으로 검증 안 됨. 실측 charge_type=4 데이터 자체가 아직 없어 컬럼 매핑도 지시값 그대로 적용된 상태</div>
+          <div class="issue-row"><b class="label-fix">대응</b> 실제 위반 데이터가 쌓이기 시작하면 최우선으로 대조·튜닝 예정 — RawLogWorker.cpp::ProcessParkingCharge()/AppendExpiredParkingCharge()</div>
+        </div>
+
+        <div class="issue-card" style="border-left-color:#d81b60;">
+          <div class="issue-title" style="color:#d81b60;">면제도로 <span style="font-weight:400;font-size:11px;color:var(--muted);">CHARGE_TYPE=5</span></div>
+          <div class="issue-row" style="color:var(--muted);">미해결 이슈 없음 — 2026-08-14 zone(road_kind=5, link_ids) 기반 판정으로 검증 완료. charge_type=5(비과금도로 고유값), from_id/to_id/zone_id는 base_roadlink 등록 road_id, charge_yn='N'/charge_status='4' 고정</div>
         </div>
       </div>
 
@@ -164,7 +172,7 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 }).addTo(map);
 
 // ==== 과금 4유형 레이어 — 체크박스로 토글, 기본 숨김 ====
-const chargeLayers = { open: L.layerGroup(), closed: L.layerGroup(), speed: L.layerGroup(), parking: L.layerGroup(), gps: L.layerGroup() };
+const chargeLayers = { open: L.layerGroup(), closed: L.layerGroup(), speed: L.layerGroup(), parking: L.layerGroup(), node: L.layerGroup(), exempt: L.layerGroup() };
 
 // ---- 폐쇄형(CLOSED) — base_roadlink(RL-Z00005) + base_tollgate(TG00007/TG00008) ----
 const CLOSED_ZONE = {
@@ -284,9 +292,35 @@ PARKING_ZONES.forEach(function (zone) {
   poly.on('mouseout', function () { poly.setStyle({ weight: 3, fillOpacity: 0.45 }); });
 });
 
+// ---- 일반도로(NODE_STEP, ROAD_KIND=0) — base_roadlink(RL-Z00002) link_ids/coords 참조 (2026-08-14 최정우 추가)
+// 게이트 없이 구간(coords)만 존재 — 다른 유형과 동일하게 전용 구역선으로 표시
+// 청록(#00acc1)이 기본 도로 링크색(#1e88e5)·개방형(#3949ab)과 같은 파랑 계열이라 구분이 잘 안 돼
+// 갈색으로 변경 — 다른 어느 유형과도 안 겹치는 색(2026-08-14 최정우 수정)
+const NODE_COLOR = '#6d4c41';
+const NODE_ZONE = {
+  road_id: 'RL-Z00002', road_nm: '제2판교 과금구역', link_ids: ['2040425701', '2040424401'],
+  coords: [[127.08991952571627,37.40792377298369],[127.08986431415477,37.40770153584479],[127.08979888318792,37.40752666695008],[127.08971501703131,37.40736525522197],[127.08959579267336,37.407212734463684],[127.08953116081354,37.40714966347632],[127.08945512474419,37.40707626313108],[127.08935839347079,37.40697417264467],[127.08922619349894,37.40687005509689],[127.08906143518635,37.406779345680896],[127.08883590159948,37.406696310649934],[127.08850029399485,37.406595992269324],[127.08818019392578,37.40650136032173],[127.08780765545508,37.40643921940428],[127.08726566358241,37.40637085211115],[127.08601377496107,37.4062944264585]]
+};
+L.polyline(NODE_ZONE.coords.map(function (c) { return [c[1], c[0]]; }), {
+  color: NODE_COLOR, weight: 8, opacity: 0.9, lineCap: 'round', lineJoin: 'round'
+}).bindTooltip(NODE_ZONE.road_id + ' · ' + NODE_ZONE.road_nm, { sticky: true, className: 'link-label' })
+  .addTo(chargeLayers.node);
+
+// ---- 면제도로(비과금도로, ROAD_KIND=5) — base_roadlink(RL-Z00007) link_ids/coords 참조 (2026-08-14 최정우 수정)
+// 게이트 없이 구간(coords)만 존재 — 다른 유형과 동일하게 전용 구역선으로 표시
+// 기존 노드 점 색(#43a047)과 겹쳐 구분이 안 돼 다른 어느 유형에도 안 쓰인 마젠타로 변경
+const EXEMPT_COLOR = '#d81b60';
+const EXEMPT_ZONE = {
+  road_id: 'RL-Z00007', road_nm: '제2판교 면제구간', link_ids: ['2040005902', '2040005903'],
+  coords: [[127.08449106245467,37.40666251019703],[127.08451133001792,37.40666930565867],[127.08473689235052,37.40675408698892],[127.0849439071557,37.40682603368133],[127.08508444647524,37.40687930745788]]
+};
+L.polyline(EXEMPT_ZONE.coords.map(function (c) { return [c[1], c[0]]; }), {
+  color: EXEMPT_COLOR, weight: 8, opacity: 0.9, lineCap: 'round', lineJoin: 'round'
+}).bindTooltip(EXEMPT_ZONE.road_id + ' · ' + EXEMPT_ZONE.road_nm, { sticky: true, className: 'link-label' })
+  .addTo(chargeLayers.exempt);
+
 // ==== 기본 표시 — 도로 링크·노드 ====
 const LINK_COLOR_DEFAULT = '#1e88e5';
-const LINK_COLOR_NODE_STEP = '#2e7d32';
 function colorFor(link) { return LINK_COLOR_DEFAULT; }
 function weightFor(link) { return 3; }
 
@@ -322,12 +356,6 @@ DATA.links.forEach(function (link) {
 document.querySelectorAll('.charge-check input[type="checkbox"]').forEach(function (chk) {
   chk.addEventListener('change', function () {
     const key = chk.getAttribute('data-layer');
-    if (key === 'node') {
-      // 일반도로는 전용 구역이 없어 base 링크 색 자체를 토글
-      const color = chk.checked ? LINK_COLOR_NODE_STEP : LINK_COLOR_DEFAULT;
-      allLinkPolylines.forEach(function (pl) { pl.setStyle({ color: color }); });
-      return;
-    }
     const layer = chargeLayers[key];
     if (chk.checked) {
       layer.addTo(map);
@@ -350,117 +378,11 @@ DATA.nodes.forEach(function (node) {
   });
 });
 
-// ==== 실시간 GPS/맵매칭 오버레이 — Simulator(RawGpsSimSvr)→MapMatchSvr 라이브 데이터.
-//   같은 웹서버(server.py)가 서빙하는 /api/trips, /api/trip/.../points 를 그대로 재사용 —
-//   이 페이지의 road_link 는 ruc.road_link(=MapMatchSvr link.psf 원본)라 match_link_id 가
-//   실제로 이 지도의 도로와 일치함(index.html 의 roadnet DB 도로망과는 다름) (2026-08-12 최정우 추가)
-chargeLayers.gps.addTo(map);
-const gpsStatusEl = document.getElementById('gps-status');
-// gps_seq 라벨은 너무 낮은 줌에서는 겹쳐 보이므로 index.html(app.js SEQ_ZOOM_MIN)과 동일 기준으로 숨김
-const GPS_SEQ_ZOOM_MIN = 13;
-let lastGpsPoints = [];
-
-async function fetchJson(url) {
-  const sep = url.indexOf('?') >= 0 ? '&' : '?';
-  const res = await fetch(url + sep + '_=' + Date.now(), { cache: 'no-store' });
-  if (!res.ok) throw new Error(url + ' HTTP ' + res.status);
-  return res.json();
-}
-
-// 점(마커)은 node(반경 4)보다 작게, MATCH_LAT/LON(엔진이 매칭 링크 위로 스냅한 좌표)에 찍고
-// GPS 원본과 점선으로 이어 "수선의 발" 역할 + INTERSECT_LEN(m)·매칭 링크를 툴팁으로 표시 (2026-08-12 최정우 추가)
-// 라벨 방향을 seq 별로 돌려가며 배치 — 인접한 점끼리 라벨이 겹치는 것을 줄임(index.html app.js 와 동일 기법)
-const TIP_DIRS_GPS = ['top', 'right', 'bottom', 'left'];
-const TIP_DIRS_MATCH = ['bottom', 'left', 'top', 'right'];
-function tipOffset(dir) {
-  return dir === 'top' ? [0, -6] : dir === 'bottom' ? [0, 6] : dir === 'left' ? [-6, 0] : [6, 0];
-}
-
-function renderGpsPoints(points) {
-  chargeLayers.gps.clearLayers();
-  const showLabel = map.getZoom() >= GPS_SEQ_ZOOM_MIN;
-  const gpsLatLngs = [];
-  points.forEach(function (pt) {
-    const gpsLl = (pt.gps_lat != null && pt.gps_lon != null) ? [pt.gps_lat, pt.gps_lon] : null;
-    const matchLl = (pt.match_lat != null && pt.match_lon != null) ? [pt.match_lat, pt.match_lon] : null;
-
-    // 수선의 발: GPS 원본 → 매칭 링크 위 스냅 좌표를 점선으로 연결, 오차 거리(m)만 표시(링크명은 생략)
-    if (gpsLl && matchLl) {
-      const distM = pt.intersect_len != null ? pt.intersect_len : Math.round(map.distance(gpsLl, matchLl));
-      const tipText = 'seq:' + pt.gps_seq + '-' + distM + 'm';
-      L.polyline([gpsLl, matchLl], {
-        color: '#334155', weight: 2, opacity: 0.85, dashArray: '3,4'
-      }).bindTooltip(tipText, { sticky: true, direction: 'top', className: 'pt-label' })
-        .addTo(chargeLayers.gps);
-    }
-
-    if (gpsLl) {
-      gpsLatLngs.push(gpsLl);
-      const gDir = TIP_DIRS_GPS[pt.gps_seq % TIP_DIRS_GPS.length];
-      L.circleMarker(gpsLl, {
-        radius: 3, color: '#7f0000', weight: 1, fillColor: '#e53935', fillOpacity: 0.95
-      }).bindTooltip('G' + pt.gps_seq, {
-        permanent: true, direction: gDir, offset: tipOffset(gDir),
-        className: 'pt-label', opacity: showLabel ? 0.95 : 0,
-      }).addTo(chargeLayers.gps);
-    }
-    if (matchLl) {
-      const mDir = TIP_DIRS_MATCH[pt.gps_seq % TIP_DIRS_MATCH.length];
-      L.circleMarker(matchLl, {
-        radius: 3, color: '#0d47a1', weight: 1, fillColor: '#1e88e5', fillOpacity: 0.95
-      }).bindTooltip('M' + pt.gps_seq, {
-        permanent: true, direction: mDir, offset: tipOffset(mDir),
-        className: 'pt-label', opacity: showLabel ? 0.95 : 0,
-      }).addTo(chargeLayers.gps);
-    }
-  });
-  // GPS 생성 순서(gps_seq) 궤적 — 원본 좌표를 순서대로 연결, 화살표로 진행 방향 표시
-  //   (도로 링크 방향 화살표와 동일하게 leaflet-polylinedecorator 사용) (2026-08-12 최정우 추가)
-  if (gpsLatLngs.length > 1) {
-    const gpsTrail = L.polyline(gpsLatLngs, {
-      color: '#e53935', weight: 1.5, opacity: 0.5, dashArray: '2,5'
-    }).addTo(chargeLayers.gps);
-    L.polylineDecorator(gpsTrail, {
-      patterns: [{
-        offset: '5%', repeat: '40px',
-        symbol: L.Symbol.arrowHead({
-          pixelSize: 6, polygon: false,
-          pathOptions: { stroke: true, color: '#e53935', weight: 1.5, opacity: 0.8 }
-        })
-      }]
-    }).addTo(chargeLayers.gps);
-  }
-}
-
-async function refreshGpsOverlay() {
-  try {
-    const trips = await fetchJson('/api/trips?limit=1');
-    if (!trips.length) {
-      lastGpsPoints = [];
-      chargeLayers.gps.clearLayers();
-      gpsStatusEl.textContent = '표시할 Trip 없음 — "신규테스트"로 시뮬레이터를 실행하세요';
-      return;
-    }
-    const trip = trips[0];
-    const points = await fetchJson('/api/trip/' + encodeURIComponent(trip.trip_id) + '/points');
-    lastGpsPoints = points;
-    renderGpsPoints(points);
-    gpsStatusEl.textContent =
-      trip.trip_id + ' · ' + points.length + 'pt' + (trip.complete ? ' · 완료' : ' · 진행중');
-  } catch (err) {
-    gpsStatusEl.textContent = '오류: ' + err.message;
-  }
-}
-
-// 줌 변경 시 재요청 없이 seq 라벨 표시만 토글 (index.html app.js 와 동일 패턴)
-map.on('zoomend', function () { renderGpsPoints(lastGpsPoints); });
+// 줌 변경 시 TG 게이트 마커 반경 재조정 (2026-08-12 최정우 추가)
 map.on('zoomend', function () {
   const zoom = map.getZoom();
   tgGateMarkers.forEach(function (m) { m.setRadius(gateRadiusForZoom(zoom, m._gateRadiusOffset || 0)); });
 });
-
-refreshGpsOverlay();
-setInterval(refreshGpsOverlay, 5000);
 </script>
 </body>
 </html>

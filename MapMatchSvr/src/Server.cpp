@@ -111,6 +111,10 @@ CServer::CServer() :
 	m_nDBMaxConnect(5),
 	m_nGateReloadSec(CFG_DEF_GATE_RELOAD),
 	m_dtLastGateReload(0),
+	m_nParkBuf(CFG_DEF_PARK_BUF),
+	m_nParkExitCnt(CFG_DEF_PARK_EXITCNT),
+	m_nParkRegraceSec(CFG_DEF_PARK_REGRACE),
+	m_nExemptRegraceSec(CFG_DEF_EXEMPT_REGRACE),
 	m_nFetchLimit(CFG_DEF_LIMIT),
 	m_nFetchInterval(CFG_DEF_FETCH_INTVL),
 	m_nQueuePauseCount(CFG_DEF_Q_PAUSE_CNT),
@@ -199,6 +203,10 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	m_nShutdownWait = stConfig.nShutdownWait;
 	m_nRetryMax = stConfig.nRetryMax;
 	m_nGateReloadSec = stConfig.nGateReloadSec;					// (2026-08-12 최정우 추가)
+	m_nParkBuf = stConfig.nParkBuf;								// (2026-08-13 최정우 추가)
+	m_nParkExitCnt = stConfig.nParkExitCnt;						// (2026-08-13 최정우 추가)
+	m_nParkRegraceSec = stConfig.nParkRegraceSec;					// (2026-08-14 최정우 추가)
+	m_nExemptRegraceSec = stConfig.nExemptRegraceSec;				// (2026-08-14 최정우 추가)
 
 	LOGFMTI("please wait ....");
 
@@ -230,16 +238,6 @@ bool CServer::Initialize(const CONFIG& stConfig)
 		return false;
 	}
 	LOGFMTI("logger manager initialize success!");
-
-	// log manager run check
-	// 1초 주기 로그 보관 검사 타이머 쓰레드 기동 (2026-07-08 최정우 주석 추가)
-	if (pthread_create(&m_hTimerThread, nullptr, TimerThread, reinterpret_cast<void *>(this)) < 0)
-	{
-		LOGFMTE("timer thread create failed!");
-		Uninitialize();
-		return false;
-	}
-	LOGFMTI("timer thread create success!");
 
 	// SQL load
 	m_strSQLFile = stConfig.strSQLFile;
@@ -305,6 +303,19 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	else
 	{
 		LOGFMTW("trip_end session not configured — trip_end_dt update disabled");
+	}
+
+	// TTL 만료(비정상 종료) 시 개방형 미확정 레코드 마감 UPDATE SQL (2026-08-13 최정우 추가)
+	if (!stConfig.strAbnormalTripEndSession.empty())
+	{
+		m_strAbnormalTripEndSQL = m_pcSQLAccessor->GetSQL(stConfig.strAbnormalTripEndSession);
+		if (m_strAbnormalTripEndSQL.empty())
+			LOGFMTW("abnormal_trip_end session=[%s] sql is empty — abnormal trip end update disabled",
+				stConfig.strAbnormalTripEndSession.c_str());
+	}
+	else
+	{
+		LOGFMTW("abnormal_trip_end session not configured — abnormal trip end update disabled");
 	}
 
 	// 과금 게이트 전량 조회 SQL (세션 미지정·SQL 없으면 CChargeDataLoader 게이트 캐시 비활성) (2026-08-12 최정우 추가)
@@ -460,6 +471,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	stWorkerConfig.strUpdateSQL = m_strRawLogUpdateSQL;
 	stWorkerConfig.strChargeInsertSQL = m_strChargeInsertSQL;
 	stWorkerConfig.strTripEndUpdateSQL = m_strTripEndUpdateSQL;			// (2026-08-12 최정우 추가)
+	stWorkerConfig.strAbnormalTripEndSQL = m_strAbnormalTripEndSQL;		// (2026-08-13 최정우 추가)
 	stWorkerConfig.nWorkerThreads = m_nWorkerThread;
 	stWorkerConfig.nTtlSec = m_nTtlSec;
 	stWorkerConfig.nMatchTimeoutMs = m_nMatchTimeout;
@@ -472,6 +484,10 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	// 연속 역행 스트릭 판정 (2026-07-21 최정우 수정 — dip 판정 대체)
 	stWorkerConfig.nReverseConfirm = m_nReverseConfirm;
 	stWorkerConfig.nHeadingMaxDist = static_cast<int>(m_dwMaxDistance);	// [mapmatch] distance → live heading 거리 상한 (2026-07-15 최정우 추가)
+	stWorkerConfig.nParkBuf = m_nParkBuf;						// (2026-08-13 최정우 추가)
+	stWorkerConfig.nParkExitCnt = m_nParkExitCnt;				// (2026-08-13 최정우 추가)
+	stWorkerConfig.nParkRegraceSec = m_nParkRegraceSec;			// (2026-08-14 최정우 추가)
+	stWorkerConfig.nExemptRegraceSec = m_nExemptRegraceSec;		// (2026-08-14 최정우 추가)
 	// 워커에 DB pool·ProcessManager·SQL·TTL·conn_retry 등 공유 설정 전달 (2026-07-10 최정우 추가)
 	m_pcRawLogWorker->SetConfig(stWorkerConfig);
 
@@ -517,6 +533,21 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	}
 
 	m_bRun = true;
+
+	// 1초 주기 로그 보관 검사 타이머 쓰레드 기동 — 반드시 m_bRun=true 이후에 생성할 것
+	//   (2026-08-14 최정우 수정 — 기존엔 초기화 극초반(로거 초기화 직후)에 생성해서, DB pool·
+	//   대용량 도로망 데이터 로딩·워커풀 구성 등 시간이 걸리는 나머지 초기화 도중 새 스레드가
+	//   while(IsRun()) 최초 진입 체크에서 m_bRun=false 를 관측하고 즉시 종료해버리는 레이스가
+	//   있었음 — 그 결과 로그 보관정리도 gate_reload/zone 주기 재조회도 사실상 한 번도 안 도는
+	//   상태였음("소스상 문제" 검토 중 발견). 스레드 생성을 m_bRun=true 확정 뒤로 옮겨 원천 차단)
+	if (pthread_create(&m_hTimerThread, nullptr, TimerThread, reinterpret_cast<void *>(this)) != 0)
+	{
+		LOGFMTE("timer thread create failed!");
+		Uninitialize();
+		return false;
+	}
+	LOGFMTI("timer thread create success!");
+
 	m_dtLastMonitorLog = time(nullptr);
 	g_pcServerInstance = this;
 	// SIGINT/SIGTERM 수신 시 우아한 종료 핸들러 등록 (2026-07-08 최정우 주석 추가)

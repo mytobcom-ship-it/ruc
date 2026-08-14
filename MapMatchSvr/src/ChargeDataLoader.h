@@ -10,10 +10,14 @@
 #include <string.h>
 #include <string>
 #include <vector>
+#include <deque>
 #include <unordered_map>
+#include <unordered_set>
+#include <mutex>
 #include "TypeDefine.h"
 #include "DataFormat.h"
 #include "PostgrePool.h"
+#include "Mutex.h"
 #include "log4z.h"
 
 using namespace zsummer::log4z;
@@ -75,7 +79,7 @@ typedef unordered_map<uint64, vector<GATE_INFO>>	mapGateInfo;
 typedef struct sZoneInfo
 {
 	char							szRoadID[20+1];							// 구역 ID (base_roadlink.road_id)
-	char							szRoadKind[2+1];						// 유형 0~4(일반/개방/폐쇄/구간단속/주정차)
+	char							szRoadKind[2+1];						// 유형 0~5(일반/개방/폐쇄/구간단속/주정차/비과금도로) (2026-08-13 최정우 수정 — 5 추가)
 	char							szRoadNm[100+1];						// 구역명 — 개방형 zone_name 으로 사용
 	char							szGeomType[4+1];						// LINE/POLY
 	double							dfSpeedLimitKmh;						// 제한속도(구간단속용, 해당없음=0)
@@ -88,6 +92,11 @@ typedef struct sZoneInfo
 	double							dfFirstLat;								// coords 첫 정점 — 구간단속 from_lat
 	double							dfLastLon;								// coords 마지막 정점 — 구간단속 to_lon
 	double							dfLastLat;								// coords 마지막 정점 — 구간단속 to_lat
+	vector<POINT>					vtCoords;								// coords 파싱 결과 — GEOM_TYPE='POLY'(주정차)에서만 채움,
+																			//   PointInPolygon 판정용. LINE 은 LENGTH_M/FIRST/LAST 로 충분해 미파싱 (2026-08-13 최정우 추가)
+	vector<uint64>					vtLinkIds;								// link_ids 파싱 결과 — ROAD_KIND='5'(비과금도로)에서만 채움,
+																			//   게이트가 없어 매칭 링크→구역 역인덱스 구성용. 다른 LINE 유형은
+																			//   게이트 기반이라 미파싱(2026-08-13 최정우 추가)
 
 	sZoneInfo() :
 		dfSpeedLimitKmh(0.0),
@@ -114,9 +123,15 @@ typedef unordered_map<string, ZONE_INFO>	mapZoneInfo;
  * @remark
  *   - CDataLoader(link.psf 로딩)와 동일하게 "로드 1회 → 이후 인메모리 조회" 철학을 따름
  *   - link_id 우선 O(1) 조회, 실패 시 좌표거리(gate_radius) 폴백 — 게이트 판정(MatchGate)에서 사용
- *   - LoadGates()를 기동 시 1회 호출(현재), 또는 주기 재조회 스레드에서 반복 호출(config.ini
- *     [charge] gate_reload, 향후) 하는 두 경우 모두 대응 — 매번 새 맵을 만들어 std::swap 으로
- *     교체해 조회 스레드와의 락 경합을 최소화(doc/README.txt §F 패턴) (2026-08-12 최정우 추가)
+ *   - LoadGates()/LoadZones()는 기동 시 1회 호출 + config.ini [charge] gate_reload(sec)>0 이면
+ *     Server.cpp 타이머 스레드에서 주기 재호출(RawLogWorker 워커 스레드들과는 별도 스레드) — 매번
+ *     새 맵을 만들어 std::swap 으로 교체, m_cGateCacheMutex/m_cZoneCacheMutex 로 스왑 구간과 조회
+ *     함수(GetGateByLinkId 등) 양쪽을 짧게 잠가 보호(doc/README.txt §F 패턴) (2026-08-12 최정우 추가)
+ *   - 2026-08-14 최정우 수정: 원래 이 주석은 "락 경합 최소화"라 적혀 있었으나 실제로는 뮤텍스가
+ *     빠져 있어 재조회 스레드의 swap()과 워커 스레드의 조회(특히 GetParkingZoneContaining 의 전체
+ *     순회)가 동시에 발생하면 std::unordered_map 동시 접근 미정의동작(UB) 위험이 있었음 — 뮤텍스
+ *     추가로 수정. CMutex(Mutex.h)는 PTHREAD_MUTEX_RECURSIVE 라 GetNodeStepZoneByLinkId 가 내부에서
+ *     GetZoneByRoadId 를 다시 호출해도(같은 스레드) 데드락 없음
 */
 class CChargeDataLoader
 {
@@ -131,13 +146,32 @@ public:
 	bool LoadZones();
 
 	PGATE_INFO GetGateByLinkId(const uint64 qwLinkID, const char cGateDiv = 0);
+	// GetGateByLinkId 는 첫 매치 1개만 반환 — 같은 link_id 에 같은 gate_div 게이트가 2개 이상
+	//   있으면 그중 하나만 처리되고 나머지는 부과 누락됨. 개방형(M)이 이 상황을 실제로 전부
+	//   처리해야 할 때 사용(2026-08-13 최정우 추가)
+	void GetGatesByLinkId(const uint64 qwLinkID, const char cGateDiv, vector<PGATE_INFO> *pvtOut);
 	PGATE_INFO GetGateNearby(const double dfLat, const double dfLon, const double dfGateRadiusM);
 	PGATE_INFO GetGateByRoadId(const string& strRoadID, const char cGateDiv);
 	PZONE_INFO GetZoneByRoadId(const string& strRoadID);
+	// 주정차(POLY) 구역 중 (dfLon,dfLat) 을 포함하는 구역 — 게이트가 없어 road_id 를 미리 알 수 없으므로
+	//   POLY 전량을 순회하며 판정. dfBufM>0 이면 폴리곤 경계까지 거리가 그 이내인 경우도 포함(ACCURACY_M
+	//   오차 버퍼 — 서행/정차 중 GPS 튐으로 경계 근처에서 순간 이탈로 오판되는 것 방지) (2026-08-13 최정우 추가)
+	PZONE_INFO GetParkingZoneContaining(const double dfLon, const double dfLat, const double dfBufM);
+	// 일반도로(ROAD_KIND=0, NODE_STEP) — 게이트가 없어 매칭 링크 ID로 직접 역인덱스 조회. 없으면 nullptr
+	//   (2026-08-14 최정우 추가)
+	PZONE_INFO GetNodeStepZoneByLinkId(const uint64 qwLinkID);
+	// 면제도로(ROAD_KIND=5) — 게이트가 없어 매칭 링크 ID로 직접 역인덱스 조회. 없으면 nullptr
+	//   (2026-08-13 최초 추가, charge_type=5로 썼다가 2026-08-14 폐기, 다시 2026-08-14 부활 —
+	//   출력 charge_type만 0으로 바뀌고 판정 방식은 원래의 zone 기반으로 복귀)
+	PZONE_INFO GetExemptZoneByLinkId(const uint64 qwLinkID);
 
 	inline const bool IsLoad() const { return m_bLoad; }
 	size_t GetGateCount() const;
-	inline const size_t GetZoneCount() const { return m_mapZoneInfo.size(); }
+	inline const size_t GetZoneCount() const
+	{
+		lock_guard<CMutex> cLock(m_cZoneCacheMutex);
+		return m_mapZoneInfo.size();
+	}
 
 private:
 	CPostgrePool					*m_pcPostgrePool;						// 커넥션 풀(비소유 — Server 가 생성한 것 공유)
@@ -145,7 +179,24 @@ private:
 	string							m_strZoneSelectSQL;						// base_roadlink 전량 조회 SQL (2026-08-12 최정우 추가)
 	mapGateInfo						m_mapGateInfo;							// link_id → 게이트 정보
 	mapZoneInfo						m_mapZoneInfo;							// road_id → 구역 정보 (2026-08-12 최정우 추가)
+	// 재조회로 교체된 이전 세대 — 댕글링 포인터 방지용 최근 N세대 보관(2026-08-14 최정우 추가).
+	//   Get*() 조회 함수들은 락 "안에서" 얻은 PGATE_INFO/PZONE_INFO 포인터를 호출측이 락 해제 "후"에
+	//   짧게 참조하는 게 기존 설계인데, 재조회가 std::swap 으로 이전 세대를 그 즉시 파괴해버리면
+	//   그 찰나에 재조회가 겹칠 때 use-after-free 위험이 있었음("소스상 문제" 검토 중 발견) — 이전
+	//   세대를 곧바로 버리지 않고 최근 RETIRED_CACHE_GENERATIONS 개만 계속 살려둬서 방지. std::deque
+	//   는 양끝 삽입/삭제 시 다른 원소(unordered_map 자체 및 그 안의 노드) 주소를 무효화하지 않음이
+	//   보장되므로 안전
+	deque<mapGateInfo>				m_dqRetiredGateInfo;
+	deque<mapZoneInfo>				m_dqRetiredZoneInfo;
+	unordered_map<uint64, string>	m_mapNodeStepLinkToRoadId;				// 일반도로(ROAD_KIND=0) link_id → road_id 역인덱스,
+																			//   LoadZones() 가 link_ids 파싱 후 구성 (2026-08-14 최정우 추가)
+	unordered_map<uint64, string>	m_mapExemptLinkToRoadId;				// 면제도로(ROAD_KIND=5) link_id → road_id 역인덱스,
+																			//   LoadZones() 가 link_ids 파싱 후 구성 (2026-08-14 최정우 부활)
 	bool							m_bLoad;
+	mutable CMutex					m_cGateCacheMutex;						// m_mapGateInfo 재조회(swap)/조회 동시접근 보호 (2026-08-14 최정우 추가)
+	mutable CMutex					m_cZoneCacheMutex;						// m_mapZoneInfo+m_mapNodeStepLinkToRoadId+m_mapExemptLinkToRoadId
+																			//   재조회(swap)/조회 동시접근 보호 — 셋 다 LoadZones() 에서 항상 같이
+																			//   swap 되므로 락도 하나로 공유(항상 일관된 스냅샷 보장) (2026-08-14 최정우 추가)
 };
 
 #endif //__CHARGEDATALOADER_H__

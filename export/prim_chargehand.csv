@@ -1,0 +1,2 @@
+trip_id,device_key,trip_seq,charge_type,charge_unit,link_id,from_id,to_id,from_lat,from_lon,to_lat,to_lon,dist_m,speed_kmh,speed_limit_kmh,stay_seconds,zone_id,zone_name,occur_dt,trip_start_dt,trip_end_dt,charge_status,reg_dt,upd_dt,charge_yn,non_charge_reason,tollgate_id,entry_tollgate_id,exit_tollgate_id
+SIMFEEDC0DE0007_20260814070543,SIMFEEDC0DE0007,1,0,0,,RL-Z00002,RL-Z00002,37.407922,127.089919,37.407365,127.089716,65,8,0,30,RL-Z00002,제2판교 과금구역,20260814070613,20260814070543,20260814070613,0,20260814070554,20260814070613,Y,,,,

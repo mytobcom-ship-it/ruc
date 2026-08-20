@@ -336,7 +336,7 @@ void CGISUtil::GetNearGridID(const uint32& dwGridID, const SGMT_MATCH_INPUT& stS
  * @return true(성공), false(실패)
 */
 bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtInfo, SGMT_MATCH_RES *pstSgmtMatchRes,
-		bool bIgnoreRadiusCheck)
+		bool bIgnoreRadiusCheck, bool bIgnoreHeading)
 {
 	if ((stSgmtMatchInput.stPoint.dfX == stSgmtInfo.stPoint.dfX) && 
 		(stSgmtMatchInput.stPoint.dfY == stSgmtInfo.stPoint.dfY))
@@ -365,7 +365,9 @@ bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtIn
 	// ±45 하드컷 대신 소프트 비용 사용 (2026-07-08 최정우 수정)
 	sint16 nHeadingDiff = 0;
 	bool bReverseFit = false;
-	bool bHasHeading = (stSgmtMatchInput.nDirAng != NO_ANGLE);
+	// bIgnoreHeading=true(BEGIN 매칭 각도 미참조 실험용, 2026-08-19 최정우 임시 추가)면 heading
+	//   있어도 없는 것처럼 취급 — 하드컷(MM_DIR_MAX_DEG)·소프트 비용 전부 미적용, 거리만으로 판정
+	bool bHasHeading = (!bIgnoreHeading) && (stSgmtMatchInput.nDirAng != NO_ANGLE);
 	if (bHasHeading)
 	{
 		// 양방향 단일 링크 대응: 세그먼트 F→T 방위각과 그 반대(T→F=+180°) 둘 다 비교해
@@ -482,6 +484,15 @@ bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtIn
 	pstSgmtMatchRes->bReverseFit = bReverseFit;						// heading이 역방향에 더 가까움 (2026-07-21 최정우 추가)
 	pstSgmtMatchRes->bSgmtClamped = bSgmtClamped;						// 세그먼트 끝점 스냅 여부 (2026-07-21 최정우 추가)
 	pstSgmtMatchRes->bHasHeading = bHasHeading;						// heading 값 존재 여부 (2026-07-22 최정우 추가)
+	// 클램프됐어도 heading이 도로 방향과 잘 맞고(각도차 MM_CLAMP_HEADING_MAX_DIFF 이내) 속도가 충분히
+	//   빠르면(MM_SPEED_HIGH_KMH 이상 — heading 신뢰도가 이미 최대인 구간, dfDirWeight 산정과 동일
+	//   기준 재사용) 클램프 저신뢰 SKIP 판정에서 구제 — 단, 그래도 거리가 너무 멀면(MM_CLAMP_HEADING_SKIP_LEN
+	//   초과) 신뢰하지 않음(이중 안전장치) (2026-08-20 최정우 추가)
+	pstSgmtMatchRes->bClampTrustedByHeading = bSgmtClamped
+		&& bHasHeading
+		&& (stSgmtMatchInput.nSpeed >= MM_SPEED_HIGH_KMH)
+		&& (abs(nHeadingDiff) <= MM_CLAMP_HEADING_MAX_DIFF)
+		&& (dfIntersectLenSgmt <= MM_CLAMP_HEADING_SKIP_LEN);
 
 	return true;
 }

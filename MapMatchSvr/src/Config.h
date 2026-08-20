@@ -43,6 +43,7 @@ typedef struct sConfig
 	string							strZoneSelectSession;				// 과금 구역(BASE_ROADLINK) 전량 조회 SQL, 비어 있으면 CChargeDataLoader 구역 캐시 비활성 (2026-08-12 최정우 추가)
 	string							strTripEndUpdateSession;			// 트립 종료 시 trip_end_dt UPDATE SQL, 비어 있으면 비활성 (2026-08-12 최정우 추가)
 	string							strAbnormalTripEndSession;			// TTL 만료(비정상 종료) 시 개방형 미확정 레코드 마감 UPDATE SQL, 비어 있으면 비활성 (2026-08-13 최정우 추가)
+	string							strServerStatusSession;				// 서버 상태(CPU/메모리) 하트비트 UPDATE SQL, 비어 있으면 비활성 (2026-08-20 최정우 추가)
 
 	// 피더 (DB poll)
 	int								nFetchLimit;						// 1회 조회·예약 최대 건수 (건)
@@ -85,7 +86,11 @@ typedef struct sConfig
 	int								nParkBuf;							// [charge] park_buf (단위: m) — 구역판정 버퍼 상한 (2026-08-13 최정우 추가)
 	int								nParkExitCnt;						// [charge] park_exitcnt — 구역 이탈 확정 연속 GPS 건수(디바운스) (2026-08-13 최정우 추가)
 	int								nParkRegraceSec;					// [charge] park_regrace (단위: sec) — 재진입 유예시간 (2026-08-14 최정우 추가)
+	int								nParkTtlSec;						// [charge] park_ttl (단위: sec) — 마지막 신뢰(RAW_VLD=true) 확인 후 강제 마감까지의 시간 (2026-08-19 최정우 추가)
 	int								nExemptRegraceSec;					// [charge] exempt_regrace (단위: sec) — 재진입 유예시간 (2026-08-14 최정우 추가)
+
+	string							strServerId;						// [server] id — PROC_SERVERSTATUS.SERVER_ID (2026-08-20 최정우 추가)
+	int								nServerStatusIntervalSec;			// [server] status_interval (단위: sec, 0=비활성) (2026-08-20 최정우 추가)
 } CONFIG, *PCONFIG;
 
 #define CONFIG_SIZE												sizeof(CONFIG)

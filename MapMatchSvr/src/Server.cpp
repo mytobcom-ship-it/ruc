@@ -114,7 +114,15 @@ CServer::CServer() :
 	m_nParkBuf(CFG_DEF_PARK_BUF),
 	m_nParkExitCnt(CFG_DEF_PARK_EXITCNT),
 	m_nParkRegraceSec(CFG_DEF_PARK_REGRACE),
+	m_nParkTtlSec(CFG_DEF_PARK_TTL),
 	m_nExemptRegraceSec(CFG_DEF_EXEMPT_REGRACE),
+	m_strServerId(CFG_DEF_SERVER_ID),
+	m_nServerStatusIntervalSec(CFG_DEF_STATUS_INTVL),
+	m_dtLastServerStatusUpdate(0),
+	m_qwPrevCpuTotal(0),
+	m_qwPrevCpuIdle(0),
+	m_dfLastCpuPct(0.0),
+	m_bCpuSampleValid(false),
 	m_nFetchLimit(CFG_DEF_LIMIT),
 	m_nFetchInterval(CFG_DEF_FETCH_INTVL),
 	m_nQueuePauseCount(CFG_DEF_Q_PAUSE_CNT),
@@ -206,7 +214,10 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	m_nParkBuf = stConfig.nParkBuf;								// (2026-08-13 최정우 추가)
 	m_nParkExitCnt = stConfig.nParkExitCnt;						// (2026-08-13 최정우 추가)
 	m_nParkRegraceSec = stConfig.nParkRegraceSec;					// (2026-08-14 최정우 추가)
+	m_nParkTtlSec = stConfig.nParkTtlSec;							// (2026-08-19 최정우 추가)
 	m_nExemptRegraceSec = stConfig.nExemptRegraceSec;				// (2026-08-14 최정우 추가)
+	m_strServerId = stConfig.strServerId;							// (2026-08-20 최정우 추가)
+	m_nServerStatusIntervalSec = stConfig.nServerStatusIntervalSec;	// (2026-08-20 최정우 추가)
 
 	LOGFMTI("please wait ....");
 
@@ -316,6 +327,19 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	else
 	{
 		LOGFMTW("abnormal_trip_end session not configured — abnormal trip end update disabled");
+	}
+
+	// 서버 상태(CPU/메모리) 하트비트 UPDATE SQL (세션 미지정·SQL 없으면 비활성) (2026-08-20 최정우 추가)
+	if (!stConfig.strServerStatusSession.empty())
+	{
+		m_strServerStatusSQL = m_pcSQLAccessor->GetSQL(stConfig.strServerStatusSession);
+		if (m_strServerStatusSQL.empty())
+			LOGFMTW("server_status session=[%s] sql is empty — server status heartbeat disabled",
+				stConfig.strServerStatusSession.c_str());
+	}
+	else
+	{
+		LOGFMTW("server_status session not configured — server status heartbeat disabled");
 	}
 
 	// 과금 게이트 전량 조회 SQL (세션 미지정·SQL 없으면 CChargeDataLoader 게이트 캐시 비활성) (2026-08-12 최정우 추가)
@@ -487,6 +511,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	stWorkerConfig.nParkBuf = m_nParkBuf;						// (2026-08-13 최정우 추가)
 	stWorkerConfig.nParkExitCnt = m_nParkExitCnt;				// (2026-08-13 최정우 추가)
 	stWorkerConfig.nParkRegraceSec = m_nParkRegraceSec;			// (2026-08-14 최정우 추가)
+	stWorkerConfig.nParkTtlSec = m_nParkTtlSec;					// (2026-08-19 최정우 추가)
 	stWorkerConfig.nExemptRegraceSec = m_nExemptRegraceSec;		// (2026-08-14 최정우 추가)
 	// 워커에 DB pool·ProcessManager·SQL·TTL·conn_retry 등 공유 설정 전달 (2026-07-10 최정우 추가)
 	m_pcRawLogWorker->SetConfig(stWorkerConfig);
@@ -907,4 +932,147 @@ void CServer::ProcessPeriodSec(time_t dtNow)
 
 		m_dtLastGateReload = dtNow;
 	}
+
+	// CPU 사용률 샘플 — 매초 누적(직전 /proc/stat 대비 델타), 하트비트 반영 시점엔 이 최신값을
+	//   그대로 사용한다(하트비트 순간에만 샘플링하면 그 찰나의 값이라 대표성이 떨어짐) (2026-08-20 최정우 추가)
+	UpdateCpuSample();
+
+	// 서버 상태(CPU/메모리) 하트비트 — status_interval=0 이거나 SQL 미설정이면 비활성.
+	//   best-effort(실패해도 다음 주기에 재시도, 워커 처리 방해 금지) (2026-08-20 최정우 추가)
+	if ((m_nServerStatusIntervalSec > 0) && (!m_strServerStatusSQL.empty()) &&
+		((dtNow - m_dtLastServerStatusUpdate) >= m_nServerStatusIntervalSec))
+	{
+		UpdateServerStatus();
+		m_dtLastServerStatusUpdate = dtNow;
+	}
+}
+
+/**
+ * @brief CPU 사용률 샘플링 — /proc/stat 델타 기반, 매초 호출
+ * @return void
+ * @remark
+ *   "cpu  user nice system idle iowait irq softirq steal ..." 누적 tick 값을 읽어 직전
+ *   샘플과의 차이로 사용률(%)을 계산한다. 최초 1회는 델타를 낼 이전 값이 없어 계산을
+ *   건너뛴다(m_bCpuSampleValid=false) (2026-08-20 최정우 추가)
+*/
+void CServer::UpdateCpuSample()
+{
+	FILE *fp = fopen("/proc/stat", "r");
+	if (fp == nullptr)
+		return;
+
+	char szLine[256];
+	memset(szLine, 0, sizeof(szLine));
+	bool bRead = (fgets(szLine, sizeof(szLine), fp) != nullptr);
+	fclose(fp);
+	if (!bRead)
+		return;
+
+	unsigned long long qwUser=0, qwNice=0, qwSystem=0, qwIdle=0, qwIowait=0, qwIrq=0, qwSoftirq=0, qwSteal=0;
+	int nMatched = sscanf(szLine, "cpu %llu %llu %llu %llu %llu %llu %llu %llu",
+		&qwUser, &qwNice, &qwSystem, &qwIdle, &qwIowait, &qwIrq, &qwSoftirq, &qwSteal);
+	if (nMatched < 4)						// 최소 user/nice/system/idle 은 있어야 함
+		return;
+
+	unsigned long long qwIdleAll = qwIdle + qwIowait;
+	unsigned long long qwTotal = qwUser + qwNice + qwSystem + qwIdleAll + qwIrq + qwSoftirq + qwSteal;
+
+	if (m_bCpuSampleValid && (qwTotal > m_qwPrevCpuTotal))
+	{
+		unsigned long long qwTotalDiff = qwTotal - m_qwPrevCpuTotal;
+		unsigned long long qwIdleDiff = (qwIdleAll >= m_qwPrevCpuIdle) ? (qwIdleAll - m_qwPrevCpuIdle) : 0;
+		m_dfLastCpuPct = 100.0 * static_cast<double>(qwTotalDiff - qwIdleDiff) / static_cast<double>(qwTotalDiff);
+	}
+
+	m_qwPrevCpuTotal = qwTotal;
+	m_qwPrevCpuIdle = qwIdleAll;
+	m_bCpuSampleValid = true;
+}
+
+/**
+ * @brief 메모리 사용률·용량 조회 — /proc/meminfo 기준
+ * @param[out] nUsedMB 사용 메모리(MB) — MemTotal-MemAvailable
+ * @param[out] nTotalMB 전체 메모리(MB)
+ * @param[out] dfMemPct 사용률(%)
+ * @return true(성공), false(읽기 실패)
+*/
+bool CServer::GetMemInfo(int& nUsedMB, int& nTotalMB, double& dfMemPct)
+{
+	FILE *fp = fopen("/proc/meminfo", "r");
+	if (fp == nullptr)
+		return false;
+
+	long lMemTotalKB = -1, lMemAvailableKB = -1;
+	char szLine[256];
+	while (fgets(szLine, sizeof(szLine), fp) != nullptr)
+	{
+		if (strncmp(szLine, "MemTotal:", 9) == 0)
+			sscanf(szLine + 9, "%ld", &lMemTotalKB);
+		else if (strncmp(szLine, "MemAvailable:", 13) == 0)
+			sscanf(szLine + 13, "%ld", &lMemAvailableKB);
+
+		if ((lMemTotalKB >= 0) && (lMemAvailableKB >= 0))
+			break;
+	}
+	fclose(fp);
+
+	if ((lMemTotalKB <= 0) || (lMemAvailableKB < 0))
+		return false;
+
+	nTotalMB = static_cast<int>(lMemTotalKB / 1024);
+	long lUsedKB = lMemTotalKB - lMemAvailableKB;
+	if (lUsedKB < 0) lUsedKB = 0;
+	nUsedMB = static_cast<int>(lUsedKB / 1024);
+	dfMemPct = 100.0 * static_cast<double>(lUsedKB) / static_cast<double>(lMemTotalKB);
+	return true;
+}
+
+/**
+ * @brief 서버 상태(CPU/메모리) 하트비트 — PROC_SERVERSTATUS 1행 UPDATE
+ * @return void
+ * @remark best-effort — 연결/쿼리 실패해도 에러 로그만 남기고 다음 주기에 재시도 (2026-08-20 최정우 추가)
+*/
+void CServer::UpdateServerStatus()
+{
+	if (m_strServerStatusSQL.empty() || (m_pcPostgrePool == nullptr))
+		return;
+
+	int nUsedMB = 0, nTotalMB = 0;
+	double dfMemPct = 0.0;
+	if (!GetMemInfo(nUsedMB, nTotalMB, dfMemPct))
+	{
+		LOGFMTW("server status update skipped — meminfo read failed");
+		return;
+	}
+
+	char szCpuPct[32], szMemPct[32], szUsedMB[16], szTotalMB[16];
+	snprintf(szCpuPct, sizeof(szCpuPct), "%.1f", m_dfLastCpuPct);
+	snprintf(szMemPct, sizeof(szMemPct), "%.1f", dfMemPct);
+	snprintf(szUsedMB, sizeof(szUsedMB), "%d", nUsedMB);
+	snprintf(szTotalMB, sizeof(szTotalMB), "%d", nTotalMB);
+
+	PGconn *pcConn = m_pcPostgrePool->getConnection();
+	if (pcConn == nullptr)
+	{
+		LOGFMTE("server status update — get connection failed!");
+		return;
+	}
+
+	const char *pszParams[5] = { m_strServerId.c_str(), szCpuPct, szMemPct, szUsedMB, szTotalMB };
+	PGresult *pcResult = PQexecParams(pcConn, m_strServerStatusSQL.c_str(),
+		5, nullptr, pszParams, nullptr, nullptr, 0);
+
+	if ((pcResult == nullptr) || (PQresultStatus(pcResult) != PGRES_COMMAND_OK))
+	{
+		LOGFMTW("server status update failed!error=[%s]", PQerrorMessage(pcConn));
+	}
+	else
+	{
+		LOGFMTI("server status update success!id=[%s] cpu=[%s%%] mem=[%s%%] used=[%sMB] total=[%sMB]",
+			m_strServerId.c_str(), szCpuPct, szMemPct, szUsedMB, szTotalMB);
+	}
+
+	if (pcResult != nullptr)
+		PQclear(pcResult);
+	m_pcPostgrePool->releaseConnection(pcConn);
 }

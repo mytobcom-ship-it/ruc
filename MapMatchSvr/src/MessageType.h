@@ -169,6 +169,9 @@ typedef struct sMapMatchInput
 	{}
 } MAP_MATCH_INPUT, *PMAP_MATCH_INPUT;
 
+// MATCH_LINK_INFO.aqwPathLinkIDs 칸 수 (2026-08-20 최정우 추가)
+#define MATCH_LINK_INFO_MAX_PATH		8
+
 /**
  * @struct sMatchLinkInfo
  * @brief 매칭 링크 정보
@@ -207,6 +210,13 @@ typedef struct sMatchLinkInfo
 	bool							bReverseSuspect;					// 위치 역행 + heading 도 역방향 일치 — 연속역행(reverse_confirm) 스트릭 판정 전용 (2026-07-21 최정우 추가)
 	bool							bClampLowConf;						// 경계 클램프 + INTERSECT_LEN 초과 — 신뢰도 낮은 매칭 SKIP 처리용 (2026-07-21 최정우 추가)
 	bool							bAmbiguousReverse;					// 같은 링크 역행인데 heading 없음/애매해 노이즈 단정 불가 — SKIP 처리용 (2026-07-22 최정우 추가)
+	// 직전 확정 링크 다음부터 이번 확정 링크까지 실제 경유한 링크 ID 목록(최소 1개=qwLinkID) —
+	//   게이트/구역 판정이 qwLinkID 하나만이 아니라 경유 링크 전부를 확인하게 함. 이 구조체가
+	//   다른 곳에서 memset(0, MATCH_LINK_INFO_SIZE) 로 리셋되는 관례라 vector 대신 고정 배열
+	//   사용(POD 유지) — nSearchStep 상한(maxstep+MM_STEP_EXTEND_MAX, 실무상 5 이하)보다
+	//   충분히 큰 8칸 (2026-08-20 최정우 추가)
+	uint64							aqwPathLinkIDs[MATCH_LINK_INFO_MAX_PATH];
+	uint8							nPathLinkCount;						// aqwPathLinkIDs 유효 개수(0=경로 정보 없음 — qwLinkID 만 사용)
 } MATCH_LINK_INFO, *PMATCH_LINK_INFO;
 
 #define MATCH_LINK_INFO_SIZE											sizeof(MATCH_LINK_INFO)

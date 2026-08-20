@@ -39,10 +39,12 @@ void CContinueMapMatch::SetAltitudeConfig(const ALTITUDE_SCORE_CONFIG& stAltConf
  * @param[out] pstMatchEntry 검색 정보
  * @return true(성공), false(실패)
 */
-bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& stSgmtMatchInput, 
+bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& stSgmtMatchInput,
 		uint64& qwLinkID, sint16& nSearchStep, uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry,
-		PMATCH_TRACE_CTX pstTraceCtx)
+		PMATCH_TRACE_CTX pstTraceCtx, vector<uint64> *pvtPathLinkIDs)
 {
+	// 경로 역추적용 — 새로 발견된 링크가 어느 링크를 거쳐 도달했는지 기록 (2026-08-20 최정우 추가)
+	unordered_map<uint64, uint64> mapParentLink;
 	m_pcDataLoader = pcDataLoader;
 
 	// 형상 데이터 로더 유효성·로드 상태 확인 (2026-07-08 최정우 주석 추가)
@@ -138,6 +140,8 @@ bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPU
 				if (pstTraceCtx != nullptr)
 					pstTraceCtx->nMatchedStep = nBestStep;
 				GetMatchEntry(&listAllEntryList, pstMatchEntry, pstTraceCtx, stSgmtMatchInput);
+				if (pvtPathLinkIDs != nullptr)
+					ReconstructPath(pstMatchEntry->qwLinkID, mapParentLink, pvtPathLinkIDs);
 				return true;
 			}
 		}
@@ -146,7 +150,7 @@ bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPU
 		if (i == nSearchStep) break;
 
 		// 현재 depth 링크 목록이 맵 매칭에 실패시 다음 depth 링크 목록 정보
-		if (!GetLinkDepthInfo(&setSearchHistoryLinkList, &listDepthLinkInfoList))
+		if (!GetLinkDepthInfo(&setSearchHistoryLinkList, &listDepthLinkInfoList, &mapParentLink, stSgmtMatchInput.nSpeed))
 		{
 			// 더 확장할 연결 링크가 없으면, 지금까지 누적 후보가 있으면 그걸로 확정 (2026-07-15 최정우 수정)
 			if (!listAllEntryList.empty())
@@ -155,6 +159,8 @@ bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPU
 				if (pstTraceCtx != nullptr)
 					pstTraceCtx->nMatchedStep = nBestStep;
 				GetMatchEntry(&listAllEntryList, pstMatchEntry, pstTraceCtx, stSgmtMatchInput);
+				if (pvtPathLinkIDs != nullptr)
+					ReconstructPath(pstMatchEntry->qwLinkID, mapParentLink, pvtPathLinkIDs);
 				return true;
 			}
 			*pwErrorCode = MAP_MATCH_FAIL;
@@ -169,6 +175,8 @@ bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPU
 		if (pstTraceCtx != nullptr)
 			pstTraceCtx->nMatchedStep = nBestStep;
 		GetMatchEntry(&listAllEntryList, pstMatchEntry, pstTraceCtx, stSgmtMatchInput);
+		if (pvtPathLinkIDs != nullptr)
+			ReconstructPath(pstMatchEntry->qwLinkID, mapParentLink, pvtPathLinkIDs);
 		return true;
 	}
 
@@ -216,10 +224,13 @@ bool CContinueMapMatch::IsPoorAngleFit(const MATCH_ENTRY& stMatchEntry)
  * @param[in] stSgmtMatchInput 세그먼트 매칭 입력 정보
  * @param[in] stDepthLinkInfoData 링크 회전 정보 및 세그먼트 정보
  * @param[out] plistMatchEntryList 검색 정보 목록
+ * @param[in] bAllowOppositeCheck 역행 의심 시 opposite link(qwOppositeLinkID) 후보 재귀 평가 허용 여부 —
+ *   opposite link 자체를 평가하는 재귀 호출에서는 false 로 넘겨 상호 재귀를 막는다 (2026-08-19 최정우 추가)
  * @return true(성공), false(실패)
 */
-bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, 
-		DEPTH_LINK_INFO_DATA& stDepthLinkInfoData, list<MATCH_ENTRY> *plistMatchEntryList)
+bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
+		DEPTH_LINK_INFO_DATA& stDepthLinkInfoData, list<MATCH_ENTRY> *plistMatchEntryList,
+		bool bAllowOppositeCheck)
 {
 	// 형상 데이터 로더 유효성·로드 상태 확인 (2026-07-08 최정우 주석 추가)
 	if ((m_pcDataLoader == nullptr) || (!m_pcDataLoader->IsLoad()))
@@ -269,6 +280,7 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
 		stMatchEntry.dfIntersectLenSgmt = stSgmtMatchRes.dfIntersectLenSgmt;
 		stMatchEntry.bSgmtClamped = stSgmtMatchRes.bSgmtClamped;			// 세그먼트 끝점 스냅 여부 (2026-07-21 최정우 추가)
 		stMatchEntry.bHasHeading = stSgmtMatchRes.bHasHeading;				// heading 값 존재 여부 (2026-07-22 최정우 추가)
+		stMatchEntry.bClampTrustedByHeading = stSgmtMatchRes.bClampTrustedByHeading;	// 클램프+heading 신뢰 구제 신호 (2026-08-20 최정우 추가)
 		// ── 연속 맵매칭 고도 보조 비용 가산 (Begin 미적용) ──
 		//   dfCost = INTERSECT_LEN + 방위각비용 + CalcAltRoadPenalty(Δalt, ROAD_TYPE)
 		// 값이 작을수록 우선 — 보너스(음수)면 동일 거리·방향 후보보다 유리
@@ -312,6 +324,12 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
 				if ((dfBackward > MM_REVERSE_SUSPECT_EPS) && stSgmtMatchRes.bReverseFit)
 				{
 					stMatchEntry.bReverseSuspect = true;
+
+					// 반대방향(왕복분리) 짝 링크가 있으면 추가 후보로 평가 — 그래프(TURNINFO)상
+					//   연결 안 된 물리적 짝 링크를 후보에 끌어와, 비용이 더 낮으면(정방향 적합)
+					//   listAllEntryList 정렬(operator<)로 자연스럽게 우선 선택되게 한다 (2026-08-19 최정우 추가)
+					if (bAllowOppositeCheck)
+						TryOppositeLinkCandidate(stSgmtMatchInput, pstLinkInfo->qwOppositeLinkID, plistMatchEntryList);
 				}
 				else if (dfBackward > MM_REVERSE_SUSPECT_EPS)
 				{
@@ -378,6 +396,10 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
 			//   "종료" 노드가 직전 링크의 종료 노드와 같다면, 그 후보는 같은 노드로 들어가는
 			//   방향(진입)이라는 뜻 — heading/거리와 무관하게 표시한다 (2026-07-22 최정우 추가)
 			stMatchEntry.bReverseSuspect = true;
+
+			// 반대방향(왕복분리) 짝 링크가 있으면 추가 후보로 평가 (2026-08-19 최정우 추가)
+			if (bAllowOppositeCheck)
+				TryOppositeLinkCandidate(stSgmtMatchInput, pstLinkInfo->qwOppositeLinkID, plistMatchEntryList);
 		}
 
 		plistMatchEntryList->push_back(stMatchEntry);
@@ -387,12 +409,46 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
 }
 
 /**
+ * @brief 역행 의심 후보의 반대방향(왕복분리) 짝 링크를 추가 후보로 평가
+ * @param[in] stSgmtMatchInput 세그먼트 매칭 입력 정보
+ * @param[in] qwOppositeLinkID 짝 링크 ID (LINK_INFO.qwOppositeLinkID, 0=없음)
+ * @param[out] plistMatchEntryList 검색 정보 목록 — 짝 링크의 매칭 결과를 추가로 append
+ * @return void
+ * @remark
+ *   그래프(TURNINFO) 기반 depth 확장으로는 도달 불가능한, 물리적으로만 가까운 반대방향 짝
+ *   링크(CreateData::CBinaryMaker::ComputeOppositeLinkPairs 가 사전 계산)를 강제로 후보에
+ *   포함시킨다. LinkSgmtMapMatch 를 bAllowOppositeCheck=false 로 재귀 호출해, 짝 링크 평가
+ *   결과가 다시 자기 자신을 짝으로 끌어오는 상호 재귀를 막는다 (2026-08-19 최정우 추가)
+*/
+void CContinueMapMatch::TryOppositeLinkCandidate(SGMT_MATCH_INPUT& stSgmtMatchInput,
+		const uint64& qwOppositeLinkID, list<MATCH_ENTRY> *plistMatchEntryList)
+{
+	if (qwOppositeLinkID == 0)
+		return;
+
+	PLINK_INFO pstOppLinkInfo = m_pcDataLoader->GetLinkInfo(qwOppositeLinkID);
+	if (pstOppLinkInfo == nullptr)
+		return;
+
+	DEPTH_LINK_INFO_DATA stOppDepthInfo;
+	stOppDepthInfo.qwLinkID = qwOppositeLinkID;
+	stOppDepthInfo.dwStartTurnOffset = pstOppLinkInfo->dwTurnOffset;
+	stOppDepthInfo.dwEndTurnOffset = stOppDepthInfo.dwStartTurnOffset + pstOppLinkInfo->nTurnCount;
+	stOppDepthInfo.dwStartSgmtOffset = pstOppLinkInfo->dwSgmtOffset;
+	stOppDepthInfo.dwEndSgmtOffset = stOppDepthInfo.dwStartSgmtOffset + pstOppLinkInfo->wSgmtCount;
+
+	LinkSgmtMapMatch(stSgmtMatchInput, stOppDepthInfo, plistMatchEntryList, false);
+}
+
+/**
  * @brief 연결 링크 정보
  * @param[in,out] psetSearchHistoryLinkList 검색된 링크 UID 목록 (중복 검사용)
  * @param[out] plistDepthLinkInfoList 연결 링크 UID 정보
+ * @param[out] pmapParentLink 새로 발견된 링크가 거쳐온 직전 링크 기록 (경로 역추적용, 2026-08-20 최정우 추가)
  * @return true(성공), false(실패)
 */
-bool CContinueMapMatch::GetLinkDepthInfo(set<uint64> *psetSearchHistoryLinkList, listDepthLinkInfo *plistDepthLinkInfoList)
+bool CContinueMapMatch::GetLinkDepthInfo(set<uint64> *psetSearchHistoryLinkList, listDepthLinkInfo *plistDepthLinkInfoList,
+		unordered_map<uint64, uint64> *pmapParentLink, sint16 nSpeed)
 {
 	// 형상 데이터 로더 유효성·로드 상태 확인 (2026-07-08 최정우 주석 추가)
 	if ((m_pcDataLoader == nullptr) || (!m_pcDataLoader->IsLoad()))
@@ -408,6 +464,9 @@ bool CContinueMapMatch::GetLinkDepthInfo(set<uint64> *psetSearchHistoryLinkList,
 	{
 		uint32 dwStartTurnOffset = it->dwStartTurnOffset;
 		uint32 dwEndTurnOffset = it->dwEndTurnOffset;
+		// erase(it++) 이후엔 it 가 다음 원소를 가리켜 더 이상 이 링크 ID 를 안 가리킴 — 지리적
+		//   브릿지 탐색에서 "확장 중이던 링크"로 쓰기 위해 지우기 전에 따로 보관 (2026-08-20 최정우 추가)
+		uint64 qwErasedLinkID = it->qwLinkID;
 
 		// 이전 depth 링크 ID 삭제
 		plistDepthLinkInfoList->erase(it++);
@@ -441,11 +500,166 @@ bool CContinueMapMatch::GetLinkDepthInfo(set<uint64> *psetSearchHistoryLinkList,
 			stDepthLinkInfoData.dwStartSgmtOffset = pstLinkInfo->dwSgmtOffset;
 			stDepthLinkInfoData.dwEndSgmtOffset = stDepthLinkInfoData.dwStartSgmtOffset + pstLinkInfo->wSgmtCount;
 
+			// 이 링크(qwOutLinkID)는 it->qwLinkID(확장 중인 직전 링크)를 거쳐 도달함 — 경로
+			//   역추적용 기록. 링크당 최초 1회만 발견되므로(위 history 체크) 덮어쓸 일 없음 (2026-08-20 최정우 추가)
+			if (pmapParentLink != nullptr)
+				(*pmapParentLink)[pstTurnInfo->qwOutLinkID] = it->qwLinkID;
+
 			plistDepthLinkInfoList->push_back(stDepthLinkInfoData);
+		}
+
+		// 지리적 브릿지 시도 — "턴 정보 아예 없을 때만"(1차 시도)으로는 다른 방향 턴은 있고 하필
+		//   필요한 방향만 없는 실측 케이스가 전혀 안 잡혀서(094414/140532 교차로 케이스) 턴 유무와
+		//   무관하게 시도하도록 넓혔다가, 정차 중(속도 0, 매 tick 같은 링크를 반복 확장)인 지점까지
+		//   매번 새 경쟁 후보가 끼어들어 원래 안정적이던 매칭이 흔들리는 회귀가 실측 확인됨(093337
+		//   트립 90→86). "속도 0(정차 확실)일 때만 제외"로 절충 — 정차 아닐 때는 계속 시도, 정차
+		//   중엔 안 건드림(2026-08-20 최정우 재수정 — "정확히 0"만 제외로는 회귀가 그대로 재현돼,
+		//   저속 전체(MM_SPEED_LOW_KMH 이하 — 방위각 자체를 안 믿는 기존 기준과 동일 임계 재사용)로
+		//   범위를 넓힘). qwErasedLinkID 는 위에서 erase(it++) 전에 미리 보관해둔 값(끝점 좌표는
+		//   GetLinkInfo() 로 다시 조회).
+		if ((nSpeed < 0) || (nSpeed > MM_SPEED_LOW_KMH))
+		{
+			PLINK_INFO pstFromLinkInfo = m_pcDataLoader->GetLinkInfo(qwErasedLinkID);
+			if (pstFromLinkInfo != nullptr)
+			{
+				double dfEndRawX = static_cast<double>(pstFromLinkInfo->dwEdNodeX) / 360000.0;
+				double dfEndRawY = static_cast<double>(pstFromLinkInfo->dwEdNodeY) / 360000.0;
+				BridgeNearbyLinkStarts(qwErasedLinkID, dfEndRawX, dfEndRawY,
+					psetSearchHistoryLinkList, plistDepthLinkInfoList, pmapParentLink);
+			}
 		}
 	}
 
 	return (!plistDepthLinkInfoList->empty()) ? true : false;
+}
+
+/**
+ * @brief 막다른 링크 끝점 근처에서 다른 링크의 시작점을 지리적으로 찾아 depth 후보에 추가
+ * @param[in] qwFromLinkID 확장 중이던(막다른) 링크 ID — 자기 자신 제외, 경로 역추적 부모로 기록
+ * @param[in] dfEndRawX/dfEndRawY qwFromLinkID 의 끝 노드 좌표(WGS84, 도 단위 — 미변환 원본)
+ * @param[in,out] psetSearchHistoryLinkList 이미 발견된 링크 목록(중복 방지) — 새로 찾은 링크 추가
+ * @param[out] plistDepthLinkInfoList 새로 찾은 링크를 다음 depth 후보로 추가
+ * @param[out] pmapParentLink 경로 역추적용 — qwFromLinkID 를 거쳐 도달한 것으로 기록
+ * @return void
+ * @remark GRID_SGMT_INFO.wLenFromLink==0 인 세그먼트는 그 링크의 "첫 세그먼트" — 좌표(dwX,dwY)가
+ *   곧 그 링크의 시작 노드 좌표와 같다. BeginMapMatch 의 그리드 반경 탐색과 동일한 GetGridID/
+ *   GetNearGridID 조합을 재사용하되, 전체 매칭 비용 계산 없이 "링크 시작점이 근처에 있는가"만
+ *   가볍게 확인 — 그래프가 막힌 경우에만 호출되므로 평소 매칭 경로엔 비용이 안 붙는다.
+*/
+void CContinueMapMatch::BridgeNearbyLinkStarts(uint64 qwFromLinkID, double dfEndRawX, double dfEndRawY,
+		set<uint64> *psetSearchHistoryLinkList, listDepthLinkInfo *plistDepthLinkInfoList,
+		unordered_map<uint64, uint64> *pmapParentLink)
+{
+	SGMT_MATCH_INPUT stGridInput;
+	stGridInput.stPoint.dfX = dfEndRawX;
+	stGridInput.stPoint.dfY = dfEndRawY;
+	stGridInput.nRadius = static_cast<sint16>(MM_NODE_BRIDGE_MAX_M);
+
+	uint32 dwGridID = m_cGISUtil.GetGridID(stGridInput.stPoint.dfX, stGridInput.stPoint.dfY);
+	if (dwGridID == static_cast<uint32>(INVALID_GRID_ID))
+		return;
+
+	vector<uint32> vtNearGridIDList;
+	vtNearGridIDList.push_back(dwGridID);
+	m_cGISUtil.GetNearGridID(dwGridID, stGridInput, vtNearGridIDList);
+
+	POINT stEndPoint;
+	stEndPoint.dfX = dfEndRawX * 360000.0;
+	stEndPoint.dfY = dfEndRawY * 360000.0;
+
+	set<uint64> setBridgedThisCall;			// 여러 그리드에 걸친 같은 링크 중복 추가 방지
+
+	for (size_t g = 0; g < vtNearGridIDList.size(); ++g)
+	{
+		PGRID_INFO pstGridInfo = m_pcDataLoader->GetGridInfo(vtNearGridIDList[g]);
+		if (!pstGridInfo)
+			continue;
+
+		uint32 dwStart = pstGridInfo->dwSgmtOffset;
+		uint32 dwEnd = dwStart + pstGridInfo->wSgmtCount;
+
+		for (uint32 s = dwStart; s < dwEnd; ++s)
+		{
+			PGRID_SGMT_INFO pstSgmt = m_pcDataLoader->GetGridSgmtInfo(s);
+			if ((!pstSgmt) || (pstSgmt->wLenFromLink != 0))
+				continue;						// 링크의 첫 세그먼트(=시작 노드)만 대상
+
+			if (pstSgmt->qwLinkID == qwFromLinkID)
+				continue;						// 자기 자신 제외
+
+			if (psetSearchHistoryLinkList->find(pstSgmt->qwLinkID) != psetSearchHistoryLinkList->end())
+				continue;						// 이미 발견된 링크
+			if (setBridgedThisCall.find(pstSgmt->qwLinkID) != setBridgedThisCall.end())
+				continue;
+
+			POINT stCandStart;
+			stCandStart.dfX = static_cast<double>(pstSgmt->dwX);
+			stCandStart.dfY = static_cast<double>(pstSgmt->dwY);
+			double dfDistM = m_cGISUtil.GetDistanceGEO1(stEndPoint, stCandStart);
+			if (dfDistM > MM_NODE_BRIDGE_MAX_M)
+				continue;
+
+			PLINK_INFO pstBridgeLinkInfo = m_pcDataLoader->GetLinkInfo(pstSgmt->qwLinkID);
+			if (!pstBridgeLinkInfo)
+				continue;
+
+			DEPTH_LINK_INFO_DATA stDepthLinkInfoData;
+			stDepthLinkInfoData.qwLinkID = pstSgmt->qwLinkID;
+			stDepthLinkInfoData.dwStartTurnOffset = pstBridgeLinkInfo->dwTurnOffset;
+			stDepthLinkInfoData.dwEndTurnOffset = stDepthLinkInfoData.dwStartTurnOffset + pstBridgeLinkInfo->nTurnCount;
+			stDepthLinkInfoData.dwStartSgmtOffset = pstBridgeLinkInfo->dwSgmtOffset;
+			stDepthLinkInfoData.dwEndSgmtOffset = stDepthLinkInfoData.dwStartSgmtOffset + pstBridgeLinkInfo->wSgmtCount;
+
+			if (pmapParentLink != nullptr)
+				(*pmapParentLink)[pstSgmt->qwLinkID] = qwFromLinkID;
+
+			plistDepthLinkInfoList->push_back(stDepthLinkInfoData);
+			setBridgedThisCall.insert(pstSgmt->qwLinkID);
+		}
+	}
+}
+
+/**
+ * @brief 경로 역추적 — mapParentLink 를 최종 확정 링크에서부터 거슬러 올라가며 경유 링크 목록을 만든다
+ * @param[in] qwFinalLinkID 이번에 최종 확정된 링크 ID
+ * @param[in] mapParentLink GetLinkDepthInfo() 가 채운 "링크→그 직전 링크" 맵
+ * @param[out] pvtOut 확장 없이 확정된 경우(최종=시작) 그 링크 1개만, 확장이 있었으면 시작 링크는
+ *   제외하고 경유 링크+최종 링크를 순서대로(시작→끝) 채운다 — 어느 경우든 최소 1개는 담긴다
+ * @return void
+ * @remark 최대 depth 가 config maxstep(작은 값, 보통 2~3)로 제한돼 있어 경로 길이도 그만큼 짧다 (2026-08-20 최정우 추가)
+*/
+void CContinueMapMatch::ReconstructPath(uint64 qwFinalLinkID, const unordered_map<uint64, uint64>& mapParentLink,
+		vector<uint64> *pvtOut)
+{
+	if (pvtOut == nullptr)
+		return;
+	pvtOut->clear();
+
+	vector<uint64> vtReversed;
+	uint64 qwCur = qwFinalLinkID;
+	// mapParentLink 에 없는 링크를 만나면 그게 시작 링크(확장 시작점) — 역추적 종료.
+	//   링크 수만큼(=depth 만큼, 매우 작음) 도는 루프라 무한루프 걱정 없음
+	while (true)
+	{
+		vtReversed.push_back(qwCur);
+		unordered_map<uint64, uint64>::const_iterator it = mapParentLink.find(qwCur);
+		if (it == mapParentLink.end())
+			break;
+		qwCur = it->second;
+	}
+
+	if (vtReversed.size() == 1)
+	{
+		// 확정 링크가 곧 시작 링크(확장 없이 그대로 확정) — 기존 단일 링크 체크와 동일하게
+		//   그 자체 1개만 담는다
+		pvtOut->push_back(vtReversed[0]);
+	}
+	else
+	{
+		// vtReversed 는 [최종, ..., 시작] 순 — 시작 링크(마지막 원소)만 제외하고 뒤집어서 채움
+		for (sint32 i = static_cast<sint32>(vtReversed.size()) - 2; i >= 0; --i)
+			pvtOut->push_back(vtReversed[static_cast<size_t>(i)]);
+	}
 }
 
 /**

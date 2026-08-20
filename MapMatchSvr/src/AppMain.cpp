@@ -175,6 +175,14 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileStr("sql", "trip_end", "", pstConfig->strTripEndUpdateSession);
 	// [sql] abnormal_trip_end (선택, 비어 있으면 비활성) (2026-08-13 최정우 추가)
 	cIniReader.GetProfileStr("sql", "abnormal_trip_end", "", pstConfig->strAbnormalTripEndSession);
+	// [sql] server_status (선택, 비어 있으면 서버 상태 하트비트 비활성) (2026-08-20 최정우 추가)
+	cIniReader.GetProfileStr("sql", "server_status", "", pstConfig->strServerStatusSession);
+	// [server] id — PROC_SERVERSTATUS.SERVER_ID (2026-08-20 최정우 추가)
+	cIniReader.GetProfileStr("server", "id", CFG_DEF_SERVER_ID, pstConfig->strServerId);
+	// [server] status_interval (단위: sec, 0=비활성) (2026-08-20 최정우 추가)
+	cIniReader.GetProfileInt("server", "status_interval", CFG_DEF_STATUS_INTVL, pstConfig->nServerStatusIntervalSec);
+	if (pstConfig->nServerStatusIntervalSec < 0)
+		pstConfig->nServerStatusIntervalSec = CFG_DEF_STATUS_INTVL;
 	// [charge] gate_reload (단위: sec, 0=재조회 없음) (2026-08-12 최정우 추가)
 	cIniReader.GetProfileInt("charge", "gate_reload", CFG_DEF_GATE_RELOAD, pstConfig->nGateReloadSec);
 	if (pstConfig->nGateReloadSec < 0)
@@ -191,6 +199,11 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileInt("charge", "park_regrace", CFG_DEF_PARK_REGRACE, pstConfig->nParkRegraceSec);
 	if (pstConfig->nParkRegraceSec < 0)
 		pstConfig->nParkRegraceSec = CFG_DEF_PARK_REGRACE;
+	// [charge] park_ttl (단위: sec) — 마지막 신뢰(RAW_VLD=true) 확인 후 좌표 없이 강제 마감까지의
+	//   시간(0=비활성) (2026-08-19 최정우 추가)
+	cIniReader.GetProfileInt("charge", "park_ttl", CFG_DEF_PARK_TTL, pstConfig->nParkTtlSec);
+	if (pstConfig->nParkTtlSec < 0)
+		pstConfig->nParkTtlSec = CFG_DEF_PARK_TTL;
 	// [charge] exempt_regrace (단위: sec) — 재진입 유예시간 (2026-08-14 최정우 추가)
 	cIniReader.GetProfileInt("charge", "exempt_regrace", CFG_DEF_EXEMPT_REGRACE, pstConfig->nExemptRegraceSec);
 	if (pstConfig->nExemptRegraceSec < 0)

@@ -145,6 +145,13 @@ typedef struct sSgmtMatchRes
 	bool							bSgmtClamped;						// 수선의 발이 세그먼트 밖이라 끝점(꺾임점)으로 스냅됨 (2026-07-21 최정우 추가 — 클램프 저신뢰 SKIP)
 	bool							bHasHeading;						// 이 포인트에 heading(방위각) 값이 있었는지 — 같은 링크 역행 판정 시
 										//   "확실한 노이즈"와 "판단 불가"를 구분하는 데 사용 (2026-07-22 최정우 추가)
+	// 클램프(꺾임점 스냅)됐지만 heading이 도로 방향과 잘 맞고(각도차 작음) 속도가 충분히 빨라(heading
+	//   신뢰 가능 구간) 신뢰할 수 있는 경우 — 도로가 꺾이는 지점에서 GPS 궤적은 거의 직선인데 도로만
+	//   꺾여 수직거리(INTERSECT_LEN)가 커지는 정상 케이스를, 저신뢰(SKIP)로 잘못 거르지 않기 위한 신호.
+	//   MapMatch.cpp 의 bClampLowConf 최종 판정에서 이 신호가 있으면 SKIP 강등을 취소함
+	//   (2026-08-20 최정우 추가, 사용자 지시 — 실측 데이터로 가상검증: 저신뢰 클램프 9건 중 5건이
+	//   heading 일치+고속 조건으로 구제, 나머지 4건은 저속 중 heading 요동/거리 과다로 계속 SKIP 유지)
+	bool							bClampTrustedByHeading;
 
 	sSgmtMatchRes() :
 		dfSgmtMatchLen(0.0),
@@ -154,7 +161,8 @@ typedef struct sSgmtMatchRes
 		qwLinkID(0),
 		bReverseFit(false),
 		bSgmtClamped(false),
-		bHasHeading(false)
+		bHasHeading(false),
+		bClampTrustedByHeading(false)
 	{}
 } SGMT_MATCH_RES, *PSGMT_MATCH_RES;
 
@@ -183,7 +191,7 @@ public:
 	void GetNearGridID(const uint32& dwGridID, const SGMT_MATCH_INPUT& stSgmtMatchInput, 
 		vector<uint32>& vtNearGridIDList);
 	bool SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtInfo, SGMT_MATCH_RES *pstSgmtMatchRes,
-		bool bIgnoreRadiusCheck = false);
+		bool bIgnoreRadiusCheck = false, bool bIgnoreHeading = false);
 	double CalcAltRoadPenalty(const SGMT_MATCH_INPUT& stSgmtMatchInput, uint8 nCandRoadType,
 		const ALTITUDE_SCORE_CONFIG& stAltConfig) const;
 	sint16 GetAngleDiff(sint16& nAngle1, sint16& nAngle2);

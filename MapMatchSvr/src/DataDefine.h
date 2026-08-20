@@ -172,6 +172,22 @@ typedef struct sAltitudeScoreConfig
 //   (2026-07-21 최정우 추가 — 클램프 저신뢰 SKIP)
 #define MM_CLAMP_SKIP_LEN			10.0								// (단위: m) 클램프+거리 초과 시 SKIP 판정 임계
 
+// 클램프(꺾임점 스냅)됐어도 heading이 도로 방향과 잘 맞으면(MM_CLAMP_HEADING_MAX_DIFF 이내) 위
+//   MM_CLAMP_SKIP_LEN 을 넘는 거리까지도 신뢰(SKIP 강등 취소) — 단 MM_CLAMP_HEADING_SKIP_LEN 은
+//   넘지 않아야 함(이중 안전장치). 속도 조건은 별도 상수 없이 기존 MM_SPEED_HIGH_KMH(heading
+//   가중치가 이미 최대가 되는 속도) 재사용 — 저속에서는 heading 자체가 노이즈라 이 구제를 적용 안 함
+//   (2026-08-20 최정우 추가 — 실측: 저신뢰 클램프 SKIP 9건 중 5건이 이 조건으로 정상 구제됨)
+#define MM_CLAMP_HEADING_MAX_DIFF	30									// (단위: 도) 클램프 신뢰 구제 인정 heading-도로방향 각도차 상한
+#define MM_CLAMP_HEADING_SKIP_LEN	20.0								// (단위: m) heading 일치해도 이 거리를 넘으면 계속 SKIP
+
+// 연속 맵매칭 그래프 확장(TURNINFO)이 막다른 링크(다음 연결 없음)에서 끊길 때, 지리적으로 아주
+//   가까운(반경 이내) 다른 링크의 시작점을 런타임에 찾아 그래프 확장을 이어주는 우회용 임계값(m).
+//   원본 지도 데이터에서 같은 물리적 교차로가 노드ID 미세 오차(수 m)로 서로 다른 노드로 분리돼
+//   TURNINFO 연결이 안 잡힌 경우를 보완 — 지도 바이너리(link.psf)는 그대로 두고 매칭 엔진에서만
+//   보강(2026-08-20 최정우 추가, 사용자 지시 — 실측: node 2040155702/2040155703 간 ~9m 갭이
+//   여러 트립에서 반복적으로 매칭 불안정을 유발하는 것 확인)
+#define MM_NODE_BRIDGE_MAX_M		15.0								// (단위: m) 막다른 링크 끝점↔다른 링크 시작점 브릿지 인정 거리
+
 // 같은 링크 위 역행이 "확실한 노이즈"(heading 정방향 확인 + 오차 작음 + 후보 1개)로 판정되면,
 //   매칭 좌표가 뒤로 밀린 것처럼 보이지 않게 직전 위치보다 이 거리(m)만큼 앞으로 보정한다.
 //   링크 끝(END 노드)을 넘어서면 END 노드 좌표로 클램프 (2026-07-22 최정우 추가)
@@ -220,6 +236,7 @@ typedef struct sMatchEntry
 	bool							bSgmtClamped;						// 세그먼트 끝점(꺾임점) 스냅 — 클램프 저신뢰 SKIP 판정용 (2026-07-21 최정우 추가)
 	bool							bHasHeading;						// heading 값 존재 여부 — 같은 링크 역행 판정 시 노이즈/판단불가 구분용 (2026-07-22 최정우 추가)
 	bool							bAmbiguousReverse;					// 같은 링크 역행인데 heading 없음/애매해 노이즈 단정 불가 — SKIP 처리용 (2026-07-22 최정우 추가)
+	bool							bClampTrustedByHeading;				// 클램프됐어도 heading이 도로방향과 잘 맞고 고속이면 신뢰 — SKIP 강등 취소용 (2026-08-20 최정우 추가)
 	sint16							nDirAngleDiff;						// 주행방향 각도 차이
 	uint64							qwLinkID;							// 링크 ID
 	uint16							wLenFromLink;						// 링크의 시작점에서 부터 매핑된 세그먼트 시작점까지 거리
@@ -251,6 +268,7 @@ typedef struct sMatchEntry
 		bSgmtClamped(false),
 		bHasHeading(false),
 		bAmbiguousReverse(false),
+		bClampTrustedByHeading(false),
 		nDirAngleDiff(0),
 		qwLinkID(0),
 		wLenFromLink(0),

@@ -35,11 +35,23 @@ WHERE
 
 -- ── 1. 조회 + 예약(Reserve) ────────────────────────────────────────────────
 -- [rawgps_select] PENDING(0) → PROCESSING(2) 예약, RETURNING 으로 행 반환
--- 제외: RAW_VLD<>TRUE 뿐. DRIVE_STATUS 는 0(ON_ROAD)/1(IDLE)/2(PARKED)/3(TUNNELING)/4(OFF_ROAD)
---   전부 맵매칭 대상(2026-08-13 최정우 수정 — 이전엔 DRIVE_STATUS=1(IDLE) 만 제외했었음. 서행
---   구간(IDLE)이 맵매칭·주정차 판정에서 통째로 안 보이는 문제가 있어 사용자 지시로 제외 조건
---   삭제 — "모든 맵 매칭 시 DRIVE_STATUS 에서 0/1/2 는 포함되어야 한다")
+-- 제외 조건 없음 — RAW_VLD 도 값과 무관하게 전부 선택 대상(2026-08-19 최정우 수정). 이전엔
+--   WHERE 에 RAW_VLD IS TRUE 를 둬서 RAW_VLD=false 행은 애초에 조회·예약이 안 됐음 — 그 결과
+--   RawLogWorker::ShouldSkipGpsInput() 이 RAW_VLD=false 를 SKIP(3) 처리하는 로직이 이미
+--   있는데도 그 행들이 이 함수까지 도달하지 못해 죽은 코드였고, 해당 행은 영원히 PENDING(0)에
+--   갇혀 trip 이 완료돼도(END 도달) "진행중"으로 잘못 표시되는 원인이었음(실측: END 행 자체가
+--   RAW_VLD=false 인 trip 은 세션 종료 처리조차 못 받음). 이제 RAW_VLD=false 행도 선택해와서
+--   ShouldSkipGpsInput() 이 정상적으로 SKIP 처리하게 함.
+-- DRIVE_STATUS 는 0(ON_ROAD)/1(IDLE)/2(PARKED)/3(TUNNELING)/4(OFF_ROAD) 전부 맵매칭 대상
+--   (2026-08-13 최정우 수정 — 이전엔 DRIVE_STATUS=1(IDLE) 만 제외했었음. 서행 구간(IDLE)이
+--   맵매칭·주정차 판정에서 통째로 안 보이는 문제가 있어 사용자 지시로 제외 조건 삭제 —
+--   "모든 맵 매칭 시 DRIVE_STATUS 에서 0/1/2 는 포함되어야 한다")
 -- $1 = LIMIT
+-- 2026-08-18 최정우 수정 — 한때 TRIP_ID를 DEVICE_KEY_{시각} 형식으로 여기서 보정했었으나,
+--   RawLogWorker::IsValidTripIdForDevice() 의 검증 기준 자체가 CAR_SEQ_NO(6자리 숫자)_{시각}
+--   형식을 요구하도록 바뀌어(같은 날 수정) 방향이 반대가 됨 — 그 보정 로직을 남겨두면 유효한
+--   CAR_SEQ_NO 형식을 오히려 무효한 DEVICE_KEY 형식으로 바꿔버리는 역효과가 나서 제거함.
+--   원본(보정 없는) 형태로 되돌림.
 [rawgps_select]
 UPDATE RUC.PRIM_RAWGPS AS U
 SET
@@ -48,7 +60,6 @@ FROM (
 	SELECT TRIP_ID, GPS_SEQ
 	FROM RUC.PRIM_RAWGPS
 	WHERE MATCH_STATUS = 0
-	  AND RAW_VLD IS TRUE
 	ORDER BY DEVICE_KEY ASC, TRIP_ID ASC, GPS_DT ASC, GPS_SEQ ASC
 	LIMIT $1
 	FOR UPDATE SKIP LOCKED
@@ -201,10 +212,15 @@ ORDER BY ROAD_ID ASC;
 -- [charge_insert] PRIM_CHARGEHAND — CRawLogWorker::BulkInsertCharges() 가 실행 (2026-08-12 최정우 추가)
 -- 개방형·폐쇄형·구간단속·주정차 4유형 공용 — 폐쇄형은 DIST_M/ENTRY_TOLLGATE_ID/EXIT_TOLLGATE_ID 도 채움,
 -- 주정차는 DIST_M(누적거리)/SPEED_KMH(평균속도) 채우고 CHARGE_YN='Y'/CHARGE_STATUS='0' 고정 (2026-08-13 최정우 수정)
+-- 2026-08-20 최정우 수정 — FROM_ID/TO_ID/FROM_LAT/FROM_LON/TO_LAT/TO_LON 6개 컬럼 NOT NULL 해제
+-- (사용자 지시 — 폐쇄형/구간단속 미완료(AUDIT) 건은 출구 쪽 아는 값이 없는데 억지로 ''/0 을 넣던
+-- 것을 진짜 NULL로 저장하도록). RawLogWorker.cpp 는 모르는 값이면 빈 문자열("")을 넘기고, 여기서
+-- NULLIF(...,'')로 그 빈 문자열을 NULL로 변환 — FROM_LAT 등 NUMERIC 컬럼은 캐스팅 전에 먼저
+-- NULLIF 를 걸어야 함(빈 문자열을 바로 ::NUMERIC 캐스팅하면 에러가 남).
 -- 파라미터 순서(RawLogWorker.cpp CHARGE_INSERT_ROW/BulkInsertCharges() 와 반드시 일치):
 --   $1=TRIP_ID[] $2=DEVICE_KEY[] $3=TRIP_SEQ[] $4=CHARGE_TYPE[](1=OPEN_ROAD/2=CLOSED_ROAD) $5=CHARGE_UNIT[](0=NODE/1=LINK,실측 확인)
---   $6=LINK_ID[](실측상 항상 빈값) $7=FROM_ID[] $8=TO_ID[] $9=FROM_LAT[] $10=FROM_LON[]
---   $11=TO_LAT[] $12=TO_LON[] $13=ZONE_ID[] $14=ZONE_NAME[] $15=DIST_M[](개방형은 빈값) $16=SPEED_KMH[](계산 불가 시 빈값)
+--   $6=LINK_ID[](실측상 항상 빈값) $7=FROM_ID[](모르면 NULL) $8=TO_ID[](모르면 NULL) $9=FROM_LAT[](모르면 NULL) $10=FROM_LON[](모르면 NULL)
+--   $11=TO_LAT[](모르면 NULL) $12=TO_LON[](모르면 NULL) $13=ZONE_ID[] $14=ZONE_NAME[] $15=DIST_M[](개방형은 빈값) $16=SPEED_KMH[](계산 불가 시 빈값)
 --   $17=SPEED_LIMIT_KMH[] $18=OCCUR_DT[] $19=TRIP_START_DT[] $20=TOLLGATE_ID[](실측상 항상 빈값)
 --   $21=ENTRY_TOLLGATE_ID[](폐쇄형 전용, 개방형은 빈값) $22=EXIT_TOLLGATE_ID[](폐쇄형 전용) $23=REG_DT[] $24=UPD_DT[](REG_DT와 항상 동일)
 --   $25=CHARGE_YN[](빈값=DB기본 Y, 폐쇄형 입/출구 게이트 이상 시 "N") $26=CHARGE_STATUS[](빈값=DB기본 0, 이상 시 "4"=SKIP)
@@ -226,12 +242,12 @@ SELECT
 	U.CHARGE_TYPE::SMALLINT,
 	U.CHARGE_UNIT::SMALLINT,
 	NULLIF(U.LINK_ID, ''),
-	U.FROM_ID,
-	U.TO_ID,
-	U.FROM_LAT::NUMERIC,
-	U.FROM_LON::NUMERIC,
-	U.TO_LAT::NUMERIC,
-	U.TO_LON::NUMERIC,
+	NULLIF(U.FROM_ID, ''),
+	NULLIF(U.TO_ID, ''),
+	NULLIF(U.FROM_LAT, '')::NUMERIC,
+	NULLIF(U.FROM_LON, '')::NUMERIC,
+	NULLIF(U.TO_LAT, '')::NUMERIC,
+	NULLIF(U.TO_LON, '')::NUMERIC,
 	NULLIF(U.ZONE_ID, ''),
 	NULLIF(U.ZONE_NAME, ''),
 	CASE WHEN U.DIST_M <> '' THEN U.DIST_M::INTEGER ELSE 0 END,
@@ -265,16 +281,27 @@ ON CONFLICT (trip_id, device_key, trip_seq) DO NOTHING;
 -- [trip_end] TRIP_EVENT=2 감지 시 CRawLogWorker::UpdateTripEndDt() 가 실행 (2026-08-12 최정우 추가)
 -- 과금 INSERT 는 게이트 통과 즉시(트립 종료 전) 발생하므로 trip_end_dt 는 그 시점에 알 수
 -- 없음 — 트립이 실제로 끝날 때 해당 trip_id 의 PRIM_CHARGEHAND 전 행에 반영.
+-- 2026-08-20 최정우 수정 — 같은 trip_id 에 END 신호가 두 번 이상 와서 $1~$3 배열에 같은
+-- TRIP_ID 가 여러 번 들어오면(원본 GPS에 END 이벤트가 중복·순서뒤섞임으로 두 번 온 실측 케이스로
+-- 확인됨), 원래 쿼리는 UPDATE...FROM 에 같은 T 행에 매칭되는 V 행이 여러 개일 때 어느 게
+-- 반영될지 명세상 정해져 있지 않아(PostgreSQL 공식 문서 — "unspecified which one is used"),
+-- 배치 타이밍에 따라 더 이른 END 값이 남는 경우가 실측됨(나중 값이 이긴다는 보장이 없었음).
+-- 아래 서브쿼리로 (1) 배열 안에서부터 trip_id 별 가장 늦은 TRIP_END_DT 만 골라 쓰고(DISTINCT ON),
+-- (2) 이미 저장된 TRIP_END_DT 보다 늦을 때만 반영하도록(WHERE) 이중으로 보장 — 배치가 나뉘어
+-- 여러 번 호출돼도, 어떤 순서로 오든 항상 "가장 늦은 종료 시각"만 최종 반영됨.
 -- $1=TRIP_ID[] $2=TRIP_END_DT[] $3=UPD_DT[]
 [trip_end]
 UPDATE RUC.PRIM_CHARGEHAND AS T
 SET
 	TRIP_END_DT = V.TRIP_END_DT,
 	UPD_DT = V.UPD_DT
-FROM UNNEST(
-	$1::TEXT[], $2::TEXT[], $3::TEXT[]
-) AS V(TRIP_ID, TRIP_END_DT, UPD_DT)
-WHERE T.TRIP_ID = V.TRIP_ID;
+FROM (
+	SELECT DISTINCT ON (TRIP_ID) TRIP_ID, TRIP_END_DT, UPD_DT
+	FROM UNNEST($1::TEXT[], $2::TEXT[], $3::TEXT[]) AS U(TRIP_ID, TRIP_END_DT, UPD_DT)
+	ORDER BY TRIP_ID, TRIP_END_DT DESC
+) AS V
+WHERE T.TRIP_ID = V.TRIP_ID
+	AND (T.TRIP_END_DT IS NULL OR V.TRIP_END_DT > T.TRIP_END_DT);
 
 -- ── 7. 세션 TTL 만료(비정상 종료) 시 미확정 레코드 마감(5유형 공용) ─────────
 -- [trip_abnormal_end] CRawLogWorker::UpdateAbnormalTripEnd() 가 ExpireTtlSessions() 안에서
@@ -303,3 +330,18 @@ FROM UNNEST(
 	$1::TEXT[], $2::TEXT[], $3::TEXT[]
 ) AS V(TRIP_ID, TRIP_END_DT, UPD_DT)
 WHERE T.TRIP_ID = V.TRIP_ID AND T.TRIP_END_DT IS NULL;
+
+-- [server_status_update] CServer::UpdateServerStatus() 가 [server] status_interval(기본
+--   600초=10분) 주기로 실행 — 이 서버(SERVER_ID=[server] id, 기본 "location") 1행만 갱신.
+--   $1=SERVER_ID, $2=CPU_PCT, $3=MEM_PCT, $4=MEM_USED_MB, $5=MEM_TOTAL_MB
+--   (2026-08-20 최정우 추가)
+[server_status_update]
+UPDATE RUC.PROC_SERVERSTATUS
+SET
+	CPU_PCT = $2::NUMERIC,
+	MEM_PCT = $3::NUMERIC,
+	MEM_USED_MB = $4::INTEGER,
+	MEM_TOTAL_MB = $5::INTEGER,
+	HB_DT = NOW(),
+	UPD_DT = NOW()
+WHERE SERVER_ID = $1;

@@ -158,24 +158,3 @@ enum ETHREAD_STATE CThread::GetState()
 	return m_nState;
 }
 
-/**
- * @brief 입력 값 증가
- * @param[in] val 정수형 입력 값
- * @return 증가된 값
- * @remark 디버깅용
-*/
-long CThread::InterlockedIncrement(volatile long *val)
-{
-	return ++(*val);
-}
-
-/**
- * @brief 입력 값 감소
- * @param[in] val 정수형 입력 값
- * @return 감소된 값
- * @remark 디버깅용
-*/
-long CThread::InterlockedDecrement(volatile long *val)
-{
-	return --(*val); // 비안전
-}

@@ -162,7 +162,9 @@ bool CBeginMapMatch::GridSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, uint32
 		stSgmtInfo.qwLinkID = pstGridSgmtInfo->qwLinkID;
 
 		// INTERSECT_LEN(GPS↔세그먼트 교차점 거리)·방위 비용 매칭 (2026-07-08 최정우 주석 추가)
-		if (!m_cGISUtil.SgmtMatch(stSgmtMatchInput, stSgmtInfo, &stSgmtMatchRes))
+		// BEGIN 매칭 각도 미참조 실험(2026-08-19 최정우 임시) — bIgnoreHeading=true 로 heading
+		//   하드컷·소프트 비용 전부 미적용, 거리(INTERSECT_LEN)만으로 후보 판정
+		if (!m_cGISUtil.SgmtMatch(stSgmtMatchInput, stSgmtInfo, &stSgmtMatchRes, false, true))
 			continue;
 
 		// 매칭 성공이면 링크 정보
@@ -177,6 +179,7 @@ bool CBeginMapMatch::GridSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, uint32
 		stMatchEntry.dfIntersectLenSgmt = stSgmtMatchRes.dfIntersectLenSgmt;
 		stMatchEntry.bSgmtClamped = stSgmtMatchRes.bSgmtClamped;			// 세그먼트 끝점 스냅 여부 (2026-07-21 최정우 추가)
 		stMatchEntry.bHasHeading = stSgmtMatchRes.bHasHeading;				// heading 값 존재 여부 (2026-07-22 최정우 추가)
+		stMatchEntry.bClampTrustedByHeading = stSgmtMatchRes.bClampTrustedByHeading;	// 클램프+heading 신뢰 구제 신호 (2026-08-20 최정우 추가)
 		stMatchEntry.dfCost = stSgmtMatchRes.dfCost;		// 소프트 비용(INTERSECT_LEN+방위각) → sort 선택 기준 (2026-07-08 최정우 추가)
 		stMatchEntry.dfAngleCost = stSgmtMatchRes.dfCost - stSgmtMatchRes.dfIntersectLenSgmt;
 		stMatchEntry.dfAltAdj = 0.0;
@@ -267,6 +270,7 @@ bool CBeginMapMatch::GridSgmtGeomNearest(SGMT_MATCH_INPUT& stSgmtMatchInput, uin
 		stMatchEntry.dfIntersectLenSgmt = stSgmtMatchRes.dfIntersectLenSgmt;
 		stMatchEntry.bSgmtClamped = stSgmtMatchRes.bSgmtClamped;			// 세그먼트 끝점 스냅 여부 (2026-07-21 최정우 추가)
 		stMatchEntry.bHasHeading = stSgmtMatchRes.bHasHeading;				// heading 값 존재 여부 (2026-07-22 최정우 추가)
+		stMatchEntry.bClampTrustedByHeading = stSgmtMatchRes.bClampTrustedByHeading;	// 클램프+heading 신뢰 구제 신호 (2026-08-20 최정우 추가)
 		stMatchEntry.dfCost = stSgmtMatchRes.dfCost;
 		stMatchEntry.dfAngleCost = stSgmtMatchRes.dfCost - stSgmtMatchRes.dfIntersectLenSgmt;
 		stMatchEntry.dfAltAdj = 0.0;

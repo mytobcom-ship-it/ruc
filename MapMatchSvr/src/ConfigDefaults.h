@@ -56,7 +56,11 @@
 #define CFG_DEF_PARK_BUF			15									// [charge]	park_buf (단위: m) — 구역판정 버퍼 상한(ACCURACY_M 캡) (2026-08-13 최정우 추가)
 #define CFG_DEF_PARK_EXITCNT		3									// [charge]	park_exitcnt — 구역 이탈 확정 연속 GPS 건수(디바운스) (2026-08-13 최정우 추가)
 #define CFG_DEF_PARK_REGRACE		60									// [charge]	park_regrace (단위: sec) — 재진입 유예시간 (2026-08-14 최정우 추가)
+#define CFG_DEF_PARK_TTL			90									// [charge]	park_ttl (단위: sec) — 마지막 신뢰(RAW_VLD=true) 확인 후 좌표 없이 강제 마감까지의 시간 (2026-08-19 최정우 추가)
 #define CFG_DEF_EXEMPT_REGRACE		60									// [charge]	exempt_regrace (단위: sec) — 재진입 유예시간 (2026-08-14 최정우 추가)
+
+#define CFG_DEF_SERVER_ID			"location"							// [server]	id — PROC_SERVERSTATUS.SERVER_ID (2026-08-20 최정우 추가)
+#define CFG_DEF_STATUS_INTVL		600									// [server]	status_interval (단위: sec, 0=비활성) — CPU/메모리 하트비트 주기 (2026-08-20 최정우 추가)
 
 #endif //__CONFIG_DEFAULTS_H__
 

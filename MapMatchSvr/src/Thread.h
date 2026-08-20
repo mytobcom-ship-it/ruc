@@ -53,8 +53,6 @@ public:
 	void detach();
 	void join();
 	enum ETHREAD_STATE GetState();
-	static long InterlockedIncrement(volatile long *val);
-	static long InterlockedDecrement(volatile long *val);
 
 protected:
 	pthread_t					m_hHandle;

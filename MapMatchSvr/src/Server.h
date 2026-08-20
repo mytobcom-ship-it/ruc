@@ -67,6 +67,10 @@ private:
 	virtual void run();
 	void LogMonitorStatus(time_t dtNow);
 	void WaitForNextCycle();
+	// 서버 상태(CPU/메모리) 하트비트 — PROC_SERVERSTATUS 주기 UPDATE (2026-08-20 최정우 추가)
+	void UpdateCpuSample();
+	bool GetMemInfo(int& nUsedMB, int& nTotalMB, double& dfMemPct);
+	void UpdateServerStatus();
 
 private:
 	CPostgrePool					*m_pcPostgrePool;					// PostgreSQL DB 커넥션 풀
@@ -113,7 +117,16 @@ private:
 	int								m_nParkBuf;							// [charge] park_buf — 구역판정 버퍼 상한(m) (2026-08-13 최정우 추가)
 	int								m_nParkExitCnt;						// [charge] park_exitcnt — 구역 이탈 확정 연속 GPS 건수(디바운스) (2026-08-13 최정우 추가)
 	int								m_nParkRegraceSec;					// [charge] park_regrace — 재진입 유예시간(초) (2026-08-14 최정우 추가)
+	int								m_nParkTtlSec;						// [charge] park_ttl — 마지막 신뢰 확인 후 강제 마감까지의 시간(초) (2026-08-19 최정우 추가)
 	int								m_nExemptRegraceSec;				// [charge] exempt_regrace — 재진입 유예시간(초) (2026-08-14 최정우 추가)
+	string							m_strServerStatusSQL;				// 서버 상태 하트비트 UPDATE SQL, 비어 있으면 비활성 (2026-08-20 최정우 추가)
+	string							m_strServerId;						// [server] id — PROC_SERVERSTATUS.SERVER_ID (2026-08-20 최정우 추가)
+	int								m_nServerStatusIntervalSec;			// [server] status_interval — 하트비트 주기(초, 0=비활성) (2026-08-20 최정우 추가)
+	time_t							m_dtLastServerStatusUpdate;			// 마지막 하트비트 반영 시각 (2026-08-20 최정우 추가)
+	unsigned long long				m_qwPrevCpuTotal;					// 직전 /proc/stat 샘플 — CPU 총합 tick (2026-08-20 최정우 추가)
+	unsigned long long				m_qwPrevCpuIdle;					// 직전 /proc/stat 샘플 — CPU idle tick (2026-08-20 최정우 추가)
+	double							m_dfLastCpuPct;						// 가장 최근 계산된 CPU 사용률(%) — 1초 주기 샘플링, 하트비트 시점에 최신값 사용 (2026-08-20 최정우 추가)
+	bool							m_bCpuSampleValid;					// m_qwPrevCpu* 유효 여부(최초 1회는 델타 계산 불가) (2026-08-20 최정우 추가)
 	int								m_nFetchLimit;						// 1회 조회·예약 최대 건수 (건)
 	int								m_nFetchInterval;					// 큐 여유 시 DB 조회 간격 (ms)
 	int								m_nQueuePauseCount;					// 큐 batch 수, 이상이면 DB 조회 중단 (건)

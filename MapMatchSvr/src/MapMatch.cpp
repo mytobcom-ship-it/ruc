@@ -189,6 +189,11 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 	// 연속 맵매칭 시작
 	SGMT_MATCH_INPUT stSgmtMatchInput;
 	MATCH_ENTRY stMatchEntry;
+	// 직전 확정 링크부터 이번 확정 링크까지 실제 경유한 링크 목록 — 게이트/구역 판정용
+	//   (2026-08-20 최정우 추가). 아래 Begin 대체 분기에서 Begin이 채택되면 무효화됨
+	//   (Begin은 그래프 경로 개념이 없어 경유 링크를 모름 — bUsedContinuePath 로 표시)
+	vector<uint64> vtContinuePath;
+	bool bUsedContinuePath = true;
 
 	stSgmtMatchInput.stPoint.dfX = dfX;
 	stSgmtMatchInput.stPoint.dfY = dfY;
@@ -211,7 +216,7 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 	stSgmtMatchInput.dfPrevMatchY = stMapMatchInput.dfPrevMatchY;
 
 	// 연속(링크 그래프) 맵매칭 엔진 호출 (2026-07-08 최정우 주석 추가)
-	if (!m_cContinueMapMatch.StartMapMatch(m_pcDataLoader, stSgmtMatchInput, qwLinkID, nSearchStep, &wErrorCode, &stMatchEntry, pstTraceCtx))
+	if (!m_cContinueMapMatch.StartMapMatch(m_pcDataLoader, stSgmtMatchInput, qwLinkID, nSearchStep, &wErrorCode, &stMatchEntry, pstTraceCtx, &vtContinuePath))
 	{
 		pstMatchLinkInfo->wErrorCode = wErrorCode;
 		// 에러 코드에 대응하는 메시지 문자열 조회 (2026-07-08 최정우 주석 추가)
@@ -246,11 +251,25 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 			&& (stBeginMatchEntry.dfCost < stMatchEntry.dfCost))
 		{
 			stMatchEntry = stBeginMatchEntry;
+			bUsedContinuePath = false;		// Begin 채택 — Continue 경유 경로는 무효 (2026-08-20 최정우 추가)
 		}
 	}
 
 	// 매칭 결과를 응답 구조체로 변환·좌표 역스케일 (2026-07-08 최정우 주석 추가)
-	return SetResponseValue(wErrorCode, stMatchEntry, pstMatchLinkInfo);
+	if (!SetResponseValue(wErrorCode, stMatchEntry, pstMatchLinkInfo))
+		return false;
+
+	// SetResponseValue가 채운 기본 경로(최종 링크 1개)를, Continue가 실제 경유한 전체 경로로 교체
+	//   (2026-08-20 최정우 추가) — 배열 크기(MATCH_LINK_INFO_MAX_PATH) 초과분은 자름
+	if (bUsedContinuePath && !vtContinuePath.empty())
+	{
+		uint8 nCount = static_cast<uint8>(vtContinuePath.size() < MATCH_LINK_INFO_MAX_PATH ? vtContinuePath.size() : MATCH_LINK_INFO_MAX_PATH);
+		for (uint8 i = 0; i < nCount; i++)
+			pstMatchLinkInfo->aqwPathLinkIDs[i] = vtContinuePath[i];
+		pstMatchLinkInfo->nPathLinkCount = nCount;
+	}
+
+	return true;
 }
 
 /**
@@ -374,6 +393,12 @@ bool CMapMatch::SetResponseValue(uint16 wErrorCode, MATCH_ENTRY stMatchEntry,
 		pstMatchLinkInfo->dfEdNodeX			= stMatchEntry.dfEdNodeX / 360000.0;
 		pstMatchLinkInfo->dfEdNodeY			= stMatchEntry.dfEdNodeY / 360000.0;
 		pstMatchLinkInfo->nEdNodeType		= stMatchEntry.nEdNodeType;
+		// 경로(경유 링크) 기본값 — 링크 1개(qwLinkID) 뿐인 것으로 설정. Continue 매칭이 실제
+		//   경유 링크가 더 있으면 CMapMatch::ContinueMapMatch() 가 호출 후 이 값을 덮어씀.
+		//   Begin 매칭·경계선 경유가 없는 Continue 매칭·Begin으로 대체된 경우는 이 기본값 그대로
+		//   사용(항상 최소 1개는 채워짐) (2026-08-20 최정우 추가)
+		pstMatchLinkInfo->aqwPathLinkIDs[0] = stMatchEntry.qwLinkID;
+		pstMatchLinkInfo->nPathLinkCount = 1;
 		// 위치 역행 + heading 역방향 일치 — 연속역행(reverse_confirm) 스트릭 판정 전용 (2026-07-21 최정우 추가)
 		pstMatchLinkInfo->bReverseSuspect	= stMatchEntry.bReverseSuspect;
 		// 최종 확정 후보가 세그먼트 끝점(꺾임점)에 스냅됐고 GPS와 거리가 먼 경우 — 여러 GPS_SEQ 가
@@ -382,7 +407,11 @@ bool CMapMatch::SetResponseValue(uint16 wErrorCode, MATCH_ENTRY stMatchEntry,
 		//   판정한 신호라, 링크 전체 시작/끝이 아니라도(링크 중간 꺾임점) 잡힌다 — IsBoundaryClamped
 		//   (ContinueMapMatch, 링크 전체 기준)와는 다른 신호이니 혼동 주의 (2026-07-21 최정우 추가)
 		pstMatchLinkInfo->bClampLowConf = stMatchEntry.bSgmtClamped
-			&& (stMatchEntry.dfIntersectLenSgmt > MM_CLAMP_SKIP_LEN);
+			&& (stMatchEntry.dfIntersectLenSgmt > MM_CLAMP_SKIP_LEN)
+			&& !stMatchEntry.bClampTrustedByHeading;
+		// bClampTrustedByHeading — heading이 도로 방향과 잘 맞고 고속이면(GISUtil::SgmtMatch 판정)
+		//   위 거리 초과여도 SKIP 강등을 취소 — 도로가 꺾이는 구간에서 GPS 궤적은 거의 직선인데
+		//   도로만 꺾여 INTERSECT_LEN이 커지는 정상 케이스 구제 (2026-08-20 최정우 추가)
 		// 같은 링크 역행인데 heading 없음/애매해 노이즈 단정 불가 — SKIP 격리용 (2026-07-22 최정우 추가)
 		pstMatchLinkInfo->bAmbiguousReverse = stMatchEntry.bAmbiguousReverse;
 	}

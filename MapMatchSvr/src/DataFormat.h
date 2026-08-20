@@ -174,6 +174,7 @@ typedef struct sLinkInfoData
 	uint32							dwEdNodeX;							// 종료 노드 X
 	uint32							dwEdNodeY;							// 종료 노드 Y
 	uint8							nEdNodeType;						// 종료 노드 속성[3]
+	uint64							qwOppositeLinkID;					// 반대방향(왕복분리) 짝 링크 ID, 0=없음 (2026-08-19 최정우 추가)
 } LINK_INFO_DATA, *PLINK_INFO_DATA;
 
 #define LINK_INFO_DATA_SIZE												sizeof(LINK_INFO_DATA)
@@ -208,6 +209,7 @@ typedef struct sLinkInfo
 	uint32							dwEdNodeX;							// 종료 노드 X
 	uint32							dwEdNodeY;							// 종료 노드 Y
 	uint8							nEdNodeType;						// 종료 노드 속성
+	uint64							qwOppositeLinkID;					// 반대방향(왕복분리) 짝 링크 ID, 0=없음 (2026-08-19 최정우 추가)
 } LINK_INFO, *PLINK_INFO;
 
 #define LINK_INFO_SIZE													sizeof(LINK_INFO)

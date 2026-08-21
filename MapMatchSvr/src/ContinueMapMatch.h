@@ -33,13 +33,21 @@ typedef struct sDepthLinkInfoData
 	uint32							dwEndTurnOffset;					// 연결 링크 회전 정보 종료 Offset
 	uint32							dwStartSgmtOffset;					// 시작 세그먼트 Offset
 	uint32							dwEndSgmtOffset;					// 종료 세그먼트 Offset
+	// true = TURNINFO(실제 도로 연결)가 아니라 BridgeNearbyLinkStarts 의 순수 좌표 근접(MM_NODE_BRIDGE_MAX_M
+	//   이내)으로 찾은 후보 — 진짜 그래프 연결 후보와 경합 시 위상 우선순위(MM_GEOM_BRIDGE_PENALTY)를
+	//   적용하는 데 사용한다. 실제 인접 노드가 물리적으로도 가까운 인터체인지/램프 구간에서, 서로
+	//   무관한(반대방향 등) 노드가 우연히 근접해 있으면 순수 거리비용만으로 잘못 채택되는 사례 확인
+	//   (trip 000376_20260819094414 seq54 — 2040425201 은 2040424301 과 TURNINFO 무관, 좌표만 근접)
+	//   (2026-08-21 최정우 추가)
+	bool							bGeometricBridge;
 
 	sDepthLinkInfoData() :
-		qwLinkID(0), 
-		dwStartTurnOffset(0), 
-		dwEndTurnOffset(0), 
-		dwStartSgmtOffset(0), 
-		dwEndSgmtOffset(0)
+		qwLinkID(0),
+		dwStartTurnOffset(0),
+		dwEndTurnOffset(0),
+		dwStartSgmtOffset(0),
+		dwEndSgmtOffset(0),
+		bGeometricBridge(false)
 	{}
 } DEPTH_LINK_INFO_DATA, *PDEPTH_LINK_INFO_DATA;
 
@@ -62,9 +70,15 @@ public:
 	//   1개"만이 아니라 그 사이 모든 경유 링크를 확인할 수 있도록 제공한다. GPS 수신 주기가
 	//   늘어나 포인트 간 이동거리가 커지면, 짧은 게이트 링크가 두 GPS 포인트 사이에 통째로
 	//   끼어 어느 쪽에도 직접 매칭 안 되는 경우가 있어 이걸로 보완한다 (2026-08-20 최정우 추가)
+	// psetSearchHistoryLinkID(선택) — depth 탐색(maxstep 이내)으로 실제 방문한 전체 링크 UID
+	//   집합 — CMapMatch::ContinueMapMatch()가 "각도비용 상한 도달 시 Begin 병행 재탐색" 폴백에서,
+	//   Begin이 찾은 후보가 진짜 갈림길(형제) 링크인지(=이 집합에 있음) 아니면 그래프상 전혀
+	//   무관한 링크인지(=이 집합에 없음) 판별하는 데 사용한다 — 별도 거리 임계값 없이 기존
+	//   maxstep 탐색 결과를 그대로 재사용 (2026-08-21 최정우 추가)
 	bool StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& stSgmtMatchInput,
 		uint64& qwLinkID, sint16& nSearchStep, uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry,
-		PMATCH_TRACE_CTX pstTraceCtx = nullptr, vector<uint64> *pvtPathLinkIDs = nullptr);
+		PMATCH_TRACE_CTX pstTraceCtx = nullptr, vector<uint64> *pvtPathLinkIDs = nullptr,
+		set<uint64> *psetSearchHistoryLinkID = nullptr);
 
 private:
 	bool LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,

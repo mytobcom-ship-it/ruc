@@ -37,11 +37,15 @@ void CContinueMapMatch::SetAltitudeConfig(const ALTITUDE_SCORE_CONFIG& stAltConf
  * @param[in] nSearchStep 탐색할 단계 (0~5)
  * @param[out] pwErrorCode 에러 코드
  * @param[out] pstMatchEntry 검색 정보
+ * @param[out] psetSearchHistoryLinkID (선택) depth 탐색(maxstep 이내)으로 실제 방문한 전체
+ *   링크 UID 집합 — CMapMatch::ContinueMapMatch()가 Begin 병행폴백 후보의 "진짜 갈림길" 여부
+ *   판별에 사용 (2026-08-21 최정우 추가)
  * @return true(성공), false(실패)
 */
 bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& stSgmtMatchInput,
 		uint64& qwLinkID, sint16& nSearchStep, uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry,
-		PMATCH_TRACE_CTX pstTraceCtx, vector<uint64> *pvtPathLinkIDs)
+		PMATCH_TRACE_CTX pstTraceCtx, vector<uint64> *pvtPathLinkIDs,
+		set<uint64> *psetSearchHistoryLinkID)
 {
 	// 경로 역추적용 — 새로 발견된 링크가 어느 링크를 거쳐 도달했는지 기록 (2026-08-20 최정우 추가)
 	unordered_map<uint64, uint64> mapParentLink;
@@ -57,6 +61,12 @@ bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPU
 	// 검색된 목록 저장 (중복 검사 처리용) — 링크 ID는 uint64(2026-08-14 최정우 수정, set<uint32>였던
 	//   걸 원복 — "소스상 문제" 검토 중 발견, BeginMapMatch 의 동일 목적 집합은 원래부터 set<uint64>)
 	set<uint64> setSearchHistoryLinkList;
+	// psetSearchHistoryLinkID 로 밖에 노출하는 목록 — setSearchHistoryLinkList 와 달리 BridgeNearbyLinkStarts
+	//   로 찾은(TURNINFO 아닌 좌표 근접) 링크는 제외한다. Begin 폴백 화이트리스트 목적(진짜 갈림길
+	//   형제 판별)에는 좌표만 근접한 링크까지 "탐색해봤다"고 인정하면 안 되기 때문 — 실측 확인
+	//   (trip 000376_20260819094414 seq54, 2040425201 이 브릿지로 setSearchHistoryLinkList 에는
+	//   들어가 화이트리스트를 통과, Begin 폴백에서 다시 채택되던 문제) (2026-08-21 최정우 추가)
+	set<uint64> setGenuineSearchHistoryLinkList;
 
 	// 연결 링크 목록
 	listDepthLinkInfo listDepthLinkInfoList;
@@ -114,6 +124,9 @@ bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPU
 
 			// 검색된 목록 저장 (중복 검사 처리용)
 			setSearchHistoryLinkList.insert(it->qwLinkID);
+			// 화이트리스트 노출용 — 좌표 근접 브릿지 링크는 제외 (2026-08-21 최정우 추가)
+			if (!it->bGeometricBridge)
+				setGenuineSearchHistoryLinkList.insert(it->qwLinkID);
 		}
 
 		// 이번 depth 후보를 누적 목록에 병합 (2026-07-15 최정우 수정)
@@ -142,6 +155,8 @@ bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPU
 				GetMatchEntry(&listAllEntryList, pstMatchEntry, pstTraceCtx, stSgmtMatchInput);
 				if (pvtPathLinkIDs != nullptr)
 					ReconstructPath(pstMatchEntry->qwLinkID, mapParentLink, pvtPathLinkIDs);
+				if (psetSearchHistoryLinkID != nullptr)
+					*psetSearchHistoryLinkID = setGenuineSearchHistoryLinkList;
 				return true;
 			}
 		}
@@ -161,6 +176,8 @@ bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPU
 				GetMatchEntry(&listAllEntryList, pstMatchEntry, pstTraceCtx, stSgmtMatchInput);
 				if (pvtPathLinkIDs != nullptr)
 					ReconstructPath(pstMatchEntry->qwLinkID, mapParentLink, pvtPathLinkIDs);
+				if (psetSearchHistoryLinkID != nullptr)
+					*psetSearchHistoryLinkID = setGenuineSearchHistoryLinkList;
 				return true;
 			}
 			*pwErrorCode = MAP_MATCH_FAIL;
@@ -177,6 +194,8 @@ bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPU
 		GetMatchEntry(&listAllEntryList, pstMatchEntry, pstTraceCtx, stSgmtMatchInput);
 		if (pvtPathLinkIDs != nullptr)
 			ReconstructPath(pstMatchEntry->qwLinkID, mapParentLink, pvtPathLinkIDs);
+		if (psetSearchHistoryLinkID != nullptr)
+			*psetSearchHistoryLinkID = setGenuineSearchHistoryLinkList;
 		return true;
 	}
 
@@ -289,6 +308,10 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
 		stMatchEntry.dfAngleCost = stSgmtMatchRes.dfCost - stSgmtMatchRes.dfIntersectLenSgmt;
 		stMatchEntry.dfAltAdj = m_cGISUtil.CalcAltRoadPenalty(stSgmtMatchInput, pstLinkInfo->nRoadType, m_stAltitudeConfig);
 		stMatchEntry.dfCost = stSgmtMatchRes.dfCost + stMatchEntry.dfAltAdj;
+		// 좌표 근접(BridgeNearbyLinkStarts)만으로 발견된 후보는 위상 우선순위 페널티 — 같은 경합에
+		//   진짜 TURNINFO 연결 후보가 있으면 근소한 차이로는 못 이기게 한다 (2026-08-21 최정우 추가)
+		if (stDepthLinkInfoData.bGeometricBridge)
+			stMatchEntry.dfCost += MM_GEOM_BRIDGE_PENALTY;
 		stMatchEntry.nDirAngleDiff = stSgmtMatchRes.nDirAngleDiff;
 		stMatchEntry.qwLinkID = stSgmtMatchRes.qwLinkID;
 		stMatchEntry.wLenFromLink = pstLinkSgmtInfo->wLenFromLink;
@@ -446,6 +469,10 @@ void CContinueMapMatch::TryOppositeLinkCandidate(SGMT_MATCH_INPUT& stSgmtMatchIn
  * @param[out] plistDepthLinkInfoList 연결 링크 UID 정보
  * @param[out] pmapParentLink 새로 발견된 링크가 거쳐온 직전 링크 기록 (경로 역추적용, 2026-08-20 최정우 추가)
  * @return true(성공), false(실패)
+ * @remark (2026-08-21 최정우) 브릿지로 먼저 발견된 링크를 TURNINFO 로 재발견 시 "화이트리스트만
+ *   승격"하는 시도를 했으나, 중복 DEPTH_LINK_INFO_DATA 항목이 각자 같은 회전정보를 다시 확장하며
+ *   depth 마다 배가돼 지수적으로 폭증(실측: 처리 행 하나에 메모리 수 GB·응답 정지)하는 것 확인 —
+ *   되돌림. 이 판정은 psetSearchHistoryLinkList(브릿지 포함 전체) 그대로 사용해 중복 확장을 막는다.
 */
 bool CContinueMapMatch::GetLinkDepthInfo(set<uint64> *psetSearchHistoryLinkList, listDepthLinkInfo *plistDepthLinkInfoList,
 		unordered_map<uint64, uint64> *pmapParentLink, sint16 nSpeed)
@@ -609,6 +636,8 @@ void CContinueMapMatch::BridgeNearbyLinkStarts(uint64 qwFromLinkID, double dfEnd
 			stDepthLinkInfoData.dwEndTurnOffset = stDepthLinkInfoData.dwStartTurnOffset + pstBridgeLinkInfo->nTurnCount;
 			stDepthLinkInfoData.dwStartSgmtOffset = pstBridgeLinkInfo->dwSgmtOffset;
 			stDepthLinkInfoData.dwEndSgmtOffset = stDepthLinkInfoData.dwStartSgmtOffset + pstBridgeLinkInfo->wSgmtCount;
+			// TURNINFO 아닌 좌표 근접으로 찾은 후보 — 위상 우선순위 페널티 대상 표시 (2026-08-21 최정우 추가)
+			stDepthLinkInfoData.bGeometricBridge = true;
 
 			if (pmapParentLink != nullptr)
 				(*pmapParentLink)[pstSgmt->qwLinkID] = qwFromLinkID;

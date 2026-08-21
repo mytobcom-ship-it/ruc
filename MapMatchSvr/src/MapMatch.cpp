@@ -194,6 +194,10 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 	//   (Begin은 그래프 경로 개념이 없어 경유 링크를 모름 — bUsedContinuePath 로 표시)
 	vector<uint64> vtContinuePath;
 	bool bUsedContinuePath = true;
+	// Continue depth 탐색(maxstep 이내)으로 실제 방문한 링크 UID 집합 — 아래 Begin 병행폴백에서
+	//   "진짜 갈림길(형제) 링크"와 "그래프상 전혀 무관한 링크"를 구분하는 데 재사용한다.
+	//   새 거리 임계값을 따로 두지 않고 기존 maxstep 탐색 결과를 그대로 활용 (2026-08-21 최정우 추가)
+	set<uint64> setContinueSearchHistory;
 
 	stSgmtMatchInput.stPoint.dfX = dfX;
 	stSgmtMatchInput.stPoint.dfY = dfY;
@@ -216,7 +220,7 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 	stSgmtMatchInput.dfPrevMatchY = stMapMatchInput.dfPrevMatchY;
 
 	// 연속(링크 그래프) 맵매칭 엔진 호출 (2026-07-08 최정우 주석 추가)
-	if (!m_cContinueMapMatch.StartMapMatch(m_pcDataLoader, stSgmtMatchInput, qwLinkID, nSearchStep, &wErrorCode, &stMatchEntry, pstTraceCtx, &vtContinuePath))
+	if (!m_cContinueMapMatch.StartMapMatch(m_pcDataLoader, stSgmtMatchInput, qwLinkID, nSearchStep, &wErrorCode, &stMatchEntry, pstTraceCtx, &vtContinuePath, &setContinueSearchHistory))
 	{
 		pstMatchLinkInfo->wErrorCode = wErrorCode;
 		// 에러 코드에 대응하는 메시지 문자열 조회 (2026-07-08 최정우 주석 추가)
@@ -234,6 +238,14 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 	//   120° 방위각 하드컷(MM_DIR_MAX_DEG)이 나란한/반대방향 도로 오매칭은 이미 차단.
 	//   dfAngleCost는 (거리+cap)-거리 형태로 역산되어 부동소수점 반올림 오차가 있을 수 있어
 	//   허용오차(0.01m) 적용 (2026-07-18 최정우 수정)
+	//   2026-08-21 수정 — 편향을 안 주다 보니 그래프상 전혀 무관한(TURN_INFO로 연결 안 된) 링크도
+	//   순수 거리만으로 이겨서 채택되는 사례 실측 확인(trip 000376_20260819094414 seq54,
+	//   2040424301->2040425201 — 두 링크는 52m 떨어진 별개 노드라 TURNINFO 연결이 원래 없음).
+	//   Begin 후보가 setContinueSearchHistory(Continue가 이미 maxstep 이내에서 탐색해본 링크
+	//   집합)에 있을 때만 채택하도록 제한 — "진짜 갈림길 형제"는 애초에 이 집합 안에 있어야
+	//   Continue 후보로도 한 번은 걸러졌을 것이므로 기존 구제 목적은 그대로 유지되고, 탐색
+	//   범위 밖의 무관한 링크만 차단된다. 새 거리 임계값을 따로 두지 않고 기존 maxstep 탐색
+	//   결과를 그대로 재사용.
 	if (stMatchEntry.dfAngleCost >= (MM_DIR_MAX_PENALTY - 0.01))
 	{
 		SGMT_MATCH_INPUT stBeginSgmtMatchInput;
@@ -248,7 +260,8 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 
 		if (m_cBeginMapMatch.StartMapMatch(m_pcDataLoader, stBeginSgmtMatchInput, &wBeginErrorCode,
 				&stBeginMatchEntry, pstTraceCtx, 0)
-			&& (stBeginMatchEntry.dfCost < stMatchEntry.dfCost))
+			&& (stBeginMatchEntry.dfCost < stMatchEntry.dfCost)
+			&& (setContinueSearchHistory.find(stBeginMatchEntry.qwLinkID) != setContinueSearchHistory.end()))
 		{
 			stMatchEntry = stBeginMatchEntry;
 			bUsedContinuePath = false;		// Begin 채택 — Continue 경유 경로는 무효 (2026-08-20 최정우 추가)

@@ -33,6 +33,7 @@ def load_config():
     cfg.read(CONFIG_PATH, encoding="utf-8-sig")
     db = cfg["database"]
     web = cfg["web"] if cfg.has_section("web") else {}
+    remote = cfg["remote_database"] if cfg.has_section("remote_database") else None
     return {
         "host": db.get("host", "127.0.0.1"),
         "port": int(db.get("port", "5432")),
@@ -40,6 +41,13 @@ def load_config():
         "points_name": db.get("points_name", db.get("name", "roadnet")),
         "userid": db.get("userid", "mytobcom"),
         "password": db.get("password", ""),
+        "remote": {
+            "host": remote.get("host", ""),
+            "port": int(remote.get("port", "5432")),
+            "name": remote.get("name", "ruc"),
+            "userid": remote.get("userid", ""),
+            "password": remote.get("password", ""),
+        } if remote is not None else None,
         "web_port": int(web.get("port", "8088")),
         "road_buffer_m": int(web.get("road_buffer_m", "1000")),
         "poll_sec": int(web.get("poll_sec", "5")),
@@ -67,6 +75,25 @@ def get_conn_points():
         dbname=c["points_name"],
         user=c["userid"],
         password=c["password"],
+    )
+
+
+def get_conn_remote():
+    """원격 ruc DB(실서비스 DB) 조회 전용 연결 — [remote_database] 섹션이 없으면 호출측이
+    404 로 처리하도록 None 반환. default_transaction_read_only=on 으로 세션을 열어, 이
+    연결로는 애초에 DELETE/UPDATE/INSERT 가 DB 레벨에서 거부된다 — 이 파일에 원격용 쓰기
+    라우트를 실수로 추가해도 안전판이 되도록 하는 방어 (2026-08-18 최정우 추가)"""
+    c = load_config()
+    r = c["remote"]
+    if r is None or not r["host"]:
+        return None
+    return psycopg2.connect(
+        host=r["host"],
+        port=r["port"],
+        dbname=r["name"],
+        user=r["userid"],
+        password=r["password"],
+        options="-c default_transaction_read_only=on",
     )
 
 
@@ -129,17 +156,64 @@ def api_config():
     })
 
 
-@app.route("/api/trips")
-def api_trips():
+def _query_trips(conn, limit):
     # trip 시작 시각(MIN) 기준 정렬 — 동시 운행 차량이 여러 대일 때 갱신 시각(MAX)으로 정렬하면
     #   각 차량의 flush 타이밍 차이로 폴링마다 1위가 바뀌어, app.js "최신 Trip" 자동추적이
     #   차량 사이를 계속 튀어다니는 원인이 된다. 시작 시각은 trip 생애 동안 고정값이라, 정말
     #   새 trip 이 시작될 때만 순위가 바뀐다 (2026-07-22 최정우 수정 — vehicles=3 전환에 대응)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT trip_id, device_key,
+                   MIN(gps_dt) AS gps_dt_min,
+                   MAX(gps_dt) AS gps_dt_max,
+                   COUNT(*) AS cnt,
+                   SUM(CASE WHEN match_status = 0 THEN 1 ELSE 0 END) AS pending_cnt,
+                   BOOL_OR(trip_event = 2) AS has_end
+            FROM ruc.prim_rawgps
+            GROUP BY trip_id, device_key
+              ORDER BY MIN(gps_dt) DESC, trip_id DESC, device_key DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        return [
+            {
+                "trip_id": r[0],
+                "device_key": r[1],
+                "gps_dt_min": r[2],
+                "gps_dt_max": r[3],
+                "count": r[4],
+                # 이 trip 의 맵매칭이 완전히 끝났는지 — pending 0건 & END 이벤트 도달.
+                #   app.js 자동 갱신(폴링)이 더 이상 볼 게 없는 완료된 trip 을 계속
+                #   찔러보지 않고 스스로 멈추는 데 사용 (2026-07-24 최정우 추가)
+                "complete": (r[5] == 0 and bool(r[6])),
+            }
+            for r in cur.fetchall()
+        ]
+
+
+@app.route("/api/trips")
+def api_trips():
     limit = min(int(request.args.get("limit", 30)), 200)
     with get_conn_points() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
+        rows = _query_trips(conn, limit)
+    return jsonify(rows)
+
+
+def _query_trips_with_car(conn, limit):
+    """원격 전용 — TRIP_ID 생성 포맷이 device_key 형식(예: CAR000197_...)에서
+    base_carinfo.car_seq_no 를 6자리 0-패딩한 형식(예: 000093_20260813175008)으로
+    변경됨(2026-08-19 확인 — project_trip_id_format_change 참고). 옛 device_key 포맷은
+    포맷 변경 이전의 레거시 데이터라 목록에서 제외 — 아래 정규식(6자리 숫자_14자리 시각)으로
+    신규 포맷만 필터링(2026-08-19 최정우 수정). prim_rawgps.device_key 컬럼 자체는 항상
+    정확하지만, base_carinfo 를 조인해 실제 차량(car_no/car_seq_no)까지 검증해서 같이
+    반환한다. device_key 매칭을 우선하고, (그 조건이 안 맞을 때만) TRIP_ID 앞 6자리 =
+    LPAD(car_seq_no,6,'0') 매칭으로 보완 (2026-08-18 최정우 추가)"""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            WITH trips AS (
                 SELECT trip_id, device_key,
                        MIN(gps_dt) AS gps_dt_min,
                        MAX(gps_dt) AS gps_dt_max,
@@ -147,26 +221,52 @@ def api_trips():
                        SUM(CASE WHEN match_status = 0 THEN 1 ELSE 0 END) AS pending_cnt,
                        BOOL_OR(trip_event = 2) AS has_end
                 FROM ruc.prim_rawgps
+                WHERE trip_id ~ '^[0-9]{6}_[0-9]{14}$'
                 GROUP BY trip_id, device_key
-                  ORDER BY MIN(gps_dt) DESC, trip_id DESC, device_key DESC
+                ORDER BY MIN(gps_dt) DESC, trip_id DESC, device_key DESC
                 LIMIT %s
-                """,
-                (limit,),
             )
-            rows = [
-                {
-                    "trip_id": r[0],
-                    "device_key": r[1],
-                    "gps_dt_min": r[2],
-                    "gps_dt_max": r[3],
-                    "count": r[4],
-                    # 이 trip 의 맵매칭이 완전히 끝났는지 — pending 0건 & END 이벤트 도달.
-                    #   app.js 자동 갱신(폴링)이 더 이상 볼 게 없는 완료된 trip 을 계속
-                    #   찔러보지 않고 스스로 멈추는 데 사용 (2026-07-24 최정우 추가)
-                    "complete": (r[5] == 0 and bool(r[6])),
-                }
-                for r in cur.fetchall()
-            ]
+            SELECT t.trip_id, t.device_key, t.gps_dt_min, t.gps_dt_max, t.cnt,
+                   t.pending_cnt, t.has_end, c.car_no, c.car_seq_no
+            FROM trips t
+            LEFT JOIN LATERAL (
+                SELECT car_no, car_seq_no
+                FROM ruc.base_carinfo b
+                WHERE b.device_key = t.device_key
+                   OR LPAD(b.car_seq_no::text, 6, '0') = split_part(t.trip_id, '_', 1)
+                ORDER BY (b.device_key = t.device_key) DESC
+                LIMIT 1
+            ) c ON true
+            ORDER BY t.gps_dt_min DESC, t.trip_id DESC, t.device_key DESC
+            """,
+            (limit,),
+        )
+        return [
+            {
+                "trip_id": r[0],
+                "device_key": r[1],
+                "gps_dt_min": r[2],
+                "gps_dt_max": r[3],
+                "count": r[4],
+                "complete": (r[5] == 0 and bool(r[6])),
+                "car_no": r[7],
+                "car_seq_no": r[8],
+            }
+            for r in cur.fetchall()
+        ]
+
+
+@app.route("/api/remote/trips")
+def api_remote_trips():
+    """원격 ruc DB(실서비스 DB) 조회 전용 — get_conn_remote() 세션 자체가 읽기전용이라
+    쓰기 라우트가 여기 섞일 수 없음 (2026-08-18 최정우 추가). base_carinfo 조인 포함
+    (car_no/car_seq_no) — _query_trips_with_car() 참고"""
+    limit = min(int(request.args.get("limit", 30)), 200)
+    conn = get_conn_remote()
+    if conn is None:
+        return jsonify({"error": "remote_database 설정 없음 (config.ini [remote_database])"}), 404
+    with conn:
+        rows = _query_trips_with_car(conn, limit)
     return jsonify(rows)
 
 
@@ -297,48 +397,112 @@ def infer_match_reason(match_status, match_link_id, intersect_len, accuracy_m):
     return None
 
 
+def _query_trip_points(conn, trip_id):
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        # ruc DB(2026-08-11 전환) 는 road_link 가 geom 없이 jsonb coords 라 도로선
+        # 재-스냅(ST_ClosestPoint)은 불가 — 엔진이 저장한 match_lat/lon 을 그대로 쓰고
+        # road_link 조인은 도로명 표시(match_link_name)에만 사용 (2026-08-12 최정우 수정)
+        cur.execute(
+            """
+            SELECT g.gps_seq, g.gps_dt, g.trip_event, g.drive_status, g.match_status,
+                   g.gps_lat, g.gps_lon, g.intersect_len, g.accuracy_m,
+                   g.match_link_id,
+                   l.road_name AS match_link_name,
+                   g.match_lat, g.match_lon
+            FROM ruc.prim_rawgps g
+            LEFT JOIN ruc.road_link l ON l.link_id = g.match_link_id
+            WHERE g.trip_id = %s
+            ORDER BY g.gps_seq ASC
+            """,
+            (trip_id,),
+        )
+        rows = []
+        for r in cur.fetchall():
+            match_status = int(r["match_status"])
+            intersect_len = int(r["intersect_len"]) if r["intersect_len"] is not None else None
+            accuracy_m = int(r["accuracy_m"]) if r["accuracy_m"] is not None else None
+            rows.append({
+                "gps_seq": int(r["gps_seq"]),
+                "gps_dt": r["gps_dt"],
+                "trip_event": int(r["trip_event"]),
+                "drive_status": int(r["drive_status"]),
+                "match_status": match_status,
+                "gps_lat": float(r["gps_lat"]) if r["gps_lat"] is not None else None,
+                "gps_lon": float(r["gps_lon"]) if r["gps_lon"] is not None else None,
+                "match_lat": float(r["match_lat"]) if r["match_lat"] is not None else None,
+                "match_lon": float(r["match_lon"]) if r["match_lon"] is not None else None,
+                "intersect_len": intersect_len,
+                "match_link_id": r["match_link_id"],
+                "match_link_name": r["match_link_name"],
+                "match_reason": infer_match_reason(match_status, r["match_link_id"], intersect_len, accuracy_m),
+            })
+        return rows
+
+
 @app.route("/api/trip/<path:trip_id>/points")
 def api_trip_points(trip_id):
     with get_conn_points() as conn:
+        rows = _query_trip_points(conn, trip_id)
+    return jsonify(rows)
+
+
+@app.route("/api/remote/trip/<path:trip_id>/points")
+def api_remote_trip_points(trip_id):
+    """원격 ruc DB 조회 전용 — 위 api_remote_trips() 와 동일한 읽기전용 세션 (2026-08-18 최정우 추가)"""
+    conn = get_conn_remote()
+    if conn is None:
+        return jsonify({"error": "remote_database 설정 없음 (config.ini [remote_database])"}), 404
+    with conn:
+        rows = _query_trip_points(conn, trip_id)
+    return jsonify(rows)
+
+
+@app.route("/api/remote/zones")
+def api_remote_zones():
+    """원격 ruc DB 의 과금구역(base_roadlink) + 게이트(base_tollgate) 조회 전용 — 읽기전용
+    세션. nodelink-geumto.html 이 하드코딩해둔 것과 같은 정보를 실제 DB에서 그대로 가져와
+    지도에 링크(구역) 표출용으로 쓴다 (2026-08-18 최정우 추가)"""
+    conn = get_conn_remote()
+    if conn is None:
+        return jsonify({"error": "remote_database 설정 없음 (config.ini [remote_database])"}), 404
+    with conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            # ruc DB(2026-08-11 전환) 는 road_link 가 geom 없이 jsonb coords 라 도로선
-            # 재-스냅(ST_ClosestPoint)은 불가 — 엔진이 저장한 match_lat/lon 을 그대로 쓰고
-            # road_link 조인은 도로명 표시(match_link_name)에만 사용 (2026-08-12 최정우 수정)
             cur.execute(
                 """
-                SELECT g.gps_seq, g.gps_dt, g.trip_event, g.drive_status, g.match_status,
-                       g.gps_lat, g.gps_lon, g.intersect_len, g.accuracy_m,
-                       g.match_link_id,
-                       l.road_name AS match_link_name,
-                       g.match_lat, g.match_lon
-                FROM ruc.prim_rawgps g
-                LEFT JOIN ruc.road_link l ON l.link_id = g.match_link_id
-                WHERE g.trip_id = %s
-                ORDER BY g.gps_seq ASC
-                """,
-                (trip_id,),
+                SELECT road_id, road_kind, road_nm, geom_type, coords, speed_limit_kmh
+                FROM ruc.base_roadlink
+                ORDER BY road_id
+                """
             )
-            rows = []
-            for r in cur.fetchall():
-                match_status = int(r["match_status"])
-                intersect_len = int(r["intersect_len"]) if r["intersect_len"] is not None else None
-                accuracy_m = int(r["accuracy_m"]) if r["accuracy_m"] is not None else None
-                rows.append({
-                    "gps_seq": int(r["gps_seq"]),
-                    "gps_dt": r["gps_dt"],
-                    "trip_event": int(r["trip_event"]),
-                    "drive_status": int(r["drive_status"]),
-                    "match_status": match_status,
-                    "gps_lat": float(r["gps_lat"]) if r["gps_lat"] is not None else None,
-                    "gps_lon": float(r["gps_lon"]) if r["gps_lon"] is not None else None,
-                    "match_lat": float(r["match_lat"]) if r["match_lat"] is not None else None,
-                    "match_lon": float(r["match_lon"]) if r["match_lon"] is not None else None,
-                    "intersect_len": intersect_len,
-                    "match_link_id": r["match_link_id"],
-                    "match_link_name": r["match_link_name"],
-                    "match_reason": infer_match_reason(match_status, r["match_link_id"], intersect_len, accuracy_m),
-                })
-    return jsonify(rows)
+            zones = [
+                {
+                    "road_id": r["road_id"],
+                    "road_kind": r["road_kind"],
+                    "road_nm": r["road_nm"],
+                    "geom_type": r["geom_type"],
+                    "coords": r["coords"],
+                    "speed_limit_kmh": float(r["speed_limit_kmh"]) if r["speed_limit_kmh"] is not None else None,
+                }
+                for r in cur.fetchall()
+            ]
+            cur.execute(
+                """
+                SELECT tollgate_id, road_id, gate_div, lon, lat
+                FROM ruc.base_tollgate
+                ORDER BY road_id, tollgate_id
+                """
+            )
+            gates = [
+                {
+                    "tollgate_id": r["tollgate_id"],
+                    "road_id": r["road_id"],
+                    "gate_div": r["gate_div"],
+                    "lon": float(r["lon"]) if r["lon"] is not None else None,
+                    "lat": float(r["lat"]) if r["lat"] is not None else None,
+                }
+                for r in cur.fetchall()
+            ]
+    return jsonify({"zones": zones, "gates": gates})
 
 
 @app.route("/api/trips/points")
@@ -408,20 +572,20 @@ def api_prim_info():
     return jsonify({"table": "roadnet.prim_link_info", "count": cnt})
 
 
-@app.route("/api/trip/<path:trip_id>/prim-roads")
-def api_trip_prim_roads(trip_id):
-    cfg = load_config()
-    buffer_m = int(request.args.get("buffer", cfg["road_buffer_m"]))
+def _query_prim_roads_near_points(lons, lats, buffer_m):
+    """좌표 배열 주변 도로망(roadnet.prim_link_info) 조회 — roadnet DB 커넥션 전용.
+    트립 GPS 좌표는 호출측이 (로컬 ruc DB든 원격 ruc DB든) 이미 조회해서 넘겨준다 —
+    roadnet DB 커넥션 하나로는 다른 DB(ruc)를 직접 조인할 수 없어서 이렇게 분리한다
+    (2026-08-19 최정우 추가)"""
+    if not lons:
+        return []
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 WITH pts AS (
-                    SELECT ST_SetSRID(ST_MakePoint(gps_lon::float8, gps_lat::float8), 4326) AS g
-                    FROM roadnet.prim_rawgps
-                    WHERE trip_id = %s
-                      AND gps_lat IS NOT NULL
-                      AND gps_lon IS NOT NULL
+                    SELECT ST_SetSRID(ST_MakePoint(lon, lat), 4326) AS g
+                    FROM unnest(%s::float8[], %s::float8[]) AS u(lon, lat)
                 ),
                 env AS (
                     SELECT ST_Buffer(ST_Collect(g)::geography, %s)::geometry AS geom4326
@@ -437,7 +601,7 @@ def api_trip_prim_roads(trip_id):
                   AND ST_Intersects(l.geom, e.geom4326)
                 LIMIT 8000
                 """,
-                (trip_id, buffer_m),
+                (lons, lats, buffer_m),
             )
             features = []
             for row in cur.fetchall():
@@ -451,6 +615,54 @@ def api_trip_prim_roads(trip_id):
                     # 시설 유형 (0=일반, 1=교량, 2=터널, 3=고가, 4=지하) — hover 표시용 (2026-07-21 최정우 추가)
                     "road_type": int(row[8]) if row[8] is not None else None,
                 }))
+            return features
+
+
+@app.route("/api/trip/<path:trip_id>/prim-roads")
+def api_trip_prim_roads(trip_id):
+    """트립 주변 도로망 조회 — 로컬 ruc DB(ruc.prim_rawgps) 기준 (2026-08-19 최정우 수정
+    — 기존 코드가 roadnet.prim_rawgps 를 참조해 2026-08-11 ruc DB 전환 이후 트립은 항상
+    0건이었음)"""
+    cfg = load_config()
+    buffer_m = int(request.args.get("buffer", cfg["road_buffer_m"]))
+    with get_conn_points() as pconn:
+        with pconn.cursor() as pcur:
+            pcur.execute(
+                """
+                SELECT gps_lon, gps_lat FROM ruc.prim_rawgps
+                WHERE trip_id = %s AND gps_lat IS NOT NULL AND gps_lon IS NOT NULL
+                """,
+                (trip_id,),
+            )
+            rows = pcur.fetchall()
+    lons = [float(r[0]) for r in rows]
+    lats = [float(r[1]) for r in rows]
+    features = _query_prim_roads_near_points(lons, lats, buffer_m)
+    return jsonify({"type": "FeatureCollection", "features": features})
+
+
+@app.route("/api/remote/trip/<path:trip_id>/prim-roads")
+def api_remote_trip_prim_roads(trip_id):
+    """트립 주변 도로망 조회 — 원격 ruc DB(실서비스 DB) 기준, 읽기전용 연결
+    (2026-08-19 최정우 추가)"""
+    cfg = load_config()
+    buffer_m = int(request.args.get("buffer", cfg["road_buffer_m"]))
+    conn = get_conn_remote()
+    if conn is None:
+        return jsonify({"error": "remote_database 설정 없음 (config.ini [remote_database])"}), 404
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT gps_lon, gps_lat FROM ruc.prim_rawgps
+                WHERE trip_id = %s AND gps_lat IS NOT NULL AND gps_lon IS NOT NULL
+                """,
+                (trip_id,),
+            )
+            rows = cur.fetchall()
+    lons = [float(r[0]) for r in rows]
+    lats = [float(r[1]) for r in rows]
+    features = _query_prim_roads_near_points(lons, lats, buffer_m)
     return jsonify({"type": "FeatureCollection", "features": features})
 
 

@@ -28,8 +28,8 @@ typedef struct sConfig
 	string							strDBPasswd;						// 데이터베이스 비밀번호
 	int								nDBMinConnect;						// DB 커넥션 풀 최소 연결 수
 	int								nDBMaxConnect;						// DB 커넥션 풀 최대 연결 수
-	int								nConnRetryMax;						// conn_retry_max
-	int								nConnRetryWait;						// conn_retry_wait
+	int								nConnRetryMax;						// retrymax
+	int								nConnRetryWait;						// retrywait
 
 	// SQL 파일명
 	string							strSQLFile;							// SQL 파일명

@@ -66,8 +66,8 @@ static void ClearReleaseRetryCount(const string& strKey)
 /**
  * @brief 커넥션 풀에서 DB 연결 핸들 확보 (일시 고갈 시 재시도)
  * @param[in] pcPool PostgreSQL 커넥션 풀
- * @param[in] nMaxAttempt 재시도 최대 횟수 ([database] conn_retry_max, 회)
- * @param[in] nWaitMs 재시도 사이 대기 ([database] conn_retry_wait, ms)
+ * @param[in] nMaxAttempt 재시도 최대 횟수 ([database] retrymax, 회)
+ * @param[in] nWaitMs 재시도 사이 대기 ([database] retrywait, ms)
  * @return PGconn*(성공), nullptr(실패)
  * @remark getConnection() 실패 시 nWaitMs 간격으로 최대 nMaxAttempt 회 시도 (2026-07-10 최정우 주석 추가)
  */
@@ -167,6 +167,7 @@ int CRawLogWorker::ExpireTtlSessions(int nThreadId, int nTtlSec, PGconn *pcConn)
 	int nRemoved = 0;
 	vector<CHARGE_INSERT_ROW> vtExpiredParkingCharges;
 	vector<TRIP_END_UPDATE_ROW> vtAbnormalEndUpdates;
+	vector<RAW_LOG_UPDATE_ROW> vtExpiredPendingUpdates;			// 세션 소멸 전 보류(pending) 행 확정분 (2026-08-21 최정우 추가)
 
 	for (unordered_map<string, VEHICLE_TRIP_SESSION>::iterator it=mapSessions.begin();
 			it != mapSessions.end(); )
@@ -177,6 +178,12 @@ int CRawLogWorker::ExpireTtlSessions(int nThreadId, int nTtlSec, PGconn *pcConn)
 			LOGFMTD("[#%02d] session ttl expired!trip_id=[%s] last_seen=[%ld] ttl=[%d]",
 				nThreadId, it->first.c_str(),
 				static_cast<long>(it->second.dtLastSeen), nTtlSec);
+
+			// 세션이 곧 지워지므로, 아직 보류(pending) 중인 1틱 지연 행이 있으면 먼저 확정
+			//   (commit)한다 — 더 이상 "다음" GPS 가 안 올 것이므로 보정판단 없이 계산된 값 그대로.
+			//   아래 bWasParking 등 스냅샷보다 먼저 실행해야 보류 행의 과금 반영이 상태에 반영됨
+			//   (2026-08-21 최정우 추가)
+			CommitPendingRow(nThreadId, &it->second, false, 0, &vtExpiredPendingUpdates, &vtExpiredParkingCharges);
 
 			// 한 trip 에서 여러 세션(예: 주정차 폴리곤·면제도로/일반도로/폐쇄형/구간단속 LINE)이
 			//   좌표상 겹쳐 동시에 TTL 만료될 수 있음(실측으로 확인됨, 2026-08-13) — Append*들이
@@ -248,6 +255,10 @@ int CRawLogWorker::ExpireTtlSessions(int nThreadId, int nTtlSec, PGconn *pcConn)
 
 	if (!vtAbnormalEndUpdates.empty() && (pcConn != nullptr))
 		UpdateAbnormalTripEnd(pcConn, vtAbnormalEndUpdates);
+
+	// 세션 소멸 전 확정된 보류(pending) 행의 rawgps_update 반영 (2026-08-21 최정우 추가)
+	if (!vtExpiredPendingUpdates.empty() && (pcConn != nullptr))
+		BulkUpdateRawLogs(pcConn, vtExpiredPendingUpdates);
 
 	if (nRemoved > 0)
 	{
@@ -1204,7 +1215,7 @@ void CRawLogWorker::run(int nThreadId, void *context)
 		return;
 	}
 
-	// batch 처리용 DB 커넥션 획득 (#E-1: [database] conn_retry_max/wait 재시도) (2026-07-10 최정우 추가)
+	// batch 처리용 DB 커넥션 획득 (#E-1: [database] retrymax/wait 재시도) (2026-07-10 최정우 추가)
 	pcConn = AcquirePoolConnection(m_stConfig.pcPostgrePool,
 		m_stConfig.nConnRetryMax, m_stConfig.nConnRetryWait);
 	if (pcConn == nullptr)
@@ -1269,7 +1280,15 @@ void CRawLogWorker::run(int nThreadId, void *context)
 			continue;
 		}
 
-		if (!IsRowInUpdates(vtUpdates, (*pvtBatch)[i].szTripID, szGpsSeq))
+		// 1틱 지연커밋으로 세션에 정당하게 보류(pending) 중인 행은 orphan 이 아님 — vtUpdates 에는
+		//   아직 없지만(다음 배치에서 확정) 유실된 게 아니므로 release 대상에서 제외해야 한다.
+		//   그렇지 않으면 이 행이 PENDING(0)으로 되돌아가 나중에 새 행처럼 재조회되면서, 메모리에
+		//   남아있는 보류 버퍼와 겹쳐 같은 GPS 를 두 번 처리하는 버그가 생김 (2026-08-21 최정우 추가)
+		const bool bIsSessionPending = stWorkSession.bHasPendingCommit
+			&& (strcmp(stWorkSession.stPendingRawLogInfo.szTripID, (*pvtBatch)[i].szTripID) == 0)
+			&& (stWorkSession.stPendingRawLogInfo.dwSeqNo == (*pvtBatch)[i].dwSeqNo);
+
+		if (!IsRowInUpdates(vtUpdates, (*pvtBatch)[i].szTripID, szGpsSeq) && !bIsSessionPending)
 		{
 			// vtUpdates 미포함 orphan 행 release 목록 적재 (2026-07-08 최정우 주석 추가)
 			AppendReleaseRowFromRawLog(&vtOrphanRelease, (*pvtBatch)[i]);
@@ -1294,6 +1313,10 @@ void CRawLogWorker::run(int nThreadId, void *context)
 		}
 	}
 
+	// 1틱 지연커밋 도입으로 이번 배치의 모든 행이 보류(pending)됐다면 vtUpdates 가 비어있을 수
+	//   있음 — 그 경우 bulk UPDATE 자체는 할 게 없어 자동 성공 취급하고, 아래 세션 커밋(보류
+	//   버퍼 포함)은 그대로 진행해야 다음 배치에서 이어서 확정(commit)된다 (2026-08-21 최정우 추가)
+	bool bUpdateOk = true;
 	if (!vtUpdates.empty())
 	{
 		// reserve(rawgps_select) 의 짝: 완료는 rawgps_update(1/3/4), 실패 시 release(0) 동일 SQL
@@ -1304,6 +1327,7 @@ void CRawLogWorker::run(int nThreadId, void *context)
 				nThreadId, (*pvtBatch)[0].szDeviceKey, (*pvtBatch)[0].szTripID,
 				static_cast<int>(vtUpdates.size()));
 			bProcessOk = false;
+			bUpdateOk = false;
 
 			// PROCESSING 좀비 방지: match_status=0, INTERSECT_LEN/MATCH_* '' → 기존 컬럼 유지
 			// bulk update 실패 시 동일 PK release (2026-07-08 최정우 주석 추가)
@@ -1321,58 +1345,59 @@ void CRawLogWorker::run(int nThreadId, void *context)
 			}
 			// stWorkSession 폐기 — 커밋된 세션(mapSessions) 유지
 		}
-		else
-		{
-			// 개방형 게이트 통과 bulk INSERT — rawgps_update 성공 후에만 시도. 실패 시 map-match
-			//   bulk update 실패와 동일하게 취급(배치 release·세션 미커밋) → 다음 poll 에서 재처리되며
-			//   게이트 진입 마킹(vtActiveGateIds)도 커밋되지 않아 재통과 시 정상 재부과됨 (2026-08-12 최정우 추가)
-			bool bChargeOk = true;
-			if (!vtChargeInserts.empty())
-			{
-				bChargeOk = BulkInsertCharges(pcConn, vtChargeInserts);
-				if (!bChargeOk)
-				{
-					LOGFMTE("[#%02d] charge bulk insert failed!device=[%s] trip_id=[%s] count=[%d]",
-						nThreadId, (*pvtBatch)[0].szDeviceKey, (*pvtBatch)[0].szTripID,
-						static_cast<int>(vtChargeInserts.size()));
-				}
-			}
+	}
 
+	if (bUpdateOk)
+	{
+		// 개방형 게이트 통과 bulk INSERT — rawgps_update 성공 후에만 시도. 실패 시 map-match
+		//   bulk update 실패와 동일하게 취급(배치 release·세션 미커밋) → 다음 poll 에서 재처리되며
+		//   게이트 진입 마킹(vtActiveGateIds)도 커밋되지 않아 재통과 시 정상 재부과됨 (2026-08-12 최정우 추가)
+		bool bChargeOk = true;
+		if (!vtChargeInserts.empty())
+		{
+			bChargeOk = BulkInsertCharges(pcConn, vtChargeInserts);
 			if (!bChargeOk)
 			{
-				bProcessOk = false;
-				if (!BulkReleaseRawLogs(pcConn, vtUpdates))
-				{
-					LOGFMTE("[#%02d] bulk release failed!device=[%s] trip_id=[%s] count=[%d]",
-						nThreadId, (*pvtBatch)[0].szDeviceKey, (*pvtBatch)[0].szTripID,
-						static_cast<int>(vtUpdates.size()));
-				}
-				else
-				{
-					LOGFMTW("[#%02d] bulk release ok!PROCESSING→PENDING device=[%s] trip_id=[%s] count=[%d]",
-						nThreadId, (*pvtBatch)[0].szDeviceKey, (*pvtBatch)[0].szTripID,
-						static_cast<int>(vtUpdates.size()));
-				}
-				// stWorkSession 폐기 — 커밋된 세션(mapSessions) 유지
+				LOGFMTE("[#%02d] charge bulk insert failed!device=[%s] trip_id=[%s] count=[%d]",
+					nThreadId, (*pvtBatch)[0].szDeviceKey, (*pvtBatch)[0].szTripID,
+					static_cast<int>(vtChargeInserts.size()));
 			}
-			else
-			{
-				// 트립 종료 trip_end_dt UPDATE — best-effort(실패해도 배치 자체는 성공 처리).
-				//   과금 INSERT 와 달리 금액에 영향 없는 참고 컬럼이라 실패해도 배치를 release 하지 않음 (2026-08-12 최정우 추가)
-				if (!vtTripEndUpdates.empty() && !UpdateTripEndDt(pcConn, vtTripEndUpdates))
-				{
-					LOGFMTE("[#%02d] trip_end update failed!device=[%s] trip_id=[%s] count=[%d]",
-						nThreadId, (*pvtBatch)[0].szDeviceKey, (*pvtBatch)[0].szTripID,
-						static_cast<int>(vtTripEndUpdates.size()));
-				}
+		}
 
-				// DB 반영 성공 후에만 세션 커밋 (bulk 실패·release 시 연속 맵매칭 맥락 보존)
-				// bTripEnded 이면 MATCHED/ERROR/SKIP 무관 trip_id 세션 제거
-				if (bTripEnded)
-					mapSessions.erase(strDeviceKey);					// (2026-07-08 최정우 수정) 키 = DEVICE_KEY
-				else
-					mapSessions[strDeviceKey] = stWorkSession;			// (2026-07-08 최정우 수정) 키 = DEVICE_KEY
+		if (!bChargeOk)
+		{
+			bProcessOk = false;
+			if (!vtUpdates.empty() && !BulkReleaseRawLogs(pcConn, vtUpdates))
+			{
+				LOGFMTE("[#%02d] bulk release failed!device=[%s] trip_id=[%s] count=[%d]",
+					nThreadId, (*pvtBatch)[0].szDeviceKey, (*pvtBatch)[0].szTripID,
+					static_cast<int>(vtUpdates.size()));
 			}
+			else if (!vtUpdates.empty())
+			{
+				LOGFMTW("[#%02d] bulk release ok!PROCESSING→PENDING device=[%s] trip_id=[%s] count=[%d]",
+					nThreadId, (*pvtBatch)[0].szDeviceKey, (*pvtBatch)[0].szTripID,
+					static_cast<int>(vtUpdates.size()));
+			}
+			// stWorkSession 폐기 — 커밋된 세션(mapSessions) 유지
+		}
+		else
+		{
+			// 트립 종료 trip_end_dt UPDATE — best-effort(실패해도 배치 자체는 성공 처리).
+			//   과금 INSERT 와 달리 금액에 영향 없는 참고 컬럼이라 실패해도 배치를 release 하지 않음 (2026-08-12 최정우 추가)
+			if (!vtTripEndUpdates.empty() && !UpdateTripEndDt(pcConn, vtTripEndUpdates))
+			{
+				LOGFMTE("[#%02d] trip_end update failed!device=[%s] trip_id=[%s] count=[%d]",
+					nThreadId, (*pvtBatch)[0].szDeviceKey, (*pvtBatch)[0].szTripID,
+					static_cast<int>(vtTripEndUpdates.size()));
+			}
+
+			// DB 반영 성공 후에만 세션 커밋 (bulk 실패·release 시 연속 맵매칭 맥락 보존)
+			// bTripEnded 이면 MATCHED/ERROR/SKIP 무관 trip_id 세션 제거
+			if (bTripEnded)
+				mapSessions.erase(strDeviceKey);					// (2026-07-08 최정우 수정) 키 = DEVICE_KEY
+			else
+				mapSessions[strDeviceKey] = stWorkSession;			// (2026-07-08 최정우 수정) 키 = DEVICE_KEY
 		}
 	}
 
@@ -1428,6 +1453,102 @@ void CRawLogWorker::stop(int nThreadId, void *context)
 }
 
 /**
+ * @brief 보류(pending) 중인 1틱 지연 행을 확정(commit) — 반대편 짝 링크 1틱 오매칭 보정 + 과금
+ *   함수 호출 + rawgps_update 큐잉
+ * @param[in] nThreadId 워커 스레드 ID
+ * @param[in,out] pstSession 배치 임시 세션 — bHasPendingCommit=false 로 소비
+ * @param[in] bHasNextLinkID 보정판단용 "다음" 확정 링크 존재 여부(false=보정 시도 안 함)
+ * @param[in] qwNextLinkID 보정판단용 "다음" 확정 링크 ID
+ * @param[out] pvtUpdates rawgps_update bulk UPDATE 대상 행 목록
+ * @param[out] pvtChargeInserts charge_insert bulk INSERT 대상 행 목록
+ * @return void
+ * @remark 보류 행이 없으면(bHasPendingCommit=false) 아무 것도 안 하고 반환.
+ *   보정 조건: 보류 행이 bReverseSuspect(역행의심)이고, 보류 행의 링크가 마지막으로 신뢰
+ *   커밋된 링크(qwLastConfirmedLinkID)와 다르며, "다음" 확정 링크가 다시 그 마지막 신뢰
+ *   링크로 돌아왔을 때 — 즉 "역행의심으로 다른 링크에 1틱 튀었다가 바로 다음 GPS에서 직전
+ *   링크로 복귀"하는 패턴이면 GPS 노이즈로 판단해 MATCH_STATUS=SKIP(미과금) 처리한다.
+ *   좌표·MATCH_LINK_ID 자체는 다른 저신뢰 SKIP(bClampLowConf 등)과 동일하게 참고용으로 DB에
+ *   그대로 남긴다(무엇으로 오매칭됐었는지 추적 가능하도록, 값을 지어내 덮어쓰지 않음).
+ *   과금 함수(ProcessOpenGateCharge 등)는 "직전 매칭 위치·시각"을 세션에서 읽어 이동거리·
+ *   속도를 계산하는데, 그 값(dfLastMatchX/Y 등)은 RunMapMatch 가 매 행마다 실시간으로 이미
+ *   최신 위치로 전진시켜놨으므로, 보류 행 처리 "당시" 스냅샷(dfPendingPrevMatchX/Y 등)으로
+ *   잠깐 바꿔치기한 후 호출하고 끝나면 즉시 원복한다 — 그렇지 않으면 몇 틱 지난 최신 위치를
+ *   "직전 위치"로 오인해 이동거리·속도가 틀어진다. 세션의 다른 과금 상태(bInClosedRoad 등)는
+ *   건드리지 않음 (2026-08-21 최정우 추가)
+*/
+void CRawLogWorker::CommitPendingRow(int nThreadId, VEHICLE_TRIP_SESSION *pstSession,
+		bool bHasNextLinkID, uint64 qwNextLinkID,
+		vector<RAW_LOG_UPDATE_ROW> *pvtUpdates, vector<CHARGE_INSERT_ROW> *pvtChargeInserts)
+{
+	if ((pstSession == nullptr) || !pstSession->bHasPendingCommit)
+		return;
+
+	const sRawLogInfo stRawLogInfo = pstSession->stPendingRawLogInfo;			// 지역 복사(commit 중 세션 필드 재사용 대비)
+	MATCH_LINK_INFO stMatchLinkInfo = pstSession->stPendingMatchLinkInfo;		// 지역 복사(보정 시 nFinalStatus 만 별도 변수로 바꿈)
+	sint16 nFinalStatus = pstSession->nPendingFinalStatus;
+	bool bMatched = (nFinalStatus == MATCH_STATUS_MATCHED);
+
+	// 반대편(짝) 링크 1틱 오매칭 보정 — bReverseSuspect 는 여기서 기준으로 못 씀: 반대편 짝
+	//   링크는 그 방향으로는 "정상 순방향"으로 매칭되므로(TryOppositeLinkCandidate() 가 별도
+	//   재귀 평가로 붙인 후보라 자기 자신 기준 역행이 아님) 최종 선택된 항목의 bReverseSuspect는
+	//   보통 false 로 남는다. 대신 LINK_INFO.qwOppositeLinkID(물리적 왕복분리 짝, CreateData
+	//   ComputeOppositeLinkPairs 사전계산)로 "직전 확정 링크의 짝 링크로 1틱만 튀었다가 바로
+	//   직전 확정 링크로 복귀"하는 패턴인지 직접 확인한다 (2026-08-21 최정우 수정 — 최초
+	//   구현에서 bReverseSuspect 기준으로는 실측 케이스가 보정되지 않는 것을 확인)
+	if (bMatched && (pstSession->qwLastConfirmedLinkID != 0)
+		&& (stMatchLinkInfo.qwLinkID != pstSession->qwLastConfirmedLinkID)
+		&& bHasNextLinkID && (qwNextLinkID == pstSession->qwLastConfirmedLinkID)
+		&& (m_stConfig.pcDataLoader != nullptr))
+	{
+		PLINK_INFO pstConfirmedLink = m_stConfig.pcDataLoader->GetLinkInfo(pstSession->qwLastConfirmedLinkID);
+		if ((pstConfirmedLink != nullptr) && (pstConfirmedLink->qwOppositeLinkID != 0)
+			&& (pstConfirmedLink->qwOppositeLinkID == stMatchLinkInfo.qwLinkID))
+		{
+			LOGFMTW("[#%02d] opposite-link 1-tick flip corrected!device=[%s] trip_id=[%s] seq=[%u] "
+				"link=[%llu] prev_confirmed_link=[%llu] -> SKIP(uncharged)",
+				nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRawLogInfo.dwSeqNo,
+				static_cast<unsigned long long>(stMatchLinkInfo.qwLinkID),
+				static_cast<unsigned long long>(pstSession->qwLastConfirmedLinkID));
+			nFinalStatus = MATCH_STATUS_SKIP;
+			bMatched = false;
+		}
+	}
+
+	if (bMatched)
+	{
+		const double dfCurX = pstSession->dfLastMatchX;
+		const double dfCurY = pstSession->dfLastMatchY;
+		const time_t dtCurGps = pstSession->dtLastMatchGps;
+		const bool bCurHas = pstSession->bHasLastMatch;
+
+		pstSession->dfLastMatchX = pstSession->dfPendingPrevMatchX;
+		pstSession->dfLastMatchY = pstSession->dfPendingPrevMatchY;
+		pstSession->dtLastMatchGps = pstSession->dtPendingPrevMatchGps;
+		pstSession->bHasLastMatch = pstSession->bPendingHadLastMatch;
+
+		ProcessOpenGateCharge(nThreadId, stRawLogInfo, stMatchLinkInfo, pstSession, pvtChargeInserts);
+		ProcessClosedRoadCharge(nThreadId, stRawLogInfo, stMatchLinkInfo, pstSession, pvtChargeInserts);
+		ProcessSpeedZoneCharge(nThreadId, stRawLogInfo, stMatchLinkInfo, pstSession, pvtChargeInserts);
+		ProcessExemptZoneCharge(nThreadId, stRawLogInfo, stMatchLinkInfo, pstSession, pvtChargeInserts);
+		ProcessNodeStepCharge(nThreadId, stRawLogInfo, stMatchLinkInfo, pstSession, pvtChargeInserts);
+
+		pstSession->dfLastMatchX = dfCurX;
+		pstSession->dfLastMatchY = dfCurY;
+		pstSession->dtLastMatchGps = dtCurGps;
+		pstSession->bHasLastMatch = bCurHas;
+
+		pstSession->qwLastConfirmedLinkID = stMatchLinkInfo.qwLinkID;
+	}
+
+	AppendUpdateRow(pvtUpdates, stRawLogInfo, nFinalStatus, pstSession->nPendingIntersectLen,
+		pstSession->bPendingHasCoords ? &stMatchLinkInfo.dfMatchY : nullptr,
+		pstSession->bPendingHasCoords ? &stMatchLinkInfo.dfMatchX : nullptr,
+		pstSession->bPendingHasCoords ? stMatchLinkInfo.qwLinkID : 0);
+
+	pstSession->bHasPendingCommit = false;
+}
+
+/**
  * @brief GPS 1건 처리 – 검증·맵매칭·결과 행 적재 (배치 종료 시 rawgps_update)
  * @param[in] nThreadId 워커 스레드 ID
  * @param[in] stRawLogInfo 원시 GPS 정보 (TRIP_ID 는 수집서버 적재분)
@@ -1441,6 +1562,8 @@ void CRawLogWorker::stop(int nThreadId, void *context)
  *   - 맵매칭 실패 → ERROR, 성공 → MATCHED
  *   - TRIP_EVENT=2(END) 이면 MATCHED/ERROR/SKIP 무관 pbTripEnded=true (#9)
  * @remark 세션 갱신은 pstSession(배치 임시)에만 적용. run() 이 bulk 성공 시 커밋.
+ * @remark 2026-08-21 최정우 수정 — 정상 매칭(bMatched && !bUntrustedMatch)된 행은 즉시
+ *   커밋하지 않고 세션에 1틱 보류(CommitPendingRow 참고), 반대편 짝 링크 1틱 오매칭 보정 도입
 */
 bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo,
 		vector<RAW_LOG_UPDATE_ROW> *pvtUpdates, vector<CHARGE_INSERT_ROW> *pvtChargeInserts,
@@ -1484,6 +1607,14 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 	// 현재 배치 TRIP_ID 를 세션에 기록(다음 trip 변경 감지 기준). 키는 DEVICE_KEY 라 trip 이 바뀌면 위에서 리셋됨 (2026-07-08 최정우 추가)
 	strncpy(stSession.szTripId, stRawLogInfo.szTripID, sizeof(stSession.szTripId) - 1);
 	stSession.szTripId[sizeof(stSession.szTripId) - 1] = '\0';
+
+	// 트립종료 직전, 아직 보류(pending) 중인 1틱 지연 행이 있으면 먼저 확정(commit)한다 — 바로
+	//   아래 AppendExpiredClosedRoadCharge/AppendExpiredSpeedZoneCharge 가 세션의 bInClosedRoad/
+	//   bInSpeedZone 을 읽기 "전"에 보류 행의 과금 반영이 먼저 끝나 있어야 정확하다. 이 시점엔
+	//   이번 행(TRIP_EVENT=END) 자신의 매칭 결과를 아직 몰라 보정판단용 "다음" 링크가 없음(보정
+	//   시도 안 함, 보류 행을 계산된 값 그대로 커밋) (2026-08-21 최정우 추가)
+	if (stRawLogInfo.nTripEvent == TRIP_EVENT_END)
+		CommitPendingRow(nThreadId, &stSession, false, 0, pvtUpdates, pvtChargeInserts);
 
 	// 트립 종료(TRIP_EVENT=2) — 매칭 성공/실패 무관하게 그 trip_id 의 PRIM_CHARGEHAND 전 행에
 	//   trip_end_dt 를 나중에(run() 이 배치 종료 시) UPDATE 하도록 적재 (2026-08-12 최정우 추가)
@@ -1533,6 +1664,8 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 			if (!stRawLogInfo.bGpsLatNull && !stRawLogInfo.bGpsLonNull)
 				ProcessParkingCharge(nThreadId, stRawLogInfo, &stSession, pvtChargeInserts);
 		}
+		// 보정판단용 "다음" 링크 없음(이 행은 raw_vld=false라 신뢰 못함) — 보류 행 계산된 값 그대로 커밋 (2026-08-21 최정우 추가)
+		CommitPendingRow(nThreadId, &stSession, false, 0, pvtUpdates, pvtChargeInserts);
 		return AppendUpdateRow(pvtUpdates, stRawLogInfo, MATCH_STATUS_SKIP);
 	}
 
@@ -1560,6 +1693,8 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		memset(reinterpret_cast<void *>(&stNear), 0, MATCH_LINK_INFO_SIZE);
 		stNear.dfIntersectLenSgmt = -1.0;
 		CProcessManager& cPM = m_stConfig.pcProcessManager[nThreadId];
+		// 보정판단용 "다음" 링크 없음(정확도 SKIP이라 신뢰 못함) — 보류 행 계산된 값 그대로 커밋 (2026-08-21 최정우 추가)
+		CommitPendingRow(nThreadId, &stSession, false, 0, pvtUpdates, pvtChargeInserts);
 		if (cPM.FindNearestSegment(stRawLogInfo, &stNear))
 		{
 			int nNearLen = CalcIntersectLen(stRawLogInfo, stNear.dfMatchX, stNear.dfMatchY);
@@ -1583,6 +1718,8 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		memset(reinterpret_cast<void *>(&stNear), 0, MATCH_LINK_INFO_SIZE);
 		stNear.dfIntersectLenSgmt = -1.0;
 		CProcessManager& cPM = m_stConfig.pcProcessManager[nThreadId];
+		// 보정판단용 "다음" 링크 없음(정합성 SKIP이라 신뢰 못함) — 보류 행 계산된 값 그대로 커밋 (2026-08-21 최정우 추가)
+		CommitPendingRow(nThreadId, &stSession, false, 0, pvtUpdates, pvtChargeInserts);
 		if (cPM.FindNearestSegment(stRawLogInfo, &stNear))
 		{
 			int nNearLen = CalcIntersectLen(stRawLogInfo, stNear.dfMatchX, stNear.dfMatchY);
@@ -1734,16 +1871,18 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 	//   · 직전 고도 없이 현재만 있으면 bHasPrevAlt=false → 고도 점수 스킵
 	//   · 역행 미확정(bReverseSkip)·클램프 저신뢰 시에도 이 앵커는 갱신하지 않음 — 다음 포인트가
 	//     오염된 좌표를 기준으로 HEADING/SPEED 를 잘못 계산하지 않도록 (2026-07-21 최정우 수정)
+	//   · 이 앵커는 맵매칭 엔진(RunMapMatch, 다음 GPS 의 고도보조 점수)이 실시간으로 계속 써야
+	//     해서 절대 지연 불가 — 과금 함수 호출·DB 반영만 아래에서 1틱 보류한다 (2026-08-21 최정우 수정)
 	if (bMatched && !bUntrustedMatch)
 	{
-		// 개방형·폐쇄형 게이트 판정 — 세션 앵커(dfLastMatchX/Y/dtLastMatchGps) 갱신 "전"에 호출.
-		//   순간속도·누적거리 계산에 "직전 매칭 위치·시각"이 필요한데, 아래에서 곧바로 현재 값으로
-		//   덮어쓰므로 그 전에 옛 값을 읽어야 함 (2026-08-12 최정우 수정)
-		ProcessOpenGateCharge(nThreadId, stRawLogInfo, stMatchLinkInfo, &stSession, pvtChargeInserts);
-		ProcessClosedRoadCharge(nThreadId, stRawLogInfo, stMatchLinkInfo, &stSession, pvtChargeInserts);
-		ProcessSpeedZoneCharge(nThreadId, stRawLogInfo, stMatchLinkInfo, &stSession, pvtChargeInserts);
-		ProcessExemptZoneCharge(nThreadId, stRawLogInfo, stMatchLinkInfo, &stSession, pvtChargeInserts);
-		ProcessNodeStepCharge(nThreadId, stRawLogInfo, stMatchLinkInfo, &stSession, pvtChargeInserts);
+		// 과금 함수용 "직전 매칭 위치·시각" 스냅샷 — 바로 아래서 최신값으로 덮어쓰기 전에, 이번
+		//   행을 보류(pending) 커밋할 때 쓸 "그 당시" 값을 미리 저장해둔다. 기존엔 이 스냅샷이
+		//   필요 없었다(과금 함수를 그 자리에서 곧바로 호출했으므로) — 1틱 지연커밋 도입으로
+		//   보류 시점엔 세션 앵커가 이미 몇 틱 전진해있어 스냅샷이 꼭 필요함 (2026-08-21 최정우 추가)
+		const double dfPrevMatchX = stSession.dfLastMatchX;
+		const double dfPrevMatchY = stSession.dfLastMatchY;
+		const time_t dtPrevMatchGps = stSession.dtLastMatchGps;
+		const bool bPrevHasMatch = stSession.bHasLastMatch;
 
 		stSession.dfLastMatchX = stMatchLinkInfo.dfMatchX;
 		stSession.dfLastMatchY = stMatchLinkInfo.dfMatchY;
@@ -1755,7 +1894,40 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 			stSession.nPrevRoadType = stMatchLinkInfo.nRoadType;
 			stSession.bHasPrevAlt = true;
 		}
+
+		// 기존에 보류돼 있던 행을 먼저 확정(commit) — 이번 행의 확정 링크를 "다음" 참고로 보정
+		//   판단(반대편 짝 링크 1틱 오매칭이면 SKIP 처리) (2026-08-21 최정우 추가)
+		CommitPendingRow(nThreadId, &stSession, true, stMatchLinkInfo.qwLinkID, pvtUpdates, pvtChargeInserts);
+
+		// 이번 행은 즉시 과금 처리·DB 반영하지 않고 세션에 1틱 보류 — 다음 GPS 가 오면 그때 위
+		//   로직으로 확정된다(반대편 짝 링크 1틱 오매칭 보정, [[project_mapmatch_opposite_link_and_begin_heading]]
+		//   과 별개 후속 조치) (2026-08-21 최정우 추가)
+		stSession.bHasPendingCommit = true;
+		stSession.stPendingRawLogInfo = stRawLogInfo;
+		stSession.stPendingMatchLinkInfo = stMatchLinkInfo;
+		stSession.nPendingFinalStatus = nFinalStatus;
+		stSession.nPendingIntersectLen = CalcIntersectLen(stRawLogInfo,
+			stMatchLinkInfo.dfMatchX, stMatchLinkInfo.dfMatchY);
+		stSession.bPendingHasCoords = true;
+		stSession.dfPendingPrevMatchX = dfPrevMatchX;
+		stSession.dfPendingPrevMatchY = dfPrevMatchY;
+		stSession.dtPendingPrevMatchGps = dtPrevMatchGps;
+		stSession.bPendingHadLastMatch = bPrevHasMatch;
+
+		// 트립 종료(TRIP_EVENT=2) — 더 이상 "다음" GPS 가 안 올 수 있으므로 보정판단 없이 즉시 확정 (2026-08-21 최정우 추가)
+		if (stRawLogInfo.nTripEvent == TRIP_EVENT_END)
+		{
+			CommitPendingRow(nThreadId, &stSession, false, 0, pvtUpdates, pvtChargeInserts);
+			*pbTripEnded = true;
+		}
+
+		return true;
 	}
+
+	// SKIP/ERROR(또는 bUntrustedMatch) 확정 — 기존과 동일하게 즉시 커밋. 보류 중이던 행이 있으면
+	//   "다음" 링크 참고 없이(이 행은 신뢰 못하는 매칭이라 보정판단에 못 씀) 계산된 값 그대로
+	//   확정한다 (2026-08-21 최정우 추가)
+	CommitPendingRow(nThreadId, &stSession, false, 0, pvtUpdates, pvtChargeInserts);
 
 	// INTERSECT_LEN: GPS↔세그먼트 교차점(MATCH_LAT/LON) 하버사인 거리(m) → 정수 반올림
 	const bool bHasCoords = (bMatched || bOut);
@@ -3936,7 +4108,7 @@ bool CRawLogWorker::BulkInsertCharges(PGconn *pcConn, const vector<CHARGE_INSERT
 }
 
 /**
- * @brief TTL 만료(비정상 종료) 시 미확정 레코드 마감 bulk UPDATE [trip_abnormal_end], 4유형 공용
+ * @brief TTL 만료(비정상 종료) 시 미확정 레코드 마감 bulk UPDATE [trip_abend], 4유형 공용
  *   (2026-08-13 최정우 추가, 2026-08-13 수정 — 개방형 한정에서 전 유형으로 확대)
  * @param[in] pcConn DB 커넥션
  * @param[in] vtRows UPDATE 대상 행 목록(ExpireTtlSessions 가 세션 만료마다 적재)

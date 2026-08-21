@@ -159,8 +159,8 @@ bool CRawLogFetcher::RunRecover(CPostgrePool *pcPostgrePool,
  * @brief Feeder 메인 루프 – poll / backpressure / 적응형 sleep
  * @return void
  * @remark
- *   - queue < queue_pause_count: FetchAndDispatch() 수행
- *   - queue >= queue_pause_count: DB 조회 건너뜀, sleep 만 증가
+ *   - queue < queue_pause: FetchAndDispatch() 수행
+ *   - queue >= queue_pause: DB 조회 건너뜀, sleep 만 증가
  *   - 매 사이클 끝 ComputeFetchSleepMs() 만큼 대기
 */
 void CRawLogFetcher::run()
@@ -179,7 +179,7 @@ void CRawLogFetcher::run()
 			FetchAndDispatch();
 		else
 		{
-			LOGFMTD("raw log fetcher: backpressure skip fetch!queue=[%d] queue_pause_count=[%d]",
+			LOGFMTD("raw log fetcher: backpressure skip fetch!queue=[%d] queue_pause=[%d]",
 				nQueueCount, m_nQueuePauseCount);
 		}
 
@@ -197,9 +197,9 @@ void CRawLogFetcher::run()
  * @param[in] nQueueCount 워커 큐 전체 적재 batch 수
  * @return sleep ms
  * @remark
- *   - queue < queue_pause_count : fetch_interval
- *   - queue_pause_count <= queue < queue_max_count : queue_busy_min ~ queue_busy_max 선형 증가
- *   - queue >= queue_max_count : queue_busy_max
+ *   - queue < queue_pause : fetch_interval
+ *   - queue_pause <= queue < queue_max : queue_busymin ~ queue_busymax 선형 증가
+ *   - queue >= queue_max : queue_busymax
 */
 int CRawLogFetcher::ComputeFetchSleepMs(int nQueueCount) const
 {

@@ -129,6 +129,29 @@ typedef struct sVehicleTripSession
 	double							dfNodeStepLastX;						// 직전 매칭 위치 경도 — 누적거리 계산·to_lon
 	double							dfNodeStepLastY;						// 직전 매칭 위치 위도 — to_lat
 
+	// ── 1틱 지연 커밋 버퍼 — 반대편(짝) 링크 1틱 오매칭 보정용 (2026-08-21 최정우 추가) ──
+	//   RunMapMatch 로 정상 매칭(bMatched && !bUntrustedMatch)된 행을 곧바로 과금 처리·DB
+	//   반영하지 않고 1건 보류했다가, 바로 다음 GPS의 확정 링크가 "역행의심으로 튀기 전" 링크와
+	//   같으면(=1틱만 반대편 짝 링크로 튀었다가 즉시 복귀) GPS 노이즈로 판단해 SKIP(미과금)으로
+	//   보정한다. 맵매칭 엔진 자체의 연속매칭 앵커(qwLinkID/dfLastMatchLinkPos 등, RunMapMatch
+	//   내부에서 실시간 갱신)는 전혀 건드리지 않음 — 오직 "과금 함수 호출 + rawgps_update 반영
+	//   타이밍"만 1틱 늦춘다. 세션(디바이스)에 붙어있어 DB fetch 배치 경계를 넘어서도 유지됨.
+	bool							bHasPendingCommit;
+	RAW_LOG_INFO					stPendingRawLogInfo;					// 보류 행 원본 GPS 입력
+	MATCH_LINK_INFO					stPendingMatchLinkInfo;					// 보류 행 매칭 결과
+	sint16							nPendingFinalStatus;					// 보류 행의 확정 MATCH_STATUS(보정 전)
+	int								nPendingIntersectLen;					// 보류 행 INTERSECT_LEN
+	bool							bPendingHasCoords;						// 보류 행 MATCH_LAT/LON 저장 여부
+	uint64							qwLastConfirmedLinkID;					// 마지막으로 "신뢰 가능(과금 반영)"하게 커밋된 링크 ID(0=없음) — 보정판단 기준
+	// 보류 행 처리 시점의 과금용 "직전 매칭 위치·시각" 스냅샷 — dfLastMatchX/Y 등은 RunMapMatch 가
+	//   매 행마다 실시간으로 최신값으로 전진시키므로, 보류 행을 나중에 commit할 때는 그 당시(보류
+	//   시점) 값을 써야 이동거리·속도가 정확함(그렇지 않으면 이미 몇 틱 지난 최신 위치를 "직전
+	//   위치"로 오인해 이동거리가 잘못 계산됨)
+	double							dfPendingPrevMatchX;
+	double							dfPendingPrevMatchY;
+	time_t							dtPendingPrevMatchGps;
+	bool							bPendingHadLastMatch;
+
 	sVehicleTripSession() :
 		qwLinkID(0),
 		dtLastSeen(0),
@@ -178,7 +201,16 @@ typedef struct sVehicleTripSession
 		dfNodeStepEntryY(0.0),									// (2026-08-14 최정우 추가)
 		dfNodeStepAccumDistM(0.0),								// (2026-08-14 최정우 추가)
 		dfNodeStepLastX(0.0),									// (2026-08-14 최정우 추가)
-		dfNodeStepLastY(0.0)									// (2026-08-14 최정우 추가)
+		dfNodeStepLastY(0.0),									// (2026-08-14 최정우 추가)
+		bHasPendingCommit(false),								// (2026-08-21 최정우 추가)
+		nPendingFinalStatus(MATCH_STATUS_PENDING),				// (2026-08-21 최정우 추가)
+		nPendingIntersectLen(-1),								// (2026-08-21 최정우 추가)
+		bPendingHasCoords(false),								// (2026-08-21 최정우 추가)
+		qwLastConfirmedLinkID(0),								// (2026-08-21 최정우 추가)
+		dfPendingPrevMatchX(0.0),								// (2026-08-21 최정우 추가)
+		dfPendingPrevMatchY(0.0),								// (2026-08-21 최정우 추가)
+		dtPendingPrevMatchGps(0),								// (2026-08-21 최정우 추가)
+		bPendingHadLastMatch(false)								// (2026-08-21 최정우 추가)
 	{
 		szTripId[0] = '\0';									// (2026-07-08 최정우 추가)
 		// vtActiveGateIds 는 vector 라 기본 생성자가 이미 빈 상태로 초기화함 (2026-08-13 최정우 수정)
@@ -189,6 +221,8 @@ typedef struct sVehicleTripSession
 		szParkingZoneRoadId[0] = '\0';						// (2026-08-13 최정우 추가)
 		szExemptZoneRoadId[0] = '\0';							// (2026-08-14 최정우 부활)
 		szNodeStepRoadId[0] = '\0';							// (2026-08-14 최정우 추가)
+		memset(reinterpret_cast<void *>(&stPendingRawLogInfo), 0, RAW_LOG_INFO_SIZE);		// (2026-08-21 최정우 추가)
+		memset(reinterpret_cast<void *>(&stPendingMatchLinkInfo), 0, MATCH_LINK_INFO_SIZE);	// (2026-08-21 최정우 추가)
 	}
 } VEHICLE_TRIP_SESSION, *PVEHICLE_TRIP_SESSION;
 
@@ -278,16 +312,17 @@ typedef struct sRawLogWorkerConfig
 	CPostgrePool					*pcPostgrePool;
 	CProcessManager					*pcProcessManager;
 	CChargeDataLoader					*pcChargeDataLoader;					// 게이트·구역 캐시 — 개방형 과금 판정용(nullptr=과금 비활성) (2026-08-12 최정우 추가)
+	CDataLoader						*pcDataLoader;							// 형상정보(LINK_INFO.qwOppositeLinkID 조회) — 반대편 짝 링크 1틱 오매칭 보정용 (2026-08-21 최정우 추가)
 	string							strUpdateSQL;						// [rawgps_update] 완료(1/3/4) 및 release(0) 공용
 	string							strChargeInsertSQL;						// [charge_insert] 개방형 게이트 통과 bulk INSERT (비어있으면 비활성) (2026-08-12 최정우 수정)
 	string							strTripEndUpdateSQL;						// [trip_end] 트립 종료 시 trip_end_dt UPDATE (비어있으면 비활성) (2026-08-12 최정우 추가)
-	string							strAbnormalTripEndSQL;						// [trip_abnormal_end] TTL 만료 시 미확정 레코드 마감 UPDATE, 4유형 공용 (비어있으면 비활성) (2026-08-13 최정우 추가, 2026-08-13 수정 — 개방형 한정 해제)
+	string							strAbnormalTripEndSQL;						// [trip_abend] TTL 만료 시 미확정 레코드 마감 UPDATE, 4유형 공용 (비어있으면 비활성) (2026-08-13 최정우 추가, 2026-08-13 수정 — 개방형 한정 해제)
 	int								nWorkerThreads;
 	int								nTtlSec;							// trip_id 세션 유지 시간 (초, 0=비활성)
 	int								nMatchTimeoutMs;					// 1 GPS 맵매칭 처리 임계 (ms, 초과 시 ERROR 격리, 0=비활성)
 	int								nRetryMax;							// release→PENDING 재시도 상한. 초과 시 ERROR(4) 고정. 0=무제한
-	int								nConnRetryMax;						// [database] conn_retry_max — 풀 연결 핸들 확보 재시도 최대 횟수 (회, 2026-07-10 최정우 추가)
-	int								nConnRetryWait;						// [database] conn_retry_wait — 재시도 사이 대기 (ms, 2026-07-10 최정우 추가)
+	int								nConnRetryMax;						// [database] retrymax — 풀 연결 핸들 확보 재시도 최대 횟수 (회, 2026-07-10 최정우 추가)
+	int								nConnRetryWait;						// [database] retrywait — 재시도 사이 대기 (ms, 2026-07-10 최정우 추가)
 	int								nRadiusSkip;						// config radius_skip — ACCURACY_M 초과 시 SKIP (m). 0=비활성 (2026-07-08 최정우)
 	int								nHeadingMaxDist;					// (단위: m) 연속매칭 heading 계산 이동거리 상한. 초과 시 heading 미사용, 0=비활성 ([mapmatch] distance) (2026-07-15 최정우 추가)
 	double							dfSpeedFactor;					// config speed_factor — 이동거리 환산속도/SPEED_KMH 배율 상한. 0=비활성 (2026-07-20 최정우 추가)
@@ -396,6 +431,13 @@ private:
 	void ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRawLogInfo,
 		const MATCH_LINK_INFO& stMatchLinkInfo, VEHICLE_TRIP_SESSION *pstSession,
 		vector<CHARGE_INSERT_ROW> *pvtChargeInserts);
+	// 보류(pending) 중인 1틱 지연 행을 확정(commit) — 반대편 짝 링크 1틱 오매칭이면 SKIP(미과금)으로
+	//   보정 후, 과금 함수 호출(직전 매칭 위치·시각은 보류 시점 스냅샷으로 잠깐 바꿔치기 후 원복) +
+	//   rawgps_update 큐잉까지 수행. bHasNextLinkID/qwNextLinkID=보정판단용 "다음" 확정 링크,
+	//   없으면 false/0(보정 시도 안 함, 계산된 값 그대로 커밋) (2026-08-21 최정우 추가)
+	void CommitPendingRow(int nThreadId, VEHICLE_TRIP_SESSION *pstSession,
+		bool bHasNextLinkID, uint64 qwNextLinkID,
+		vector<RAW_LOG_UPDATE_ROW> *pvtUpdates, vector<CHARGE_INSERT_ROW> *pvtChargeInserts);
 	// TTL 만료로 세션이 지워지기 직전, 아직 열려있는 일반도로 세션이면 N/3(AUDIT)로 1건 기록 —
 	//   실제 과금 대상이라 폐쇄형/구간단속/주정차와 동일하게 AUDIT(3), 비과금도로의 SKIP(4)과는 다름
 	//   (사용자 지시 패턴 계승, 2026-08-14 추가)

@@ -473,24 +473,21 @@ test_stop_all() {
 	return "$rc"
 }
 
+# 웹 뷰어만 기동 — 맵매칭(MapMatchSvr)·시뮬레이터(RawGpsSimSvr)는 건드리지 않음.
+#   원격 DB 실시간 뷰어(matched-gps-viewer-remote.html, nodelink-geumto.html "마지막 주행"
+#   패널)처럼 로컬 엔진 없이도 쓰는 화면이 늘어나 기본 시작 명령의 부담을 줄임 — 로컬 엔진으로
+#   직접 GPS를 매칭해야 할 때는 웹 페이지 "신규테스트" 버튼 또는 start-mm-sim-retry 를 따로
+#   사용 (2026-08-19 최정우 수정 — 이전엔 맵매칭→시뮬→웹 순서로 셋 다 기동했음)
 test_start_all() {
 	local rc=0
-	test_require_bins || return 1
-	echo "=== RUC 테스트 시작 ==="
-	# clear_rawgps_data || true	# 기존 데이터 유지 위해 비활성화 (2026-07-21 최정우 수정)
-	echo "[1/3] MapMatchSvr"
-	engine_start "$MM_BIN" || rc=1
-	if [ "$rc" -eq 0 ]; then
-		echo "[2/3] RawGpsSimSvr"
-		engine_start "$SIM_BIN" || rc=1
-	fi
-	if [ "$rc" -eq 0 ]; then
-		echo "[3/3] web_viewer"
-		web_start || rc=1
-	fi
+	[ -x "$WEB_RUN" ] || { echo "오류: $WEB_RUN 없음 — web/venv 확인"; return 1; }
+	[ -f "$WEB_DIR/config.ini" ] || { echo "오류: web/config.ini 없음"; return 1; }
+	echo "=== RUC 웹 뷰어 시작 ==="
+	echo "안내: 맵매칭(MapMatchSvr)·시뮬레이터(RawGpsSimSvr)는 기동하지 않습니다."
+	echo "      로컬 엔진이 필요하면 웹 페이지 '신규테스트' 버튼 또는 './test_svr.sh start-mm-sim-retry' 를 사용하세요."
+	web_start || rc=1
 	if [ "$rc" -ne 0 ]; then
-		echo "=== 기동 실패 — 부분 기동 정리 중 ==="
-		test_stop_all || true
+		echo "=== 기동 실패 ==="
 		return 1
 	fi
 	echo "=== 기동 완료 ==="

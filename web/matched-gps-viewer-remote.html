@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>마지막 주행 뷰어 — 원격 DB 실시간</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  :root {
+    --bg: #f8fafc; --panel: #ffffff; --text: #1e293b; --muted: #64748b;
+    --border: #e2e8f0; --accent: #1e88e5; --code-bg: #f1f5f9; --live: #43a047;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a; --panel: #1e293b; --text: #e2e8f0; --muted: #94a3b8;
+      --border: #334155; --accent: #60a5fa; --code-bg: #0b1220; --live: #66bb6a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", sans-serif; }
+  #layout { display: flex; height: 100vh; }
+  #side { width: 400px; flex: none; background: var(--panel); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; overflow: hidden; }
+  #side-scroll { overflow-y: auto; flex: 1; padding: 18px 16px 40px; }
+  h1 { font-size: 19px; margin: 0 0 6px; display: flex; align-items: center; gap: 8px; }
+  .live-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--live); flex: none;
+    animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .note {
+    background: var(--code-bg); border-left: 4px solid var(--accent); border-radius: 4px;
+    padding: 10px 12px; font-size: 13px; margin: 0 0 16px; line-height: 1.55;
+  }
+  .note b { color: var(--accent); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; border: 1.5px solid #fff; box-shadow: 0 0 0 1px var(--border); }
+  .charge-panel {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; margin-bottom: 14px;
+  }
+  .charge-panel h2 { font-size: 12.5px; margin: 0 0 8px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
+  .charge-check { display: flex; align-items: center; gap: 7px; font-size: 13px; padding: 3px 0; cursor: pointer; }
+  .charge-check input[type="checkbox"] { margin: 0; flex: none; cursor: pointer; }
+  .trip-panel {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 14px; margin-bottom: 14px;
+  }
+  .trip-panel h2 { font-size: 12.5px; margin: 0 0 10px; color: var(--muted); font-weight: 700;
+    text-transform: uppercase; letter-spacing: .03em; display: flex; align-items: center; justify-content: space-between; }
+  .trip-panel .pid { font-family: monospace; font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 10px; word-break: break-all; }
+  .kv-row { display: flex; justify-content: space-between; font-size: 12.5px; padding: 3px 0; border-top: 1px solid var(--border); }
+  .kv-row:first-of-type { border-top: none; }
+  .kv-row span:first-child { color: var(--muted); }
+  .kv-row span:last-child { font-family: monospace; font-weight: 600; }
+  .toggle-row { display: flex; gap: 14px; font-size: 13px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+  .toggle-row label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .swatch-line { width: 16px; height: 3px; border-radius: 2px; }
+  .last-poll { font-size: 11.5px; color: var(--muted); margin: 0 0 16px; }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  #map { flex: 1; cursor: default; }
+  #map.leaflet-grab, #map.leaflet-grab:active, #map.leaflet-dragging { cursor: default; }
+  .leaflet-tooltip.link-label {
+    background: #ffffffee; color: #1e293b; border: 1px solid #94a3b8; font-size: 10.5px;
+    padding: 1px 5px; border-radius: 3px; font-weight: 600; box-shadow: 0 1px 4px rgba(0,0,0,.25);
+  }
+  .leaflet-tooltip.pt-label {
+    background: #1e293bdd; color: #fff; border: none; font-size: 11px;
+    padding: 2px 6px; border-radius: 3px; box-shadow: 0 1px 4px rgba(0,0,0,.35);
+  }
+  .leaflet-tooltip.tip-intersect {
+    font-size: 11px; font-weight: 700; color: #0f172a; background: #fef9c3;
+    border: 1px solid #94a3b8; border-radius: 3px; padding: 2px 6px;
+  }
+  .status-chip { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 600; font-family: -apple-system, sans-serif; }
+  .status-1 { background: #43a04722; color: #2e7d32; }
+  .status-3 { background: #fb8c0022; color: #ef6c00; }
+  footer.credit { font-size: 11px; color: var(--muted); padding: 10px 16px; border-top: 1px solid var(--border); }
+  .doc-links { display: flex; flex-direction: column; gap: 4px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .doc-links a { font-size: 12px; color: var(--accent); text-decoration: none; }
+  .doc-links a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div id="layout">
+  <div id="side">
+    <div id="side-scroll">
+      <h1><span class="live-dot"></span>마지막 주행 뷰어</h1>
+
+      <div class="charge-panel">
+        <h2>과금 구역 링크 표시 <span style="font-weight:400;text-transform:none;">(ruc.base_roadlink)</span></h2>
+        <label class="charge-check"><input type="checkbox" checked data-kind="0" /><span class="dot" style="background:#6d4c41;"></span>일반도로</label>
+        <label class="charge-check"><input type="checkbox" checked data-kind="1" /><span class="dot" style="background:#3949ab;"></span>개방형</label>
+        <label class="charge-check"><input type="checkbox" checked data-kind="2" /><span class="dot" style="background:#e53935;"></span>폐쇄형</label>
+        <label class="charge-check"><input type="checkbox" checked data-kind="3" /><span class="dot" style="background:#8e24aa;"></span>구간단속</label>
+        <label class="charge-check"><input type="checkbox" checked data-kind="4" /><span class="dot" style="background:#fdd835;border-color:#f57f17;"></span>주정차단속</label>
+        <label class="charge-check"><input type="checkbox" checked data-kind="5" /><span class="dot" style="background:#d81b60;"></span>면제도로</label>
+      </div>
+
+      <div class="trip-panel">
+        <h2>현재 TRIP_ID</h2>
+        <div class="pid" id="tripId">조회 중…</div>
+        <div class="kv-row"><span>DEVICE_KEY</span><span id="kvDevice">-</span></div>
+        <div class="kv-row"><span>포인트 / 매칭</span><span id="kvCount">-</span></div>
+        <div class="kv-row"><span>시작 ~ 최근</span><span id="kvRange">-</span></div>
+        <div class="kv-row"><span>상태</span><span id="kvState">-</span></div>
+        <div class="toggle-row">
+          <label><span class="swatch-line" style="background:#e53935;"></span>
+            <input type="checkbox" id="chkRaw" checked /> 원본 GPS</label>
+          <label><span class="swatch-line" style="background:#1e88e5;"></span>
+            <input type="checkbox" id="chkMatched" checked /> 맵매칭 경로</label>
+        </div>
+      </div>
+
+      <div class="last-poll" id="lastPoll">-</div>
+
+      <div class="doc-links">
+        <a href="nodelink-geumto.html">금토로 표준노드링크 뷰어(과금 4+1유형 지도) ↗</a>
+        <a href="matched-gps-viewer.html">CSV 배치 매칭 뷰어(로컬, MapMatchCsvTool) ↗</a>
+      </div>
+    </div>
+    <footer class="credit">
+      출처: 원격 ruc DB(59.11.91.162) <code>/api/remote/trips?limit=1</code>·<code>/api/remote/trip/&lt;id&gt;/points</code>
+      (server.py, 읽기전용 세션)
+    </footer>
+  </div>
+  <div id="map"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const POLL_MS = 5000;
+const RAW_COLOR = '#e53935', MATCH_COLOR = '#1e88e5';
+// 맵매칭 좌표 마커 전용 색 — 과금 유형 팔레트(브라운/인디고/레드/퍼플/옐로/마젠타)·기존 노드점
+//   (#43a047, 초록)·매칭 경로선(#1e88e5, 파랑) 등 이미 쓰인 색과 겹치지 않는 청록(cyan)으로
+//   지도 위에서 바로 눈에 띄게 (2026-08-19 최정우 수정 — 초록이 노드점과 비슷해 청록으로 변경)
+const MATCH_POINT_COLOR = '#00bcd4', MATCH_POINT_BORDER = '#006064';
+
+// canvas 렌더러 — 좌표 점이 많을 때 SVG 대비 확대/축소가 훨씬 가벼움 (2026-08-19 최정우 추가)
+const map = L.map('map', { zoomControl: true, renderer: L.canvas() });
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
+}).addTo(map);
+let rawLayer = L.layerGroup().addTo(map);
+// matchedLayer = 전체 경로선 + 시작/종료 마커(개수 적어 항상 표시). 매칭 "점" 마커는 별도
+//   레이어(matchedPointLayer)로 분리해 화면 영역 필터 재적용 시 이 둘을 건드리지 않는다
+//   (2026-08-19 최정우 수정)
+let matchedLayer = L.layerGroup().addTo(map);
+let matchedPointLayer = L.layerGroup().addTo(map);
+let linkLayer = L.layerGroup().addTo(map);
+let currentTripId = null;
+
+// road_kind(=CHARGE_TYPE) → 색상 — nodelink-geumto.html 과 동일 팔레트 (2026-08-18 최정우 추가)
+const ZONE_COLOR = { '0': '#6d4c41', '1': '#3949ab', '2': '#e53935', '3': '#8e24aa', '4': '#fdd835', '5': '#d81b60' };
+const ZONE_BORDER = { '4': '#f57f17' };
+const ZONE_NAME = { '0': '일반도로', '1': '개방형', '2': '폐쇄형', '3': '구간단속', '4': '주정차단속', '5': '면제도로' };
+const GATE_DIV_LABEL = { M: '본선', I: '입구', O: '출구', B: '입출구겸용' };
+const zoneLayersByKind = { '0': L.layerGroup(), '1': L.layerGroup(), '2': L.layerGroup(), '3': L.layerGroup(), '4': L.layerGroup(), '5': L.layerGroup() };
+
+// G/M 순번 상시 라벨은 실제 DOM 엘리먼트라 좌표가 많으면(수백 개) 확대/축소·이동마다 전부
+//   재배치돼 느려짐 — 어차피 축소된 상태에선 점이 다닥다닥 붙어 라벨을 읽을 수도 없으니,
+//   일정 줌 레벨 이상에서만 열어 그 아래에서는 점만 그린다 (2026-08-19 최정우 추가)
+const SEQ_LABEL_MIN_ZOOM = 17;
+let seqLabelMarkers = [];
+// shortText(G12 등)는 상시 라벨, detailText(좌표값)는 마우스 오버 중에만 같은 툴팁의 내용을
+//   바꿔 보여줌 — 저줌에서 라벨이 닫혀 있어도 마커에 오버하면 열어서 보여주고, 마우스가
+//   벗어나면 원래 상태(저줌=닫힘/고줌=짧은 라벨)로 되돌림 (2026-08-19 최정우 추가)
+function bindSeqLabel(marker, shortText, detailText, direction, offset) {
+  const isHighZoom = function () { return map.getZoom() >= SEQ_LABEL_MIN_ZOOM; };
+  marker.bindTooltip(shortText, { permanent: true, direction: direction, offset: offset, className: 'pt-label' });
+  if (!isHighZoom()) marker.closeTooltip();
+  marker.on('mouseover', function () {
+    marker.setTooltipContent(detailText);
+    marker.openTooltip();
+  });
+  marker.on('mouseout', function () {
+    marker.setTooltipContent(shortText);
+    if (!isHighZoom()) marker.closeTooltip();
+  });
+  seqLabelMarkers.push(marker);
+  return marker;
+}
+map.on('zoomend', function () {
+  const show = map.getZoom() >= SEQ_LABEL_MIN_ZOOM;
+  seqLabelMarkers.forEach(function (m) { show ? m.openTooltip() : m.closeTooltip(); });
+});
+
+// 화면(bounds) 안의 GPS/매칭 점만 그려 확대·이동 시 재배치할 마커·라벨 수를 줄임 — 트립 1건이
+//   수백~1천 건대인 경우 특히 효과. bounds 에 25% 여백을 둬 경계 근처에서 마커가 깜빡이며
+//   나타났다 사라지지 않게 함. 전체 경로선·시작/종료 마커(matchedLayer)는 손대지 않고 항상
+//   그대로 유지 — 구조 파악용이라 화면 밖으로 나가도 계속 보여야 하고 개수도 2~3개뿐이라
+//   부담이 없음 (2026-08-19 최정우 추가)
+let lastPoints = [];
+let lastMatchedPoints = [];
+// 좌표가 촘촘하면(정차 구간 등) 같은 자리에 라벨이 겹쳐 안 읽힘 — 순번(렌더 순서) 순으로
+//   위치를 돌려가며 배정해 바로 이웃한 순번끼리는 최대한 다른 자리에 뜨게 함. G는 점 위쪽
+//   반원, M은 아래쪽 반원 안에서만 순환시켜 애초에 서로 가까운 자기 짝(같은 gps_seq의
+//   G/M)끼리는 항상 위/아래로 분리 유지 (2026-08-19 최정우 추가)
+const G_LABEL_POS = [['top', [0, -6]], ['right', [9, -9]], ['left', [-9, -9]], ['top', [16, -4]], ['top', [-16, -4]]];
+const M_LABEL_POS = [['bottom', [0, 6]], ['right', [9, 9]], ['left', [-9, 9]], ['bottom', [16, 4]], ['bottom', [-16, 4]]];
+function renderVisiblePoints() {
+  const bounds = map.getBounds().pad(0.25);
+
+  rawLayer.clearLayers();
+  seqLabelMarkers = [];
+  let gi = 0;
+  lastPoints.forEach(function (p) {
+    if (p.gps_lat == null || p.gps_lon == null) return;
+    if (!bounds.contains([p.gps_lat, p.gps_lon])) return;
+    const gm = L.circleMarker([p.gps_lat, p.gps_lon], { radius: 4, color: RAW_COLOR, weight: 1, fillColor: RAW_COLOR, fillOpacity: 0.55 })
+      .addTo(rawLayer);
+    const gpos = G_LABEL_POS[gi % G_LABEL_POS.length]; gi++;
+    // 마우스 오버 상세: GPS 좌표를 x(경도),y(위도) 순으로 표시 (2026-08-19 최정우 추가)
+    bindSeqLabel(gm, 'G' + p.gps_seq, p.gps_lon.toFixed(6) + ', ' + p.gps_lat.toFixed(6), gpos[0], gpos[1]);
+
+    // GPS 좌표 ↔ 그 좌표의 맵매칭 좌표 연결선 — 마우스 오버 시 수선의 발 길이(m)만 간단히 표시 (2026-08-19 최정우 수정)
+    if (p.match_lat != null && p.match_lon != null) {
+      L.polyline([[p.gps_lat, p.gps_lon], [p.match_lat, p.match_lon]], {
+        color: '#94a3b8', weight: 2, opacity: 0.85, dashArray: '4 4'
+      }).bindTooltip(
+        (p.intersect_len != null ? p.intersect_len + 'm' : '-'),
+        { sticky: true, className: 'tip-intersect' }
+      ).addTo(rawLayer);
+    }
+  });
+
+  matchedPointLayer.clearLayers();
+  let mi = 0;
+  lastMatchedPoints.forEach(function (p) {
+    if (!bounds.contains([p.match_lat, p.match_lon])) return;
+    const mm = L.circleMarker([p.match_lat, p.match_lon], { radius: 4, color: MATCH_POINT_BORDER, weight: 1.5, fillColor: MATCH_POINT_COLOR, fillOpacity: 0.95 })
+      .addTo(matchedPointLayer);
+    const mpos = M_LABEL_POS[mi % M_LABEL_POS.length]; mi++;
+    // 마우스 오버 상세: 맵매칭 좌표를 x(경도),y(위도) 순으로 표시 (2026-08-19 최정우 추가)
+    bindSeqLabel(mm, 'M' + p.gps_seq, p.match_lon.toFixed(6) + ', ' + p.match_lat.toFixed(6), mpos[0], mpos[1]);
+  });
+}
+map.on('moveend', renderVisiblePoints);
+
+function fmtTime(dt) {
+  if (!dt || dt.length < 14) return dt || '?';
+  return dt.slice(8,10) + ':' + dt.slice(10,12) + ':' + dt.slice(12,14);
+}
+async function fetchJson(url) {
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) throw new Error(url + ' -> HTTP ' + res.status);
+  return res.json();
+}
+
+// 과금구역(base_roadlink) + 게이트(base_tollgate) — 정적 참조 데이터라 최초 1회만 로드 (2026-08-18 최정우 추가)
+async function loadZones() {
+  let data;
+  try {
+    data = await fetchJson('/api/remote/zones');
+  } catch (e) {
+    console.error('zone load failed', e);
+    return;
+  }
+
+  data.zones.forEach(z => {
+    const layer = zoneLayersByKind[z.road_kind];
+    if (!layer) return;
+    const color = ZONE_COLOR[z.road_kind] || '#94a3b8';
+    const latlngs = z.coords.map(c => [c[1], c[0]]);
+    const tooltip = z.road_id + ' · ' + z.road_nm + ' (' + ZONE_NAME[z.road_kind] + ')' +
+      (z.speed_limit_kmh ? ' · 제한 ' + z.speed_limit_kmh + 'km/h' : '');
+    if (z.geom_type === 'POLY') {
+      L.polygon(latlngs, { color: ZONE_BORDER[z.road_kind] || color, weight: 2, fillColor: color, fillOpacity: 0.35 })
+        .bindTooltip(tooltip, { sticky: true, className: 'link-label' }).addTo(layer);
+    } else {
+      L.polyline(latlngs, { color: color, weight: 7, opacity: 0.75, lineCap: 'round', lineJoin: 'round' })
+        .bindTooltip(tooltip, { sticky: true, className: 'link-label' }).addTo(layer);
+    }
+  });
+
+  data.gates.forEach(g => {
+    const zone = data.zones.find(z => z.road_id === g.road_id);
+    const layer = zone ? zoneLayersByKind[zone.road_kind] : null;
+    if (!layer || g.lat == null || g.lon == null) return;
+    const color = ZONE_COLOR[zone.road_kind] || '#94a3b8';
+    L.circleMarker([g.lat, g.lon], { radius: 6, color: '#1e293b', weight: 2, fillColor: color, fillOpacity: 0.95 })
+      .bindTooltip(g.tollgate_id + '(' + (GATE_DIV_LABEL[g.gate_div] || g.gate_div) + ')',
+        { permanent: true, direction: 'top', offset: [0, -8], className: 'link-label' })
+      .addTo(layer);
+  });
+
+  Object.keys(zoneLayersByKind).forEach(k => zoneLayersByKind[k].addTo(linkLayer));
+}
+
+document.querySelectorAll('.charge-check input[type="checkbox"]').forEach(cb => {
+  cb.addEventListener('change', () => {
+    const layer = zoneLayersByKind[cb.getAttribute('data-kind')];
+    if (!layer) return;
+    if (cb.checked) linkLayer.addLayer(layer); else linkLayer.removeLayer(layer);
+  });
+});
+
+async function refresh() {
+  let trips;
+  try {
+    trips = await fetchJson('/api/remote/trips?limit=1');
+  } catch (e) {
+    document.getElementById('lastPoll').textContent = '조회 실패: ' + e.message;
+    return;
+  }
+  if (trips.length === 0) {
+    document.getElementById('tripId').textContent = '(데이터 없음)';
+    return;
+  }
+  const t = trips[0];
+  currentTripId = t.trip_id;
+  document.getElementById('tripId').textContent = t.trip_id;
+  document.getElementById('kvDevice').textContent = t.device_key;
+  document.getElementById('kvCount').textContent = t.count;
+  document.getElementById('kvRange').textContent = fmtTime(t.gps_dt_min) + ' ~ ' + fmtTime(t.gps_dt_max);
+
+  let points;
+  try {
+    points = await fetchJson('/api/remote/trip/' + encodeURIComponent(t.trip_id) + '/points');
+  } catch (e) {
+    document.getElementById('lastPoll').textContent = '조회 실패: ' + e.message;
+    return;
+  }
+
+  const matchedPoints = points.filter(p => p.match_status === 1 && p.match_lat != null && p.match_lon != null);
+  document.getElementById('kvCount').textContent = points.length + ' / ' + matchedPoints.length;
+  document.getElementById('kvState').innerHTML = t.complete
+    ? '<span class="status-chip status-1">완료</span>'
+    : '<span class="status-chip status-3" style="color:var(--live);background:#43a04722;">● 진행중</span>';
+
+  // 필터 재적용(renderVisiblePoints, moveend 핸들러)이 참조할 최신 데이터로 갱신 후,
+  // 현재 화면 영역 기준으로 렌더 (2026-08-19 최정우 수정 — 마커 렌더링을 화면 필터 함수로 이동)
+  lastPoints = points;
+  lastMatchedPoints = matchedPoints;
+  renderVisiblePoints();
+
+  matchedLayer.clearLayers();
+  const latlngs = matchedPoints.map(p => [p.match_lat, p.match_lon]);
+  if (latlngs.length > 1) {
+    L.polyline(latlngs, { color: MATCH_COLOR, weight: 4, opacity: 0.9 }).addTo(matchedLayer);
+  }
+  if (latlngs.length > 0) {
+    L.circleMarker(latlngs[0], { radius: 8, color: '#1b5e20', weight: 2, fillColor: '#43a047', fillOpacity: 1 })
+      .bindTooltip('① 시작 (' + fmtTime(t.gps_dt_min) + ')', { permanent: true, direction: 'right', offset: [10, 0], className: 'link-label' })
+      .addTo(matchedLayer);
+    const last = latlngs[latlngs.length - 1];
+    L.circleMarker(last, { radius: 8, color: t.complete ? '#7f0000' : '#e65100', weight: 2,
+        fillColor: t.complete ? '#e53935' : '#fb8c00', fillOpacity: 1 })
+      .bindTooltip('② ' + (t.complete ? '종료' : '진행중') + ' (' + fmtTime(t.gps_dt_max) + ')',
+        { permanent: true, direction: 'right', offset: [10, 0], className: 'link-label' })
+      .addTo(matchedLayer);
+  }
+
+  document.getElementById('lastPoll').textContent =
+    '마지막 조회: ' + new Date().toLocaleTimeString('ko-KR') + ' (' + (POLL_MS/1000) + '초마다 갱신)';
+}
+
+document.getElementById('chkRaw').addEventListener('change', e => {
+  if (e.target.checked) map.addLayer(rawLayer); else map.removeLayer(rawLayer);
+});
+document.getElementById('chkMatched').addEventListener('change', e => {
+  if (e.target.checked) {
+    map.addLayer(matchedLayer);
+    map.addLayer(matchedPointLayer);
+  } else {
+    map.removeLayer(matchedLayer);
+    map.removeLayer(matchedPointLayer);
+  }
+});
+
+// nodelink-geumto.html 과 동일한 위치·줌으로 고정 — 실제 트립 좌표가 이 범위 밖이어도
+//   지도는 이 지점(금토로 일대)에 그대로 머문다 (2026-08-18 최정우 수정 — fitBounds로 트립
+//   위치를 따라가던 것을 nodelink-geumto.html 위치 고정으로 변경)
+map.setView([37.409, 127.089], 16);
+loadZones();
+refresh();
+setInterval(refresh, POLL_MS);
+</script>
+</body>
+</html>

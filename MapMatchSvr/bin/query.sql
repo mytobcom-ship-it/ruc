@@ -304,7 +304,7 @@ WHERE T.TRIP_ID = V.TRIP_ID
 	AND (T.TRIP_END_DT IS NULL OR V.TRIP_END_DT > T.TRIP_END_DT);
 
 -- ── 7. 세션 TTL 만료(비정상 종료) 시 미확정 레코드 마감(5유형 공용) ─────────
--- [trip_abnormal_end] CRawLogWorker::UpdateAbnormalTripEnd() 가 ExpireTtlSessions() 안에서
+-- [trip_abend] CRawLogWorker::UpdateAbnormalTripEnd() 가 ExpireTtlSessions() 안에서
 -- 실행(2026-08-13 최정우 추가, 2026-08-13 수정 — CHARGE_TYPE 제한 제거해 4유형 전부로 확대).
 -- "그 trip_id로 마지막 GPS 이후 TTL 넘게 신호가 없었는데(=트립이 정상 종료됐는지 끝내 확인 못함)
 -- 이미 INSERT된 레코드가 아직 TRIP_END_DT 를 못 받은 상태"를 charge_type 무관하게 "확정 데이터
@@ -319,7 +319,7 @@ WHERE T.TRIP_ID = V.TRIP_ID
 -- "이전에 이미 정상 종료(Y/0)됐지만 그 트립 자체가 아직 안 끝난" 레코드만 이 UPDATE 대상이 됨
 -- (다른 유형과 동일 취급).
 -- $1=TRIP_ID[] $2=TRIP_END_DT[] $3=UPD_DT[]
-[trip_abnormal_end]
+[trip_abend]
 UPDATE RUC.PRIM_CHARGEHAND AS T
 SET
 	TRIP_END_DT = V.TRIP_END_DT,
@@ -331,11 +331,11 @@ FROM UNNEST(
 ) AS V(TRIP_ID, TRIP_END_DT, UPD_DT)
 WHERE T.TRIP_ID = V.TRIP_ID AND T.TRIP_END_DT IS NULL;
 
--- [server_status_update] CServer::UpdateServerStatus() 가 [server] status_interval(기본
+-- [server_status] CServer::UpdateServerStatus() 가 [server] status_interval(기본
 --   600초=10분) 주기로 실행 — 이 서버(SERVER_ID=[server] id, 기본 "location") 1행만 갱신.
 --   $1=SERVER_ID, $2=CPU_PCT, $3=MEM_PCT, $4=MEM_USED_MB, $5=MEM_TOTAL_MB
 --   (2026-08-20 최정우 추가)
-[server_status_update]
+[server_status]
 UPDATE RUC.PROC_SERVERSTATUS
 SET
 	CPU_PCT = $2::NUMERIC,

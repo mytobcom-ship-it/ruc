@@ -321,12 +321,12 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	{
 		m_strAbnormalTripEndSQL = m_pcSQLAccessor->GetSQL(stConfig.strAbnormalTripEndSession);
 		if (m_strAbnormalTripEndSQL.empty())
-			LOGFMTW("abnormal_trip_end session=[%s] sql is empty — abnormal trip end update disabled",
+			LOGFMTW("trip_abend session=[%s] sql is empty — abnormal trip end update disabled",
 				stConfig.strAbnormalTripEndSession.c_str());
 	}
 	else
 	{
-		LOGFMTW("abnormal_trip_end session not configured — abnormal trip end update disabled");
+		LOGFMTW("trip_abend session not configured — abnormal trip end update disabled");
 	}
 
 	// 서버 상태(CPU/메모리) 하트비트 UPDATE SQL (세션 미지정·SQL 없으면 비활성) (2026-08-20 최정우 추가)
@@ -492,6 +492,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	stWorkerConfig.pcPostgrePool = m_pcPostgrePool;
 	stWorkerConfig.pcProcessManager = m_pcProcessManager;
 	stWorkerConfig.pcChargeDataLoader = m_pcChargeDataLoader;			// nullptr 이면 개방형 과금 판정 비활성 (2026-08-12 최정우 추가)
+	stWorkerConfig.pcDataLoader = m_pcDataLoader;						// LINK_INFO.qwOppositeLinkID 조회용 (2026-08-21 최정우 추가)
 	stWorkerConfig.strUpdateSQL = m_strRawLogUpdateSQL;
 	stWorkerConfig.strChargeInsertSQL = m_strChargeInsertSQL;
 	stWorkerConfig.strTripEndUpdateSQL = m_strTripEndUpdateSQL;			// (2026-08-12 최정우 추가)
@@ -609,7 +610,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	// RawLogFetcher 폴링 쓰레드 기동 (2026-07-08 최정우 주석 추가)
 	m_pcRawLogFetcher->start();
 	LOGFMTI("raw log fetcher start!limit=[%d] fetch_interval=[%d]ms "
-		"queue_pause_count=[%d] queue_max_count=[%d] queue_busy_min=[%d]ms queue_busy_max=[%d]ms "
+		"queue_pause=[%d] queue_max=[%d] queue_busymin=[%d]ms queue_busymax=[%d]ms "
 		"ttl_sec=[%d]s shutdown_wait=[%d]ms",
 		m_nFetchLimit, m_nFetchInterval,
 		m_nQueuePauseCount, m_nQueueMaxCount,

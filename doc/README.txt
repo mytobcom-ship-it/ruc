@@ -203,6 +203,17 @@ I-8. [대응방안 설계] 폐쇄형(CLOSED_ROAD) 휴게소 장시간 정차(시
   미해결로 남는 것: DB durable 기록의 테이블 구조(prim_chargehand 선기록 vs 별도 경량 테이블), 배치 스윕
   주기, "N시간" 임계값 확정, 그리고 위 2번(트립 경계가 시동 ON/OFF와 연동되는지) 확인.
 
+I-9. [정정, 2026-08-21] I-4/I-5의 "base_mapinfo=구간단속·주정차 기반 테이블" 결론은 폐기 — 실제 구현은 base_roadlink
+  I-4/I-5(2026-08-06/08 작성) 결론과 달리, 실제 MapMatchSvr 구현(2026-08-11+, [[project_charge_unified_impl_design]])은
+  구간단속(SPEED)·주정차(PARKING)를 포함한 5개 유형 전부 base_mapinfo가 아니라 base_roadlink(road_id=RL-Z0000N,
+  road_kind 0~5)를 기반 테이블로 사용한다. 2026-08-21 재확인 결과:
+    - base_mapinfo는 지금도 zone_kind='1'(152만건)·'2'(3.1만건)만 존재 — I-4가 말한 zone_kind='04'/'05' 데이터
+      자체가 한 건도 없다(에초에 그 목적으로 채워진 적이 없었던 것으로 보임).
+    - MapMatchSvr/src 전체·query.sql 어디에도 base_mapinfo 참조 없음(전수 grep 확인) — 완전히 미사용 테이블.
+  결론: I-4/I-5는 실제 구현 이전 시점의 설계 구상이었고, base_roadlink로 전환된 뒤 문서가 갱신되지 않은 것.
+  base_mapinfo(zone_kind=1/2, 전국 152만+3.1만건)는 SPEED/PARKING과 무관한 별도 목적(지도 표출용으로 추정,
+  I-4 원문 참고) 데이터로 남겨두고, "구간단속·주정차 기반 테이블"이 필요하면 base_roadlink를 볼 것.
+
 J. [2026-08-08] 개방식(OPEN) 임시 게이트 테스트 스캐폴드 생성
   I-7에서 개방형 모델 자체가 실측과 안 맞는 것이 확인됐지만, 담당자 확인 전까지 임시로라도 원래 설계 가정
   ("게이트 점 이벤트")을 그대로 따라 테스트할 수 있도록 최소 DDL·샘플데이터를 만들어둠:

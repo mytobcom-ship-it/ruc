@@ -122,10 +122,10 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileInt("database", "minconnect", CFG_DEF_MINCONNECT, pstConfig->nDBMinConnect);
 	// [database] maxconnect (0=자동) (2026-07-11 최정우 주석 추가)
 	cIniReader.GetProfileInt("database", "maxconnect", CFG_DEF_MAXCONNECT, pstConfig->nDBMaxConnect);
-	// [database] conn_retry_max (단위: 최대 재시도) (2026-07-11 최정우 주석 추가)
-	cIniReader.GetProfileInt("database", "conn_retry_max", CFG_DEF_CONN_RETRY_MAX, pstConfig->nConnRetryMax);
-	// [database] conn_retry_wait (단위: ms) (2026-07-11 최정우 주석 추가)
-	cIniReader.GetProfileInt("database", "conn_retry_wait", CFG_DEF_CONN_RETRY_WAIT, pstConfig->nConnRetryWait);
+	// [database] retrymax (단위: 최대 재시도) (2026-07-11 최정우 주석 추가, 2026-08-21 최정우 수정 — key명 conn_retry_max→retrymax)
+	cIniReader.GetProfileInt("database", "retrymax", CFG_DEF_CONN_RETRY_MAX, pstConfig->nConnRetryMax);
+	// [database] retrywait (단위: ms) (2026-07-11 최정우 주석 추가, 2026-08-21 최정우 수정 — key명 conn_retry_wait→retrywait)
+	cIniReader.GetProfileInt("database", "retrywait", CFG_DEF_CONN_RETRY_WAIT, pstConfig->nConnRetryWait);
 	if (pstConfig->nConnRetryMax < 1)
 		pstConfig->nConnRetryMax = CFG_DEF_CONN_RETRY_MAX;
 	if (pstConfig->nConnRetryWait < 0)
@@ -173,8 +173,8 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileStr("sql", "zone_select", "", pstConfig->strZoneSelectSession);
 	// [sql] trip_end (선택, 비어 있으면 trip_end_dt UPDATE 비활성) (2026-08-12 최정우 추가)
 	cIniReader.GetProfileStr("sql", "trip_end", "", pstConfig->strTripEndUpdateSession);
-	// [sql] abnormal_trip_end (선택, 비어 있으면 비활성) (2026-08-13 최정우 추가)
-	cIniReader.GetProfileStr("sql", "abnormal_trip_end", "", pstConfig->strAbnormalTripEndSession);
+	// [sql] trip_abend (선택, 비어 있으면 비활성) (2026-08-13 최정우 추가, 2026-08-21 최정우 수정 — key명 abnormal_trip_end→trip_abend)
+	cIniReader.GetProfileStr("sql", "trip_abend", "", pstConfig->strAbnormalTripEndSession);
 	// [sql] server_status (선택, 비어 있으면 서버 상태 하트비트 비활성) (2026-08-20 최정우 추가)
 	cIniReader.GetProfileStr("sql", "server_status", "", pstConfig->strServerStatusSession);
 	// [server] id — PROC_SERVERSTATUS.SERVER_ID (2026-08-20 최정우 추가)
@@ -214,14 +214,14 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileInt("feeder", "limit", CFG_DEF_LIMIT, pstConfig->nFetchLimit);
 	// [feeder] fetch_interval (단위: ms) (2026-07-11 최정우 주석 추가)
 	cIniReader.GetProfileInt("feeder", "fetch_interval", CFG_DEF_FETCH_INTVL, pstConfig->nFetchInterval);
-	// [feeder] queue_pause_count (단위: 건수) (2026-07-11 최정우 주석 추가)
-	cIniReader.GetProfileInt("feeder", "queue_pause_count", CFG_DEF_Q_PAUSE_CNT, pstConfig->nQueuePauseCount);
-	// [feeder] queue_max_count (단위: 건수) (2026-07-11 최정우 주석 추가)
-	cIniReader.GetProfileInt("feeder", "queue_max_count", CFG_DEF_Q_MAX_CNT, pstConfig->nQueueMaxCount);
-	// [feeder] queue_busy_min (단위: ms) (2026-07-11 최정우 주석 추가)
-	cIniReader.GetProfileInt("feeder", "queue_busy_min", CFG_DEF_Q_BUSY_MIN, pstConfig->nQueueBusyMin);
-	// [feeder] queue_busy_max (단위: ms) (2026-07-11 최정우 주석 추가)
-	cIniReader.GetProfileInt("feeder", "queue_busy_max", CFG_DEF_Q_BUSY_MAX, pstConfig->nQueueBusyMax);
+	// [feeder] queue_pause (단위: 건수) (2026-07-11 최정우 주석 추가, 2026-08-21 최정우 수정 — key명 queue_pause_count→q_pause→queue_pause)
+	cIniReader.GetProfileInt("feeder", "queue_pause", CFG_DEF_Q_PAUSE_CNT, pstConfig->nQueuePauseCount);
+	// [feeder] queue_max (단위: 건수) (2026-07-11 최정우 주석 추가, 2026-08-21 최정우 수정 — key명 queue_max_count→q_max→queue_max)
+	cIniReader.GetProfileInt("feeder", "queue_max", CFG_DEF_Q_MAX_CNT, pstConfig->nQueueMaxCount);
+	// [feeder] queue_busymin (단위: ms) (2026-07-11 최정우 주석 추가, 2026-08-21 최정우 수정 — key명 queue_busy_min→q_busymin→queue_busymin)
+	cIniReader.GetProfileInt("feeder", "queue_busymin", CFG_DEF_Q_BUSY_MIN, pstConfig->nQueueBusyMin);
+	// [feeder] queue_busymax (단위: ms) (2026-07-11 최정우 주석 추가, 2026-08-21 최정우 수정 — key명 queue_busy_max→q_busymax→queue_busymax)
+	cIniReader.GetProfileInt("feeder", "queue_busymax", CFG_DEF_Q_BUSY_MAX, pstConfig->nQueueBusyMax);
 	if (pstConfig->nFetchLimit <= 0)
 		pstConfig->nFetchLimit = CFG_DEF_LIMIT;
 	if (pstConfig->nFetchInterval < 0)

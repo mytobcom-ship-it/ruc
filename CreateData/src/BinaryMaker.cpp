@@ -12,6 +12,7 @@ CBinaryMaker::CBinaryMaker() :
 	m_pcShapeLoader(nullptr), 
 	m_pcTurnInfoLoader(nullptr),
 	m_dwTurnRestrictedSkipCount(0),
+	m_dwTurnAllowedAddCount(0),
 	m_mapShapeLinkInfoList(nullptr), 
 	m_mapShapeNodeInfoList(nullptr), 
 	m_mapGridSgmtInfoList(nullptr), 
@@ -53,6 +54,7 @@ bool CBinaryMaker::Initialize(CShapeFileLoader *pcShapeLoader,
 	m_strGeometryPath = strGeometryPath;
 	m_strGeometryFile = strGeometryFile;
 	m_dwTurnRestrictedSkipCount = 0;
+	m_dwTurnAllowedAddCount = 0;
 
 	if (m_pcShapeLoader == nullptr)
 	{
@@ -150,8 +152,8 @@ bool CBinaryMaker::Create()
 		cCreateClock.Stop();
 		return false;
 	}
-	LOGFMTI("map match data create end! turn_info=[%u], turn_restricted_skip=[%u]",
-		static_cast<uint32>(m_vtTurnInfoList->size()), m_dwTurnRestrictedSkipCount);
+	LOGFMTI("map match data create end! turn_info=[%u], turn_restricted_skip=[%u], turn_allowed_add=[%u]",
+		static_cast<uint32>(m_vtTurnInfoList->size()), m_dwTurnRestrictedSkipCount, m_dwTurnAllowedAddCount);
 
 	// 임시 바이너리 파일 생성
 	char szTempFile[MAX_PATH];
@@ -345,6 +347,7 @@ bool CBinaryMaker::SetCreateInitial()
 	m_dwGridSgmtOffset = 0;
 	m_dwGridOffset = 0;
 	m_dwTurnRestrictedSkipCount = 0;
+	m_dwTurnAllowedAddCount = 0;
 
 	return true;
 }
@@ -466,15 +469,18 @@ bool CBinaryMaker::SetCreateBinary(FILE *fp)
 	for (vector<LINK_INFO_DATA>::iterator it=m_vtLinkInfoDataList->begin(); it!=m_vtLinkInfoDataList->end(); ++it)
 		fwrite(&(*it), LINK_INFO_DATA_SIZE, 1, fp);
 
-	// 시작 링크 기준으로 연결된 링크 회전 정보 (MapMatchSvr 호환 22바이트)
+	// 시작 링크 기준으로 연결된 링크 회전 정보 (21바이트)
+	//   구 포맷(22바이트)의 dwTurnOffset 은 기록하지 않는다 — 값이 자기 배열 인덱스와
+	//   항상 같아 읽는 쪽이 이미 아는 정보였다. (2026-08-22 최정우 수정)
 	for (vector<TURN_INFO>::iterator it=m_vtTurnInfoList->begin(); it!=m_vtTurnInfoList->end(); ++it)
 	{
 		TURN_INFO_DISK stTurnInfoDisk;
 		memset(reinterpret_cast<void *>(&stTurnInfoDisk), 0, TURN_INFO_DISK_SIZE);
-		stTurnInfoDisk.dwTurnOffset = it->dwTurnOffset;
 		stTurnInfoDisk.qwInLinkID = it->qwInLinkID;
 		stTurnInfoDisk.qwOutLinkID = it->qwOutLinkID;
 		stTurnInfoDisk.nTurnAng = it->nTurnAng;
+		stTurnInfoDisk.nTurnType = it->nTurnType;
+		stTurnInfoDisk.nTurnOper = it->nTurnOper;
 		fwrite(&stTurnInfoDisk, TURN_INFO_DISK_SIZE, 1, fp);
 	}
 
@@ -573,6 +579,100 @@ bool CBinaryMaker::SetGridMapData()
 }
 
 /**
+ * @brief TURNINFO 가 "회전 가능"으로 명시한 진출 링크를 회전 후보에 보완
+ * @param[in] qwInLinkID 진입 링크 ID
+ * @param[in] vtVertexs 진입 링크 버텍스
+ * @param[in,out] setAddedOutLink 위상 후보로 이미 넣은 진출 링크 (중복 방지·갱신)
+ * @param[in,out] vtTurnInfo 회전 후보 목록
+ * @remark
+ * \t금지 유형(003/101/102/103)은 CTurnInfoLoader 인덱스 단계에서 이미 빠져 있다.
+ * \t진출 링크 형상을 찾지 못하면 조용히 건너뛴다 — TURNINFO 에는 MOCT_LINK 에 없는
+ * \t링크 ID 참조가 전국 69건 존재한다. (2026-08-22 최정우 추가)
+*/
+void CBinaryMaker::AddAllowedTurnInfo(const uint64& qwInLinkID,
+		const vector<POINT>& vtVertexs, set<uint64>& setAddedOutLink,
+		vector<TURN_INFO>& vtTurnInfo)
+{
+	if (m_pcTurnInfoLoader == nullptr)
+		return;
+
+	const vector<uint64> *pvtAllowed = m_pcTurnInfoLoader->GetAllowedOutLinks(qwInLinkID);
+	if (pvtAllowed == nullptr)
+		return;
+
+	const uint16 wInSize = static_cast<uint16>(vtVertexs.size());
+	if (wInSize < 2)
+		return;
+
+	// 진입 링크 진행 방위각 (위상 후보 계산과 동일한 방식)
+	POINT stInPoint1;
+	POINT stInPoint2;
+	memset(reinterpret_cast<void *>(&stInPoint2), 0, POINT_SIZE);
+	memcpy(&stInPoint2, &vtVertexs[wInSize-1], POINT_SIZE);
+	for (sint16 i=static_cast<sint16>(wInSize-2); i>=0; --i)
+	{
+		memset(reinterpret_cast<void *>(&stInPoint1), 0, POINT_SIZE);
+		memcpy(&stInPoint1, &vtVertexs[i], POINT_SIZE);
+		if (stInPoint1 == stInPoint2)
+			break;
+	}
+	sint16 nInAngle = m_cGISUtil.GetDirAngleDegree(stInPoint1, stInPoint2);
+
+	for (size_t k=0; k<pvtAllowed->size(); ++k)
+	{
+		const uint64 qwOutLinkID = (*pvtAllowed)[k];
+
+		// 위상 후보로 이미 들어간 링크면 건너뛴다
+		if (setAddedOutLink.find(qwOutLinkID) != setAddedOutLink.end())
+			continue;
+
+		mapShapeLinkInfo::iterator link_it = m_mapShapeLinkInfoList->find(qwOutLinkID);
+		if (link_it == m_mapShapeLinkInfoList->end())
+			continue;
+
+		const vector<POINT>& vtOutVertexs = link_it->second->vtVertexs;
+		const uint32 dwOutSize = static_cast<uint32>(vtOutVertexs.size());
+		if (dwOutSize < 2)
+			continue;
+
+		// 진출 링크 진행 방위각
+		POINT stOutPoint1;
+		POINT stOutPoint2;
+		memset(reinterpret_cast<void *>(&stOutPoint1), 0, POINT_SIZE);
+		memcpy(&stOutPoint1, &vtOutVertexs[0], POINT_SIZE);
+		for (uint32 i=1; i<dwOutSize; ++i)
+		{
+			memset(reinterpret_cast<void *>(&stOutPoint2), 0, POINT_SIZE);
+			memcpy(&stOutPoint2, &vtOutVertexs[i], POINT_SIZE);
+			if (stOutPoint1 == stOutPoint2)
+				break;
+		}
+		sint16 nOutAngle = m_cGISUtil.GetDirAngleDegree(stOutPoint1, stOutPoint2);
+
+		sint16 nTurnAng = m_cGISUtil.GetAngleDiff(nInAngle, nOutAngle);
+		if (nTurnAng == -180) nTurnAng = abs(nTurnAng);
+
+		TURN_INFO stTurnInfo;
+		memset(reinterpret_cast<void *>(&stTurnInfo), 0, TURN_INFO_SIZE);
+		stTurnInfo.qwInLinkID = qwInLinkID;
+		stTurnInfo.qwOutLinkID = qwOutLinkID;
+		stTurnInfo.nTurnAng = nTurnAng;
+		stTurnInfo.nTurnOper = TURN_OPER_ALLDAY;
+
+		TURN_RULE stRule;
+		if (m_pcTurnInfoLoader->GetRule(qwInLinkID, qwOutLinkID, stRule))
+		{
+			stTurnInfo.nTurnType = stRule.nTurnType;
+			stTurnInfo.nTurnOper = stRule.nTurnOper;
+		}
+
+		vtTurnInfo.push_back(stTurnInfo);
+		setAddedOutLink.insert(qwOutLinkID);
+		++m_dwTurnAllowedAddCount;
+	}
+}
+
+/**
  * @brief 회전 정보 구하기
  * @param[in] qwInLinkID 진입 링크 ID
  * @param[in] vtVertexs 진입링크 버텍스 정보
@@ -583,6 +683,7 @@ bool CBinaryMaker::GetTurnInfo(const uint64& qwInLinkID,
 		const vector<POINT>& vtVertexs, LINK_INFO_DATA& stLinkInfoData)
 {
 	vector<TURN_INFO> vtTurnInfo;
+	set<uint64> setAddedOutLink;		// 위상 후보로 이미 넣은 진출 링크 (중복 방지)
 
 	// 종료 NODE ID 가 시작 NODE ID 되는 링크 정보 찾기
 	pair<mapShapeNodeInfo::iterator, mapShapeNodeInfo::iterator> node_pair;
@@ -668,48 +769,56 @@ bool CBinaryMaker::GetTurnInfo(const uint64& qwInLinkID,
 			stTurnInfo.qwInLinkID = qwInLinkID;
 			stTurnInfo.qwOutLinkID = qwOutLinkID;
 			stTurnInfo.nTurnAng = nTurnAng;
-			stTurnInfo.nTurnOper = TURN_OPER_ALLOW;
+			stTurnInfo.nTurnOper = TURN_OPER_ALLDAY;
 
+			// TURNINFO 에 등록된 쌍만 실제 MOCT 코드를 싣는다. 미등록 쌍(전국 위상 회전쌍의
+			//   약 98%)은 TURN_TYPE_UNKNOWN(0) 으로 둔다 — 회전 방향은 nTurnAng 이 이미
+			//   정확히 담고 있고, 규격에는 "직진/좌회전" 같은 방향 코드가 없어서 각도로 추정한
+			//   값을 TURN_TYPE 자리에 넣으면 진짜 규격 코드와 구분이 안 된다.
+			//   (2026-08-22 최정우 수정 — InferTurnTypeFromAngle 사용 중단.
+			//    그 함수는 011=직진/101=좌회전/102=우회전/103=유턴 으로 해석했는데
+			//    규격은 011=U-TURN/101=좌회전금지/102=직진금지/103=우회전금지 이다)
 			TURN_RULE stRule;
 			if (m_pcTurnInfoLoader->GetRule(qwInLinkID, qwOutLinkID, stRule))
 			{
 				stTurnInfo.nTurnType = stRule.nTurnType;
 				stTurnInfo.nTurnOper = stRule.nTurnOper;
 			}
-			else
-			{
-				stTurnInfo.nTurnType = InferTurnTypeFromAngle(nTurnAng);
-			}
 
 			vtTurnInfo.push_back(stTurnInfo);
+			setAddedOutLink.insert(qwOutLinkID);
 		}
 
-		if (vtTurnInfo.size() > 0)
+	}
+
+	// ── TURNINFO 보완: 위상(노드ID)으로는 안 이어지지만 원본이 "회전 가능"으로 명시한 쌍 추가 ──
+	//   표준노드링크는 교차로를 진입·진출 방향마다 별도 노드로 나누어 표현한다. 그래서 진출
+	//   링크가 진입 노드에서 12m 쯤 떨어진 다른 노드에서 시작하는 경우가 많고(전국 TURNINFO
+	//   44,149건 중 41,719건), equal_range(EdNodeID) 만으로는 그 회전을 후보로 만들지 못한다.
+	//   실측: U-TURN 27,825건 중 위상으로 잡히는 것은 150건뿐이었다.
+	//   노드 좌표 근접(15m)으로 넓히면 무관한 링크까지 들어와 후보가 +129% 폭증하므로,
+	//   TURNINFO 가 진출 링크를 직접 지목한 쌍만 보완한다(+1.2%). (2026-08-22 최정우 추가)
+	AddAllowedTurnInfo(qwInLinkID, vtVertexs, setAddedOutLink, vtTurnInfo);
+
+	if (vtTurnInfo.size() > 0)
+	{
+		sort(vtTurnInfo.begin(), vtTurnInfo.end());
+		vector<TURN_INFO>::iterator turn_it = vtTurnInfo.begin();
+		for (; turn_it!=vtTurnInfo.end(); ++turn_it)
 		{
-			sort(vtTurnInfo.begin(), vtTurnInfo.end());
-			vector<TURN_INFO>::iterator turn_it = vtTurnInfo.begin();
-			for (; turn_it!=vtTurnInfo.end(); ++turn_it)
-			{
-				turn_it->dwTurnOffset = m_dwTurnOffset++;
+			turn_it->dwTurnOffset = m_dwTurnOffset++;
 
-				// 링크별 회전정보 로딩
-				m_vtTurnInfoList->push_back(*turn_it);
-			}
+			// 링크별 회전정보 로딩
+			m_vtTurnInfoList->push_back(*turn_it);
+		}
 
-			// 링크 속성 정보에 회전정보 Offset, Count 설정
-			stLinkInfoData.nTurnCount = static_cast<uint8>(vtTurnInfo.size());
-			stLinkInfoData.dwTurnOffset = m_dwTurnOffset - stLinkInfoData.nTurnCount;
-		}
-		else
-		{
-			// 링크 속성 정보에 회전정보 Offset, Count 설정
-			stLinkInfoData.dwTurnOffset = 0;
-			stLinkInfoData.nTurnCount = 0;
-		}
+		// 링크 속성 정보에 회전정보 Offset, Count 설정
+		stLinkInfoData.nTurnCount = static_cast<uint8>(vtTurnInfo.size());
+		stLinkInfoData.dwTurnOffset = m_dwTurnOffset - stLinkInfoData.nTurnCount;
 	}
 	else
 	{
-			// 링크 속성 정보에 회전정보 Offset, Count 설정
+		// 링크 속성 정보에 회전정보 Offset, Count 설정
 		stLinkInfoData.dwTurnOffset = 0;
 		stLinkInfoData.nTurnCount = 0;
 	}
@@ -1042,24 +1151,6 @@ void CBinaryMaker::SetGridSgmtInfo(uint32& dwGridID, const uint64& qwLinkID,
 	}
 	else
 		it->second.insert(stGridSgmtInfo);
-}
-
-/**
- * @brief 회전각으로 MOCT TURN_TYPE 추정 (TURNINFO 미등록 쌍)
- * @param[in] nTurnAng 회전각 (-180~180)
- * @return MOCT TURN_TYPE (11:직진, 101:좌회전, 102:우회전, 103:유턴)
-*/
-uint16 CBinaryMaker::InferTurnTypeFromAngle(sint16 nTurnAng) const
-{
-	sint16 nAbsAng = static_cast<sint16>(abs(nTurnAng));
-
-	if (nAbsAng <= 30)
-		return 11;
-	if (nAbsAng >= 150)
-		return 103;
-	if (nTurnAng > 0)
-		return 101;
-	return 102;
 }
 
 /**

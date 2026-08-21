@@ -421,6 +421,11 @@ bool CShapeFileLoader::Load(mapShapeLinkInfo *pmapShapeLinkInfoList,
 		pstShapeLinkInfo->nConnect = static_cast<uint8>(cLinkShape.GetLong(i, m_stFieldMap.strConnect));
 		pstShapeLinkInfo->nRoadType = static_cast<uint8>(cLinkShape.GetLong(i, m_stFieldMap.strRoadType));
 		pstShapeLinkInfo->nLanes = static_cast<uint8>(cLinkShape.GetLong(i, m_stFieldMap.strLanes));
+		// MOCT_LINK.REST_VEH / ROAD_USE — 현재 엔진 미사용이나 link.psf 에 실어 둔다
+		//   (2026-08-22 최정우 추가). 필드가 없는 구 shapefile 이면 GetLong 이 0 을 돌려주어
+		//   각각 "모두 통행가능", "사용" 으로 해석되므로 안전하다.
+		pstShapeLinkInfo->nRestVeh = static_cast<uint8>(cLinkShape.GetLong(i, m_stFieldMap.strRestVeh));
+		pstShapeLinkInfo->nRoadUse = static_cast<uint8>(cLinkShape.GetLong(i, m_stFieldMap.strRoadUse));
 
 		// 도로명: MOCT DBF(CP949/ASCII) → UTF-8 변환 후 저장 (2026-07-08 최정우)
 		string strRoadNameRaw;

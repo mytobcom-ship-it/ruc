@@ -50,6 +50,8 @@ typedef struct sShapeFieldMap
 	string		strConnect;
 	string		strRoadType;
 	string		strLanes;
+	string		strRestVeh;
+	string		strRoadUse;
 	string		strRoadName;
 	string		strFNode;
 	string		strTNode;
@@ -60,7 +62,8 @@ typedef struct sShapeFieldMap
 	sShapeFieldMap() : 
 		strLinkID("LINK_ID"), strMaxSpeed("MAX_SPD"), strLength("LENGTH"), 
 		strRoadRank("ROAD_RANK"), strConnect("CONNECT"), strRoadType("ROAD_TYPE"), 
-		strLanes("LANES"), strRoadName("ROAD_NAME"), strFNode("F_NODE"), strTNode("T_NODE"), 
+		strLanes("LANES"), strRestVeh("REST_VEH"), strRoadUse("ROAD_USE"), 
+		strRoadName("ROAD_NAME"), strFNode("F_NODE"), strTNode("T_NODE"), 
 		strNodeID("NODE_ID"), strNodeType("NODE_TYPE")
 	{}
 } SHAPE_FIELD_MAP, *PSHAPE_FIELD_MAP;

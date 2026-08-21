@@ -119,6 +119,8 @@ bool Initialize(const string& strConfigFile, PMAKER_CONFIG pstConfig)
 	cIniReader.GetProfileStr("link_field", "connect",  "CONNECT",   pstConfig->stFieldMap.strConnect);
 	cIniReader.GetProfileStr("link_field", "roadtype", "ROAD_TYPE", pstConfig->stFieldMap.strRoadType);
 	cIniReader.GetProfileStr("link_field", "lanes",    "LANES",     pstConfig->stFieldMap.strLanes);
+	cIniReader.GetProfileStr("link_field", "restveh",  "REST_VEH",  pstConfig->stFieldMap.strRestVeh);
+	cIniReader.GetProfileStr("link_field", "roaduse",  "ROAD_USE",  pstConfig->stFieldMap.strRoadUse);
 	cIniReader.GetProfileStr("link_field", "roadname", "ROAD_NAME", pstConfig->stFieldMap.strRoadName);
 	cIniReader.GetProfileStr("link_field", "fnode",    "F_NODE",    pstConfig->stFieldMap.strFNode);
 	cIniReader.GetProfileStr("link_field", "tnode",    "T_NODE",    pstConfig->stFieldMap.strTNode);

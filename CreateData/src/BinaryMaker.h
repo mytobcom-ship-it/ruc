@@ -55,11 +55,14 @@ public:
 	bool Create();
 
 private:
-	uint16 InferTurnTypeFromAngle(sint16 nTurnAng) const;
 	bool SetCreateInitial();
 	void SetCreateUninitial();
 	bool SetCreateBinary(FILE *fp);
 	bool SetGridMapData();
+
+	void AddAllowedTurnInfo(const uint64& qwInLinkID, const vector<POINT>& vtVertexs,
+
+			set<uint64>& setAddedOutLink, vector<TURN_INFO>& vtTurnInfo);
 
 	bool GetTurnInfo(const uint64& qwInLinkID,
 		const vector<POINT>& vtVertexs, LINK_INFO_DATA& stLinkInfoData);
@@ -76,7 +79,8 @@ private:
 	CShapeFileLoader				*m_pcShapeLoader;
 	CTurnInfoLoader					*m_pcTurnInfoLoader;
 	CGISUtil						m_cGISUtil;					// GIS 유틸리티 클래스
-	uint32							m_dwTurnRestrictedSkipCount;	// 회전 제한으로 제외된 건수
+	uint32							m_dwTurnRestrictedSkipCount;
+	uint32							m_dwTurnAllowedAddCount;	// TURNINFO 보완으로 추가한 회전 수
 
 private:
 	string							m_strGeometryPath;			// 형상 정보 바이너리 파일 경로

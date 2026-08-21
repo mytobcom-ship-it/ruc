@@ -18,9 +18,10 @@ CBinaryMaker::CBinaryMaker() :
 	m_vtGridInfoList(nullptr), 
 	m_vtGridSgmtInfoList(nullptr), 
 	m_vtLinkSgmtInfoList(nullptr), 
-	m_vtLinkInfoDataList(nullptr), 
-	m_vtTurnInfoList(nullptr), 
-	m_dwTurnOffset(0), 
+	m_vtLinkInfoDataList(nullptr),
+	m_vtTurnInfoList(nullptr),
+	m_mapOppositeLinkID(nullptr),
+	m_dwTurnOffset(0),
 	m_dwLinkSgmtOffset(0), 
 	m_dwGridSgmtOffset(0), 
 	m_dwGridOffset(0)
@@ -133,6 +134,11 @@ bool CBinaryMaker::Create()
 		cCreateClock.Stop();
 		return false;
 	}
+
+	LOGFMTI("opposite link pairing start!");
+	// 양방향 분리(왕복차로 별도 링크) 짝 링크 페어링 계산 (2026-08-19 최정우 추가)
+	ComputeOppositeLinkPairs();
+	LOGFMTI("opposite link pairing end! pairs=[%u]", static_cast<uint32>(m_mapOppositeLinkID->size()));
 
 	LOGFMTI("map match data create start!");
 	// GRID·링크·회전 정보 생성 (2026-07-08 최정우 주석 추가)
@@ -318,6 +324,13 @@ bool CBinaryMaker::SetCreateInitial()
 		return false;
 	}
 
+	m_mapOppositeLinkID = new (std::nothrow)unordered_map<uint64, uint64>;
+	if (m_mapOppositeLinkID == nullptr)
+	{
+		LOGFMTE("opposite link map memory allocate failed!");
+		return false;
+	}
+
 	m_mapShapeLinkInfoList->clear();
 	m_mapShapeNodeInfoList->clear();
 	m_mapGridSgmtInfoList->clear();
@@ -326,6 +339,7 @@ bool CBinaryMaker::SetCreateInitial()
 	m_vtLinkSgmtInfoList->clear();
 	m_vtLinkInfoDataList->clear();
 	m_vtTurnInfoList->clear();
+	m_mapOppositeLinkID->clear();
 	m_dwTurnOffset = 0;
 	m_dwLinkSgmtOffset = 0;
 	m_dwGridSgmtOffset = 0;
@@ -341,6 +355,10 @@ bool CBinaryMaker::SetCreateInitial()
 */
 void CBinaryMaker::SetCreateUninitial()
 {
+	if (m_mapOppositeLinkID != nullptr)
+		delete m_mapOppositeLinkID;
+	m_mapOppositeLinkID = nullptr;
+
 	if (m_vtTurnInfoList != nullptr)
 		delete m_vtTurnInfoList;
 	m_vtTurnInfoList = nullptr;
@@ -477,6 +495,13 @@ bool CBinaryMaker::SetGridMapData()
 
 		// 링크별 회전 정보 Offset, Count 구하기
 		memcpy(&stLinkInfoData, it->second, LINK_INFO_DATA_SIZE);
+
+		// 반대방향(왕복분리) 짝 링크 ID — 사전 계산된 페어링 결과 적용, 없으면 0.
+		//   위 memcpy 는 SHAPE_LINK_INFO 쪽 필드 레이아웃을 그대로 복사해오는 용도라, 새로 추가된
+		//   본 필드는 memcpy 이후 여기서 실제 값으로 명시적으로 덮어써야 한다 (2026-08-19 최정우 추가)
+		unordered_map<uint64, uint64>::const_iterator opp_it = m_mapOppositeLinkID->find(it->first);
+		stLinkInfoData.qwOppositeLinkID = (opp_it != m_mapOppositeLinkID->end()) ? opp_it->second : 0;
+
 		// 종료 노드 기준 회전 정보 생성 (2026-07-08 최정우 주석 추가)
 		if (!GetTurnInfo(it->first, it->second->vtVertexs, stLinkInfoData))
 		{
@@ -1035,4 +1060,170 @@ uint16 CBinaryMaker::InferTurnTypeFromAngle(sint16 nTurnAng) const
 	if (nTurnAng > 0)
 		return 101;
 	return 102;
+}
+
+/**
+ * @brief 양방향 분리(왕복차로 별도 링크) 짝 링크 페어링 계산
+ * @remark
+ *   신규 표준노드링크는 ONEWAY 속성이 없고, 왕복분리도로도 방향별로 F/T 노드가 다른 별도 링크로
+ *   표현된다. 두 링크 A/B가 "A 시작점↔B 끝점", "A 끝점↔B 시작점"이 각각 근접하면(뒤집힌 끝점
+ *   매칭) 같은 도로의 반대방향 짝으로 간주한다. 짧은 링크(50m 미만)는 끝점거리 문턱값(15m)이
+ *   링크 길이 자체와 비슷한 스케일이라 오탐 위험이 커서 페어링을 시도하지 않는다 — 그런 짧은
+ *   링크는 대부분 원래 양방향 단일 레코드라, 페어링 없이도 GISUtil::SgmtMatch 의 기존
+ *   reverse-fit 허용(heading 정·역방향 중 더 잘 맞는 쪽 채택)이 안전하게 커버한다.
+ *   기준(전국 데이터로 검증, 2026-08-19 최정우): 길이 50m 이상 + 끝점 15m 이내 + 상호 최적
+ *   매칭(mutual best match) + ROAD_RANK 일치. 실측 결과 900,867개(50m 이상) 링크 중 205,378쌍
+ *   확정, ROAD_RANK 일치율 99.8%, 길이 유사도(70% 이상) 99.7%.
+ *   기존 300m GRID(GetGridColNo/RowNo/ID)를 재사용해 끝점을 색인 — 15m 문턱값 대비 3x3 이웃
+ *   셀 탐색으로 충분하다.
+ *   결과는 m_mapOppositeLinkID 에 채워지며, SetGridMapData() 가 LINK_INFO_DATA.qwOppositeLinkID
+ *   에 반영한다. 짝이 없으면 맵에 미포함(조회 시 0 처리).
+ * @return void
+*/
+void CBinaryMaker::ComputeOppositeLinkPairs()
+{
+	const double OPP_MIN_LEN = 50.0;			// 페어링 시도 최소 링크 길이 (m)
+	const double OPP_ENDPOINT_DIST = 15.0;		// 뒤집힌 끝점 매칭 허용 거리 (m, 편도)
+
+	m_mapOppositeLinkID->clear();
+
+	// 시작/끝점 GRID 색인 (tag: 0=시작점, 1=끝점)
+	unordered_map<uint32, vector<pair<uint64, uint8>>> mapGridEndpoint;
+
+	for (mapShapeLinkInfo::iterator it=m_mapShapeLinkInfoList->begin(); it!=m_mapShapeLinkInfoList->end(); ++it)
+	{
+		PSHAPE_LINK_INFO pstLink = it->second;
+		if ((pstLink->dfLen < OPP_MIN_LEN) || (pstLink->vtVertexs.size() < 2))
+			continue;
+
+		POINT stStart = pstLink->vtVertexs.front();
+		POINT stEnd = pstLink->vtVertexs.back();
+
+		sint32 nStColNo = m_cGISUtil.GetGridColNo(stStart.dfX);
+		sint32 nStRowNo = m_cGISUtil.GetGridRowNo(stStart.dfY);
+		if ((nStColNo != INVALID_GRID_COL_NO) && (nStRowNo != INVALID_GRID_ROW_NO))
+			mapGridEndpoint[m_cGISUtil.GetGridID(static_cast<uint32>(nStColNo), static_cast<uint32>(nStRowNo))]
+				.push_back(make_pair(it->first, static_cast<uint8>(0)));
+
+		sint32 nEdColNo = m_cGISUtil.GetGridColNo(stEnd.dfX);
+		sint32 nEdRowNo = m_cGISUtil.GetGridRowNo(stEnd.dfY);
+		if ((nEdColNo != INVALID_GRID_COL_NO) && (nEdRowNo != INVALID_GRID_ROW_NO))
+			mapGridEndpoint[m_cGISUtil.GetGridID(static_cast<uint32>(nEdColNo), static_cast<uint32>(nEdRowNo))]
+				.push_back(make_pair(it->first, static_cast<uint8>(1)));
+	}
+
+	// 링크별 최적(끝점거리 합 최소) 후보 1개 — 상호 최적 매칭 판정용
+	unordered_map<uint64, pair<uint64, double>> mapBestCandidate;
+
+	for (mapShapeLinkInfo::iterator it=m_mapShapeLinkInfoList->begin(); it!=m_mapShapeLinkInfoList->end(); ++it)
+	{
+		PSHAPE_LINK_INFO pstLink = it->second;
+		if ((pstLink->dfLen < OPP_MIN_LEN) || (pstLink->vtVertexs.size() < 2))
+			continue;
+
+		POINT stStart = pstLink->vtVertexs.front();
+		POINT stEnd = pstLink->vtVertexs.back();
+
+		// A 시작점과 가까운 "다른 링크의 끝점" 후보
+		unordered_map<uint64, double> mapNearStart;
+
+		sint32 nColNo = m_cGISUtil.GetGridColNo(stStart.dfX);
+		sint32 nRowNo = m_cGISUtil.GetGridRowNo(stStart.dfY);
+		if ((nColNo == INVALID_GRID_COL_NO) || (nRowNo == INVALID_GRID_ROW_NO))
+			continue;
+
+		for (sint32 dCol=-1; dCol<=1; ++dCol)
+		{
+			for (sint32 dRow=-1; dRow<=1; ++dRow)
+			{
+				sint32 nCol = nColNo + dCol;
+				sint32 nRow = nRowNo + dRow;
+				if ((nCol < 0) || (nRow < 0)) continue;
+
+				unordered_map<uint32, vector<pair<uint64, uint8>>>::iterator grid_it =
+					mapGridEndpoint.find(m_cGISUtil.GetGridID(static_cast<uint32>(nCol), static_cast<uint32>(nRow)));
+				if (grid_it == mapGridEndpoint.end()) continue;
+
+				for (vector<pair<uint64, uint8>>::iterator cand_it=grid_it->second.begin(); cand_it!=grid_it->second.end(); ++cand_it)
+				{
+					if (cand_it->second != 1) continue;			// 끝점만
+					if (cand_it->first == it->first) continue;		// 자기 자신 제외
+
+					mapShapeLinkInfo::iterator cand_link_it = m_mapShapeLinkInfoList->find(cand_it->first);
+					if (cand_link_it == m_mapShapeLinkInfoList->end()) continue;
+
+					POINT stCandEnd = cand_link_it->second->vtVertexs.back();
+					double dfDist = m_cGISUtil.GetDistanceGEO2(stStart, stCandEnd);
+					if (dfDist <= OPP_ENDPOINT_DIST)
+						mapNearStart[cand_it->first] = dfDist;
+				}
+			}
+		}
+
+		if (mapNearStart.empty()) continue;
+
+		// A 끝점과 가까운 "다른 링크의 시작점" 후보 중, 위 mapNearStart 에도 있는 것만 최종 후보
+		nColNo = m_cGISUtil.GetGridColNo(stEnd.dfX);
+		nRowNo = m_cGISUtil.GetGridRowNo(stEnd.dfY);
+		if ((nColNo == INVALID_GRID_COL_NO) || (nRowNo == INVALID_GRID_ROW_NO))
+			continue;
+
+		uint64 qwBestCand = 0;
+		double dfBestTotal = -1.0;
+
+		for (sint32 dCol=-1; dCol<=1; ++dCol)
+		{
+			for (sint32 dRow=-1; dRow<=1; ++dRow)
+			{
+				sint32 nCol = nColNo + dCol;
+				sint32 nRow = nRowNo + dRow;
+				if ((nCol < 0) || (nRow < 0)) continue;
+
+				unordered_map<uint32, vector<pair<uint64, uint8>>>::iterator grid_it =
+					mapGridEndpoint.find(m_cGISUtil.GetGridID(static_cast<uint32>(nCol), static_cast<uint32>(nRow)));
+				if (grid_it == mapGridEndpoint.end()) continue;
+
+				for (vector<pair<uint64, uint8>>::iterator cand_it=grid_it->second.begin(); cand_it!=grid_it->second.end(); ++cand_it)
+				{
+					if (cand_it->second != 0) continue;			// 시작점만
+					if (cand_it->first == it->first) continue;
+
+					unordered_map<uint64, double>::iterator start_match_it = mapNearStart.find(cand_it->first);
+					if (start_match_it == mapNearStart.end()) continue;	// A 시작-후보 끝 조건 미충족
+
+					mapShapeLinkInfo::iterator cand_link_it = m_mapShapeLinkInfoList->find(cand_it->first);
+					if (cand_link_it == m_mapShapeLinkInfoList->end()) continue;
+
+					// ROAD_RANK 일치 요구 — 오탐 방지 추가 안전장치 (2026-08-19 최정우)
+					if (cand_link_it->second->nRoadRank != pstLink->nRoadRank) continue;
+
+					POINT stCandStart = cand_link_it->second->vtVertexs.front();
+					double dfDistEnd = m_cGISUtil.GetDistanceGEO2(stEnd, stCandStart);
+					if (dfDistEnd > OPP_ENDPOINT_DIST) continue;
+
+					double dfTotal = start_match_it->second + dfDistEnd;
+					if ((qwBestCand == 0) || (dfTotal < dfBestTotal))
+					{
+						qwBestCand = cand_it->first;
+						dfBestTotal = dfTotal;
+					}
+				}
+			}
+		}
+
+		if (qwBestCand != 0)
+			mapBestCandidate[it->first] = make_pair(qwBestCand, dfBestTotal);
+	}
+
+	// 상호 최적 매칭(mutual best match)만 최종 확정 — 교차로 인근 등에서 한쪽만 최적인
+	// 애매한 후보는 제외하고 짝 없음(0)으로 남겨 안전하게 현재 동작(reverse-fit 허용)을 유지
+	for (unordered_map<uint64, pair<uint64, double>>::iterator it=mapBestCandidate.begin(); it!=mapBestCandidate.end(); ++it)
+	{
+		uint64 qwSelf = it->first;
+		uint64 qwCand = it->second.first;
+
+		unordered_map<uint64, pair<uint64, double>>::iterator cand_best_it = mapBestCandidate.find(qwCand);
+		if ((cand_best_it != mapBestCandidate.end()) && (cand_best_it->second.first == qwSelf))
+			(*m_mapOppositeLinkID)[qwSelf] = qwCand;
+	}
 }

@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Cache-Control" content="no-cache" />
+  <title>RUC 맵매칭 GPS 뷰어</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, sans-serif; }
+    #toolbar {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+      padding: 8px 12px; background: #f8fafc; border-bottom: 1px solid #e2e8f0;
+    }
+    #toolbar label { font-size: 13px; color: #334155; }
+    #toolbar select, #toolbar button {
+      font-size: 13px; padding: 4px 8px;
+    }
+    /* 상태 메시지 — 툴바 맨 오른쪽 (2026-07-22 최정우 수정) */
+    #status { margin-left: auto; font-size: 12px; color: #64748b; }
+    #map { height: calc(100vh - 74px); width: 100%; }
+    #legend {
+      position: absolute; bottom: 24px; left: 12px; z-index: 1000;
+      background: rgba(255,255,255,0.92); padding: 8px 12px; border-radius: 6px;
+      font-size: 12px; line-height: 1.6; box-shadow: 0 1px 4px rgba(0,0,0,.15);
+    }
+    .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+    .line { display: inline-block; width: 18px; height: 3px; margin-right: 4px; vertical-align: middle; }
+    .road-dir-arrow { background: transparent; border: none; }
+    .tip-gps, .tip-match, .tip-skip {
+      font-size: 10px; font-weight: 700; padding: 1px 4px; border-radius: 3px;
+      box-shadow: 0 1px 2px rgba(0,0,0,.15); border-width: 1px; border-style: solid;
+    }
+    .tip-gps { color: #b71c1c; background: #fff; border-color: #e53935; }
+    .tip-match { color: #0d47a1; background: #fff; border-color: #1e88e5; }
+    .tip-skip { color: #e65100; background: #fff; border-color: #fb8c00; }
+    /* SKIP(3)·ERROR(4) 맵매칭 좌표(M) — 실패 표시 */
+    .tip-fail { text-decoration: line-through; opacity: 0.88; }
+    /* GPS↔매칭 점선 마우스오버 INTERSECT_LEN(m) 툴팁 (2026-07-15 최정우 추가) */
+    .tip-intersect {
+      font-size: 11px; font-weight: 700; color: #0f172a; background: #fef9c3;
+      border: 1px solid #94a3b8; border-radius: 3px; padding: 2px 6px;
+    }
+    /* GPS 연결(직선거리) 빨간 점선 마우스오버 좌표간 거리(m) 툴팁 (2026-07-22 추가) */
+    .tip-gpstrail {
+      font-size: 11px; font-weight: 700; color: #7f1d1d; background: #fee2e2;
+      border: 1px solid #e53935; border-radius: 3px; padding: 2px 6px;
+    }
+    /* 마우스 커서를 손모양이 아닌 화살표(기본)로 (2026-07-15 최정우 추가) */
+    .leaflet-grab,
+    .leaflet-interactive,
+    .leaflet-container {
+      cursor: default !important;
+    }
+    .leaflet-dragging .leaflet-grab,
+    .leaflet-dragging .leaflet-interactive {
+      cursor: default !important;
+    }
+    /* Trip id 콤보박스 우클릭 → 복사하기 커스텀 메뉴 (2026-07-21 최정우 추가) */
+    #ctxMenu {
+      display: none; position: fixed; z-index: 2000;
+      background: #fff; border: 1px solid #cbd5e1; border-radius: 4px;
+      box-shadow: 0 2px 8px rgba(0,0,0,.2); font-size: 13px; min-width: 100px;
+      overflow: hidden;
+    }
+    #ctxMenu .ctx-item {
+      padding: 6px 12px; cursor: default; color: #1e293b;
+    }
+    #ctxMenu .ctx-item:hover { background: #e2e8f0; }
+    /* 다중 차량 동시표시 체크리스트 패널 — 포커스 trip(위 Trip 콤보박스) 외에 지도에
+       추가로 겹쳐 보여줄 trip을 고른다 (2026-07-23 최정우 추가) */
+    #displayTripsPanel {
+      display: none; position: absolute; z-index: 1500; margin-top: 4px;
+      background: #fff; border: 1px solid #cbd5e1; border-radius: 4px;
+      box-shadow: 0 2px 8px rgba(0,0,0,.2); font-size: 12px;
+      min-width: 220px; max-width: 340px; max-height: 320px; overflow-y: auto;
+      padding: 4px 0;
+    }
+    .display-trip-row {
+      display: flex; align-items: center; gap: 6px; padding: 4px 10px;
+      cursor: default; color: #1e293b; white-space: nowrap;
+    }
+    .display-trip-row:hover { background: #f1f5f9; }
+    .display-trip-row input[disabled] { opacity: 0.6; }
+    .trip-swatch {
+      display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+      flex: 0 0 auto;
+    }
+    /* 버튼 클릭 진행률 바 — 클릭 전에도 테두리(홈)를 항상 표시해 어디에 나타날지 미리
+       보여줌. 눈에 잘 띄도록 Trip 콤보박스 폭 동기화 대신 널찍한 고정 폭 + 기존보다
+       살짝 높은 높이 사용 (2026-07-22 최정우 수정) */
+    #progressRow {
+      padding: 6px 12px; background: #f8fafc; border-bottom: 1px solid #e2e8f0;
+    }
+    #progressBarWrap {
+      width: 480px; max-width: calc(100% - 24px);
+      height: 12px; background: #eef1f5;
+      border: 1px solid #cbd5e1; border-radius: 4px;
+      box-shadow: inset 0 1px 3px rgba(15, 23, 42, 0.18);
+      overflow: hidden;
+    }
+    #progressBarFill {
+      height: 100%; width: 0%; background: #1e88e5; transition: width 0.2s ease;
+    }
+    /* 완료 시점을 알 수 없는 작업(신규테스트·삭제·Trip 조회)은 좌우로 흐르는 애니메이션으로 표시 */
+    #progressBarWrap.indeterminate #progressBarFill {
+      width: 30%; transition: none;
+      animation: progress-indeterminate 1.2s ease-in-out infinite;
+    }
+    @keyframes progress-indeterminate {
+      0%   { margin-left: -30%; }
+      100% { margin-left: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div id="toolbar">
+    <label title="신규테스트 클릭 시 이 대수로 Simulator 를 재시작 — Simulator/bin/config.ini [sim] vehicles= 에 반영됨">차량
+      <select id="vehicleCount"></select>
+    </label>
+    <label>Trip
+      <select id="tripSelect"><option value="">로딩…</option></select>
+    </label>
+    <span style="position:relative;">
+      <button id="btnDisplayTrips" type="button" title="지도에 겹쳐서 함께 표시할 차량(trip)을 추가로 선택 — 위 'Trip'에서 고른 포커스 trip은 항상 같이 표시됨">동시표시 ▾</button>
+      <div id="displayTripsPanel"><div id="displayTripsList"></div></div>
+    </span>
+    <button id="btnReload" type="button">Trip 조회</button>
+    <button id="btnResetMap" type="button" title="지도에 그려진 내용을 초기화하고 초기 화면만 표시">지도초기화</button>
+    <button id="btnStartEngines" type="button" title="MapMatchSvr → Simulator 순서로 1초 확인 + 최대 3회 재시도 기동 (웹 자신은 제외) — 왼쪽 '차량' 대수로 Simulator 재시작, 새 trip 시작됨">신규테스트</button>
+    <button id="btnRetest" type="button" title="선택된 Trip의 기존 수신 GPS로 맵매칭 재테스트">재테스트</button>
+    <button id="btnDelete" type="button" title="선택된 Trip을 DB에서 완전히 삭제 (되돌릴 수 없음)">삭제</button>
+    <label><input type="checkbox" id="chkPoll" /> 자동 갱신</label>
+    <label><input type="checkbox" id="chkFollow" checked /> 최신 Trip</label>
+    <span id="status"></span>
+  </div>
+  <div id="progressRow">
+    <div id="progressBarWrap"><div id="progressBarFill"></div></div>
+  </div>
+  <div id="map"></div>
+  <div id="legend">
+    <div><span class="line" style="background:#1e3a8a;"></span>주변 도로 (prim_link_info · PSF)</div>
+    <div style="padding-left:14px;color:#64748b;">▶ f_node → t_node 진행방향 (줌 14+)</div>
+    <div style="padding-left:14px;color:#64748b;">도로 마우스오버 → 시설물(교량/터널/고가/지하차도) 표시</div>
+    <div><span class="dot" style="background:#e53935;"></span>GPS 원시 <span style="color:#64748b;">(G순번)</span></div>
+    <div><span class="dot" style="background:#1e88e5;"></span>맵매칭 성공 <span style="color:#64748b;">(M순번)</span></div>
+    <div><span class="dot" style="background:#fb8c00;"></span>SKIP <span style="color:#64748b;">(M순번)</span></div>
+    <div><span style="text-decoration:line-through;color:#e65100;">M순번</span> 맵매칭 실패 <span style="color:#64748b;">(SKIP·ERROR)</span></div>
+    <div><span class="line" style="background:#94a3b8;height:0;border-top:2px dashed #94a3b8;"></span>GPS↔세그먼트 교차 <span style="color:#64748b;">(intersect_len)</span></div>
+    <div><span class="line" style="background:#e53935;height:0;border-top:2px dashed #e53935;"></span>GPS 궤적(순서 연결)</div>
+    <div style="padding-left:14px;color:#64748b;">마커 테두리 색 = 차량(trip) 구분 — "동시표시"로 선택</div>
+    <div style="margin-top:6px;padding-top:6px;border-top:1px solid #e2e8f0;">
+      <a href="docs/charge-flow.html" style="color:#1e88e5;">도로이용 과금 알고리즘 ↗</a><br/>
+      <a href="index.html" style="color:#1e88e5;">금토로 일대 표준노드링크 뷰어 ↗</a><br/>
+      <a href="matched-gps-viewer.html" style="color:#1e88e5;">CSV 맵매칭 결과 뷰어 ↗</a>
+    </div>
+  </div>
+  <div id="ctxMenu"><div class="ctx-item" id="ctxCopy">복사하기</div></div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="app.js?v=20260724_newtest_autoshow"></script>
+</body>
+</html>

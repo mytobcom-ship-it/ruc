@@ -29,6 +29,8 @@ MapMatchSvr/bin/MapMatchSvr
 CreateData/src/MakeBinary
 CreateData/bin/MakeBinary
 Simulator/bin/RawGpsSimSvr
+export/
+roadnet/
 
 # Large road network data (별도 복사 또는 CreateData로 재생성, GitHub 100MB 제한)
 *.psf

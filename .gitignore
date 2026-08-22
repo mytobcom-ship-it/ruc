@@ -21,6 +21,10 @@ web/.ms-playwright/
 *.bak
 *.pid
 
+# teat file
+test*
+*test.sh
+
 # Build artifacts
 *.o
 *.lis

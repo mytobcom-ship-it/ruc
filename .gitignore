@@ -10,6 +10,10 @@
 __pycache__/
 *.pyc
 
+# Test-named files (match basenames at any directory depth)
+test*
+*test
+
 # Playwright 브라우저 바이너리(다운로드 캐시, GitHub 100MB 제한 초과)
 web/.ms-playwright/
 

@@ -67,6 +67,7 @@ ruc.code-*
 /export/
 /roadnet/
 /scripts/
+/CreateData/scripts/
 
 # OS
 .DS_Store

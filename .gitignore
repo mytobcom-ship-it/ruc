@@ -62,6 +62,11 @@ CreateData/data/
 *~
 ruc.code-*
 
+# Local-only directories (Git remote repository excludes these trees)
+/Simulator/
+/export/
+/roadnet/
+
 # OS
 .DS_Store
 Thumbs.db

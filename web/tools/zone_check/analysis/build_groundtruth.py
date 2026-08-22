@@ -19,6 +19,8 @@ WORK = _os.environ.get('ZONE_CHECK_WORK',
     _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), '..', 'work')) + '/'
 _os.makedirs(WORK, exist_ok=True)
 
+# 정답 기준선 대상 — 실주행 트립만 쓴다. 000093_* 는 직선·등간격 합성 좌표열이라 제외
+#   (2026-08-23 검증: 방위 편차 0.00~0.04도, 간격 편차 0.00~0.06m). 자세한 근거는 check_accuracy.py
 TRIPS = ['000376_20260821095239', '000376_20260819140856', '000376_20260819094414']
 
 # 사람이 확인해 확정한 정답 — 자동 판정(detour/reverse 등)을 덮어쓴다.

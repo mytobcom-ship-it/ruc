@@ -14,7 +14,7 @@
     최근접 링크까지의 거리를 쓴다. 차가 도로 위에 있을 때(DRIVE_STATUS=0 ON_ROAD)만
     유효한 대용치다 — 정차 중이면 주차장·부지 안이라 이격이 커도 GPS 오차가 아니다.
     그래서 K 분포는 ON_ROAD 로 적합하고, 서행/정차는 참고값으로만 출력한다.
-    000093_* 합성 좌표열은 제외한다.
+    000093_* 합성 좌표열과 시뮬레이터 트립('9' 로 시작)은 제외한다 — 실주행만으로 보정해야 한다.
 """
 import os as _os, json, statistics, collections, psycopg2
 
@@ -29,7 +29,7 @@ cr, cn = r.cursor(), n.cursor()
 
 cr.execute("""SELECT gps_lon, gps_lat, raw_vld, drive_status, accuracy_m, speed_kmh
               FROM ruc.prim_rawgps
-              WHERE trip_id NOT LIKE '000093%%'
+              WHERE trip_id NOT LIKE '000093%%' AND trip_id NOT LIKE '9%%'
                 AND gps_lon IS NOT NULL AND gps_lat IS NOT NULL AND accuracy_m IS NOT NULL""")
 rows = cr.fetchall()
 

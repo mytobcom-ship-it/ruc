@@ -8,7 +8,8 @@
   분모도 나눠서 본다 — "도로에서 멀리 떨어져 주차한 좌표"를 매칭 실패로 세면 지표가 왜곡된다.
 """
 import psycopg2
-EXCLUDE = "trip_id NOT LIKE '000093%%'"
+# 시뮬레이터 합성 트립(device_key 가 '9' 로 시작)도 제외 — 자세한 이유는 check_accuracy.py 주석
+EXCLUDE = "trip_id NOT LIKE '000093%%' AND trip_id NOT LIKE '9%%'"
 cn = psycopg2.connect(host='127.0.0.1', user='mytobcom', password='my664761', dbname='ruc')
 cn.set_session(readonly=True); cu = cn.cursor()
 
@@ -27,7 +28,7 @@ cu.execute("""
          count(*) FILTER (WHERE raw_vld AND d <= 50 AND match_status=1)
   FROM p""")
 tot, m, novld, vld, inr, inr_m = cu.fetchone()
-print('실주행 트립(000093 제외) 매칭률')
+print('실주행 트립(000093·합성 제외) 매칭률')
 print('  전체 좌표                  %5d' % tot)
 print('  매칭 성공                  %5d   (%.1f%%)' % (m, 100.0*m/max(1,tot)))
 print('  raw_vld=false (측위 실패)  %5d' % novld)

@@ -3266,6 +3266,38 @@ void CRawLogWorker::ProcessParkingCharge(int nThreadId, const sRawLogInfo& stRaw
 	if ((m_stConfig.pcChargeDataLoader == nullptr) || m_stConfig.strChargeInsertSQL.empty())
 		return;
 
+	// ── 좌표 정확도 상한 (park_accmax, 0=비활성) ─────────────────────────────────
+	//   측위에 실패한 단말은 셀 기반 대체 위치로 수백 m 점프한 뒤 그 좌표에 얼어붙는다.
+	//   실측(실주행 11트립, analysis/rawvld_realcheck.py — 앞뒤 신뢰점 사이를 도로 형상을
+	//   따라 보간해 참위치를 추정하는 방식, leave-one-out 검증 링크일치 93.9%):
+	//     accuracy_m 51~100  추정오차 중앙 34.7m — 폴리곤 판정 17건 전부 허위 진입(일치 0)
+	//     accuracy_m 101~    추정오차 중앙 189m·최대 486m, 좌표 동결률 64.6%
+	//                        — 허위진입 20건·누락 20건
+	//     accuracy_m 16~50   추정오차 중앙 8.6m — 폴리곤 오판정 0건이라 살린다
+	//   park_buf(버퍼 상한)로는 못 막는다. 버퍼는 "얼마나 여유를 줄까"이지 "이 좌표를 믿을까"가
+	//   아니라서, 좌표 자체가 200m 틀리면 버퍼를 좁혀도 엉뚱한 자리에서 판정한다.
+	//
+	//   맵매칭에는 영향이 없다 — 걸러지는 행(accuracy_m>50)은 전부 RAW_VLD=false 이고
+	//   (경계가 15라 구조적으로 그렇다) 이미 ShouldSkipGpsInput() 에서 맵매칭을 SKIP 한다.
+	//   반대로 매칭을 타는 RAW_VLD=true 행은 accuracy_m<=15 라 이 게이트에 걸릴 수 없다.
+	//   "RAW_VLD=false 도 주정차 판정은 수행한다"(2026-08-22 사용자 확정)는 유지된다 —
+	//   그 근거였던 "멈추면 GPS 가 나빠지는데 하필 그때 판정이 필요하다"는 16~50 구간에서
+	//   여전히 유효하고, 못 쓸 좌표만 걷어낸다.
+	//   ACCURACY_M 이 NULL(-1)이면 판단 근거가 없으므로 걸러내지 않는다.
+	//
+	//   적용 범위 — "세션 개시"에만 건다. 처음엔 함수 진입부에서 통째로 return 했는데
+	//   실측에서 반례가 나왔다(000376_20260819094414): 정상 좌표로 폴리곤에 들어가 정차한
+	//   진짜 도착 정차인데(seq 133 까지 정확도 12·폴리곤 내), 정차 후 정확도가 78~346 으로
+	//   나빠졌고 트립 종료(TRIP_EVENT=END) 행도 정확도 321 이었다. 그 행에서 return 하는 바람에
+	//   ①의 세션 마감이 실행되지 못해 199초짜리 진짜 체류가 통째로 사라졌다.
+	//   그래서 아래처럼 나눈다.
+	//     ① 진행 중 세션 — 갱신은 건너뛰되(위치·거리 오염·허위 이탈틱 방지) 마감은 그대로 한다
+	//     ② 세션 개시   — 나쁜 좌표로는 새 세션을 열지 않는다 (허위 진입 차단)
+	//   즉 나쁜 좌표를 "정보 없음"으로 다루는 것이지 "구역 밖"으로 다루는 게 아니다.
+	//   (2026-08-23 최정우 추가)
+	const bool bAccTrusted = (m_stConfig.nParkAccMax <= 0) || (stRawLogInfo.nAccuracyM < 0)
+		|| (stRawLogInfo.nAccuracyM <= m_stConfig.nParkAccMax);
+
 	// 구역판정 버퍼 — ACCURACY_M 적응형(포인트마다 오차만큼), 상한은 park_buf 로 캡(이상치 방지)
 	double dfBufM = static_cast<double>(m_stConfig.nParkBuf);
 	if ((stRawLogInfo.nAccuracyM >= 0) && (static_cast<double>(stRawLogInfo.nAccuracyM) < dfBufM))
@@ -3315,6 +3347,10 @@ void CRawLogWorker::ProcessParkingCharge(int nThreadId, const sRawLogInfo& stRaw
 	for (size_t si = 0; si < pstSession->vtParkRuns.size(); )
 	{
 		PARK_RUN_SESSION& stRun = pstSession->vtParkRuns[si];
+
+		// 정확도 미달 좌표는 "정보 없음" — 위치·누적거리를 오염시키지 않고 이탈 디바운스도
+		//   올리지 않는다. 다만 트립 종료 행이면 마감은 해야 하므로 통과시킨다 (2026-08-23 최정우 추가)
+		if (!bAccTrusted && !bTripEnding) { ++si; continue; }
 
 		bool bSameZone = false;
 		for (size_t e = 0; e < vtZones.size(); ++e)
@@ -3388,6 +3424,11 @@ void CRawLogWorker::ProcessParkingCharge(int nThreadId, const sRawLogInfo& stRaw
 		pstSession->vtParkCands.clear();
 		return;
 	}
+
+	// 정확도 미달 좌표로는 새 세션을 열지 않는다. 후보 카운터도 건드리지 않는다 —
+	//   "정보 없음"이므로 좋은 좌표의 연속을 끊지도, 늘리지도 않는다 (2026-08-23 최정우 추가)
+	if (!bAccTrusted)
+		return;
 
 	// ── ② 세션 개시 — 구역별로 park_entrycnt 회 연속 충족해야 연다 ────────────
 	//   1~2점(0~3초)짜리는 체류시간 산출이 불가능하고 GPS 튐과 구분되지 않는다

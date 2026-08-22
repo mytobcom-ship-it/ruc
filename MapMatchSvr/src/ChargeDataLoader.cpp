@@ -526,21 +526,21 @@ bool CChargeDataLoader::LoadZones()
 	m_pcPostgrePool->releaseConnection(pcConn);
 
 	// 일반도로(NODE_STEP) link_id → road_id 역인덱스 재구성 (2026-08-14 최정우 추가)
-	unordered_map<uint64, string> mapNewNodeStepLinkToRoadId;
+	unordered_map<uint64, vector<string> > mapNewNodeStepLinkToRoadId;
 	for (mapZoneInfo::iterator it = mapNewZoneInfo.begin(); it != mapNewZoneInfo.end(); ++it)
 	{
 		if (strcmp(it->second.szRoadKind, "0") != 0) continue;
 		for (size_t i = 0; i < it->second.vtLinkIds.size(); ++i)
-			mapNewNodeStepLinkToRoadId[it->second.vtLinkIds[i]] = it->second.szRoadID;
+			mapNewNodeStepLinkToRoadId[it->second.vtLinkIds[i]].push_back(it->second.szRoadID);
 	}
 
 	// 면제도로 link_id → road_id 역인덱스 재구성 (2026-08-14 최정우 부활)
-	unordered_map<uint64, string> mapNewExemptLinkToRoadId;
+	unordered_map<uint64, vector<string> > mapNewExemptLinkToRoadId;
 	for (mapZoneInfo::iterator it = mapNewZoneInfo.begin(); it != mapNewZoneInfo.end(); ++it)
 	{
 		if (strcmp(it->second.szRoadKind, "5") != 0) continue;
 		for (size_t i = 0; i < it->second.vtLinkIds.size(); ++i)
-			mapNewExemptLinkToRoadId[it->second.vtLinkIds[i]] = it->second.szRoadID;
+			mapNewExemptLinkToRoadId[it->second.vtLinkIds[i]].push_back(it->second.szRoadID);
 	}
 
 	{
@@ -607,6 +607,29 @@ PZONE_INFO CChargeDataLoader::GetParkingZoneContaining(const double dfLon, const
 }
 
 /**
+ * @brief 주정차 구역 복수 조회 — 폴리곤이 겹쳐 설정될 수 있다(시간대별 규제가 다른 구역 등)
+ *   (2026-08-23 최정우 추가)
+ * @param[out] pvtOut 좌표를 포함하는 구역 전부(없으면 빈 목록)
+*/
+void CChargeDataLoader::GetParkingZonesContaining(const double dfLon, const double dfLat,
+		const double dfBufM, vector<PZONE_INFO> *pvtOut)
+{
+	if (pvtOut == nullptr) return;
+	lock_guard<CMutex> cLock(m_cZoneCacheMutex);
+	for (mapZoneInfo::iterator it = m_mapZoneInfo.begin(); it != m_mapZoneInfo.end(); ++it)
+	{
+		ZONE_INFO& stZone = it->second;
+		if (strcmp(stZone.szGeomType, "POLY") != 0) continue;
+		if (stZone.vtCoords.size() < 3) continue;
+
+		if (IsPointInPolygon(dfLon, dfLat, stZone.vtCoords)
+			|| ((dfBufM > 0.0)
+				&& (DistanceToPolygonBoundaryMeters(dfLon, dfLat, stZone.vtCoords) <= dfBufM)))
+			pvtOut->push_back(&stZone);
+	}
+}
+
+/**
  * @brief 일반도로(ROAD_KIND=0, NODE_STEP) 구역 조회 — 매칭 링크 ID로 역인덱스 O(1) 조회 (2026-08-14 최정우 추가)
  * @param[in] qwLinkID 매칭 링크 ID
  * @return 그 링크가 속한 일반도로 구역(없으면 nullptr)
@@ -616,11 +639,29 @@ PZONE_INFO CChargeDataLoader::GetNodeStepZoneByLinkId(const uint64 qwLinkID)
 	// m_cZoneCacheMutex 는 CMutex(재귀 락) — 아래 GetZoneByRoadId() 가 같은 락을 다시 잡아도
 	// 같은 스레드면 데드락 없음 (2026-08-14 최정우 추가)
 	lock_guard<CMutex> cLock(m_cZoneCacheMutex);
-	unordered_map<uint64, string>::iterator itLink = m_mapNodeStepLinkToRoadId.find(qwLinkID);
-	if (itLink == m_mapNodeStepLinkToRoadId.end())
+	unordered_map<uint64, vector<string> >::iterator itLink = m_mapNodeStepLinkToRoadId.find(qwLinkID);
+	if ((itLink == m_mapNodeStepLinkToRoadId.end()) || itLink->second.empty())
 		return nullptr;
 
-	return GetZoneByRoadId(itLink->second);
+	return GetZoneByRoadId(itLink->second[0]);		// 호환용 — 첫 구역만. 복수는 아래 함수 사용
+}
+
+/**
+ * @brief 일반도로 구역 복수 조회 — 한 링크가 여러 구역에 속할 수 있다 (2026-08-23 최정우 추가)
+ * @param[in] qwLinkID 매칭 링크 ID
+ * @param[out] pvtOut 그 링크가 속한 구역 전부(없으면 빈 목록). 호출측이 비우지 않아도 되게 clear 하지 않는다
+*/
+void CChargeDataLoader::GetNodeStepZonesByLinkId(const uint64 qwLinkID, vector<PZONE_INFO> *pvtOut)
+{
+	if (pvtOut == nullptr) return;
+	lock_guard<CMutex> cLock(m_cZoneCacheMutex);
+	unordered_map<uint64, vector<string> >::iterator itLink = m_mapNodeStepLinkToRoadId.find(qwLinkID);
+	if (itLink == m_mapNodeStepLinkToRoadId.end()) return;
+	for (size_t i = 0; i < itLink->second.size(); ++i)
+	{
+		PZONE_INFO p = GetZoneByRoadId(itLink->second[i]);
+		if (p != nullptr) pvtOut->push_back(p);
+	}
 }
 
 /**
@@ -633,9 +674,25 @@ PZONE_INFO CChargeDataLoader::GetExemptZoneByLinkId(const uint64 qwLinkID)
 	// m_cZoneCacheMutex 는 CMutex(재귀 락) — 아래 GetZoneByRoadId() 가 같은 락을 다시 잡아도
 	// 같은 스레드면 데드락 없음
 	lock_guard<CMutex> cLock(m_cZoneCacheMutex);
-	unordered_map<uint64, string>::iterator itLink = m_mapExemptLinkToRoadId.find(qwLinkID);
-	if (itLink == m_mapExemptLinkToRoadId.end())
+	unordered_map<uint64, vector<string> >::iterator itLink = m_mapExemptLinkToRoadId.find(qwLinkID);
+	if ((itLink == m_mapExemptLinkToRoadId.end()) || itLink->second.empty())
 		return nullptr;
 
-	return GetZoneByRoadId(itLink->second);
+	return GetZoneByRoadId(itLink->second[0]);		// 호환용 — 첫 구역만
+}
+
+/**
+ * @brief 면제도로 구역 복수 조회 (2026-08-23 최정우 추가)
+*/
+void CChargeDataLoader::GetExemptZonesByLinkId(const uint64 qwLinkID, vector<PZONE_INFO> *pvtOut)
+{
+	if (pvtOut == nullptr) return;
+	lock_guard<CMutex> cLock(m_cZoneCacheMutex);
+	unordered_map<uint64, vector<string> >::iterator itLink = m_mapExemptLinkToRoadId.find(qwLinkID);
+	if (itLink == m_mapExemptLinkToRoadId.end()) return;
+	for (size_t i = 0; i < itLink->second.size(); ++i)
+	{
+		PZONE_INFO p = GetZoneByRoadId(itLink->second[i]);
+		if (p != nullptr) pvtOut->push_back(p);
+	}
 }

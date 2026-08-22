@@ -160,10 +160,16 @@ public:
 	// 일반도로(ROAD_KIND=0, NODE_STEP) — 게이트가 없어 매칭 링크 ID로 직접 역인덱스 조회. 없으면 nullptr
 	//   (2026-08-14 최정우 추가)
 	PZONE_INFO GetNodeStepZoneByLinkId(const uint64 qwLinkID);
+	// 한 링크가 여러 구역에 속할 수 있어 전부 돌려준다 (2026-08-23 최정우 추가)
+	void GetNodeStepZonesByLinkId(const uint64 qwLinkID, vector<PZONE_INFO> *pvtOut);
 	// 면제도로(ROAD_KIND=5) — 게이트가 없어 매칭 링크 ID로 직접 역인덱스 조회. 없으면 nullptr
 	//   (2026-08-13 최초 추가, charge_type=5로 썼다가 2026-08-14 폐기, 다시 2026-08-14 부활 —
 	//   출력 charge_type만 0으로 바뀌고 판정 방식은 원래의 zone 기반으로 복귀)
 	PZONE_INFO GetExemptZoneByLinkId(const uint64 qwLinkID);
+	void GetExemptZonesByLinkId(const uint64 qwLinkID, vector<PZONE_INFO> *pvtOut);
+	// 폴리곤이 겹쳐 설정될 수 있어 포함하는 구역을 전부 돌려준다 (2026-08-23 최정우 추가)
+	void GetParkingZonesContaining(const double dfLon, const double dfLat, const double dfBufM,
+		vector<PZONE_INFO> *pvtOut);
 
 	inline const bool IsLoad() const { return m_bLoad; }
 	size_t GetGateCount() const;
@@ -188,9 +194,11 @@ private:
 	//   보장되므로 안전
 	deque<mapGateInfo>				m_dqRetiredGateInfo;
 	deque<mapZoneInfo>				m_dqRetiredZoneInfo;
-	unordered_map<uint64, string>	m_mapNodeStepLinkToRoadId;				// 일반도로(ROAD_KIND=0) link_id → road_id 역인덱스,
+	// 1:N — 같은 유형의 구역이 한 링크를 공유할 수 있다(인접 구역의 경계 링크 등). 예전엔 1:1 이라
+	//   나중에 적재된 구역이 앞의 것을 조용히 덮어썼다 (2026-08-23 최정우 수정)
+	unordered_map<uint64, vector<string> >	m_mapNodeStepLinkToRoadId;		// 일반도로(ROAD_KIND=0) link_id → road_id 역인덱스,
 																			//   LoadZones() 가 link_ids 파싱 후 구성 (2026-08-14 최정우 추가)
-	unordered_map<uint64, string>	m_mapExemptLinkToRoadId;				// 면제도로(ROAD_KIND=5) link_id → road_id 역인덱스,
+	unordered_map<uint64, vector<string> >	m_mapExemptLinkToRoadId;		// 면제도로(ROAD_KIND=5) link_id → road_id 역인덱스,
 																			//   LoadZones() 가 link_ids 파싱 후 구성 (2026-08-14 최정우 부활)
 	bool							m_bLoad;
 	mutable CMutex					m_cGateCacheMutex;						// m_mapGateInfo 재조회(swap)/조회 동시접근 보호 (2026-08-14 최정우 추가)

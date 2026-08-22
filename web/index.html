@@ -265,8 +265,10 @@
 
         <div class="issue-card" style="border-left-color:#fdd835;">
           <div class="issue-title" style="color:#f57f17;">주정차단속 <span style="font-weight:400;font-size:11px;color:var(--muted);">CHARGE_TYPE=4</span></div>
-          <div class="issue-row"><b class="label-issue">이슈(미해결)</b> park_buf(15m)·park_exitcnt(3회) 기본값이 추정치라 실측 GPS 튐 패턴으로 검증 안 됨. 실측 charge_type=4 데이터 자체가 아직 없어 컬럼 매핑도 지시값 그대로 적용된 상태</div>
-          <div class="issue-row"><b class="label-fix">대응</b> 실제 위반 데이터가 쌓이기 시작하면 최우선으로 대조·튜닝 예정 — RawLogWorker.cpp::ProcessParkingCharge()/AppendExpiredParkingCharge()</div>
+          <div class="issue-row"><b class="label-issue">이슈(미해결)</b> park_regrace(60초) 재진입 유예가 통과 구간과 실제 정차를 한 건으로 병합함. 실측에서 39km/h 로 폴리곤에 진입한 뒤 도착 정차까지 199초·525m 가 1건으로 묶였음</div>
+          <div class="issue-row"><b class="label-fix">대응</b> 유예를 10~15초로 줄이면 분리되나, 짧게 잡으면 GPS 튐에 세션이 끊김 — 실차 데이터로 임계 결정 필요</div>
+          <div class="issue-row"><b class="label-issue">이슈(미해결)</b> park_buf(15m) 상한이 추정치. ACCURACY_M 이 그보다 크면 15m 로 캡되는데, 정차 시 정확도가 78~346m 까지 나빠져 실효성 미검증</div>
+          <div class="issue-row"><b class="label-fix">대응</b> 폴리곤 크기 대비 버퍼 비율로 재검토 — RL-Z00001 은 대각선 약 110m, RL-Z00014 는 약 750m 구간</div>
         </div>
 
       </div>
@@ -632,7 +634,9 @@ function bindSeqLabel(marker, shortText, detailText, direction, offset) {
   marker.bindTooltip(shortText, { permanent: true, direction: direction, offset: offset, className: 'pt-label' });
   if (!isHighZoom()) marker.closeTooltip();
   marker.on('mouseover', function () {
-    marker.setTooltipContent(detailText);
+    // 순번(G12/M12)을 상세 앞에 붙인다 — 오버하는 순간 라벨이 상세로 바뀌어 어느 점인지
+    //   알 수 없던 문제 (2026-08-23 최정우 수정)
+    marker.setTooltipContent('<b>' + shortText + '</b><br/>' + detailText);
     marker.openTooltip();
   });
   marker.on('mouseout', function () {
@@ -645,6 +649,12 @@ function bindSeqLabel(marker, shortText, detailText, direction, offset) {
 map.on('zoomend', function () {
   const show = map.getZoom() >= SEQ_LABEL_MIN_ZOOM;
   seqLabelMarkers.forEach(function (m) { show ? m.openTooltip() : m.closeTooltip(); });
+  const r = ptRadiusForZoom(map.getZoom());
+  for (let i = ptMarkers.length - 1; i >= 0; i--) {
+    const m = ptMarkers[i];
+    if (!m._map) { ptMarkers.splice(i, 1); continue; }   // 레이어에서 지워진 마커는 목록에서 제거
+    m.setRadius(r);
+  }
 });
 
 // 좌표가 촘촘하면(정차 구간 등) 같은 자리에 라벨이 겹쳐 안 읽힘 — gps_seq 값 자체로 위치를
@@ -697,9 +707,12 @@ function isMatchFailed(p) { return p.match_status === 3 || p.match_status === 4;
 // 수선의 발 선(G↔M) — 화면 재구성(renderVisiblePoints)과 폴링 두 경로에서 그리는데, 예전엔
 //   각자 다른 스타일로 그려서 지도를 움직이면 연한 2px 선으로 되돌아갔다(실측: G83 이 링크에
 //   묻혀 안 보임). 한 함수로 합쳐 항상 같은 모양이 되게 한다 (2026-08-22 최정우 추가)
+//   색 조정 이력: #94a3b8 2px(묻힘) → #37474f 3px → #0f172a 4.5px(너무 검정)
+//   → #64748b 3.5px opacity .7 (2026-08-23). 보조선이라 링크·경로선보다 뒤로 물러나되,
+//   bringToFront() 로 가려지지는 않게 둔다.
 function addPerpLine(p) {
   L.polyline([[p.gps_lat, p.gps_lon], [p.match_lat, p.match_lon]], {
-    color: '#0f172a', weight: 4.5, opacity: 1, dashArray: '6 4'
+    color: '#64748b', weight: 3.5, opacity: 0.7, dashArray: '5 5'
   }).bindTooltip(
     (p.intersect_len != null ? p.intersect_len + 'm' : '-'),
     { sticky: true, className: 'tip-intersect' }
@@ -708,18 +721,27 @@ function addPerpLine(p) {
 // G(원시)·M(매칭) 마커도 화면 재구성과 폴링 두 경로에서 각각 그린다. 스타일을 바꿀 때 한쪽만
 //   고치면 지도를 움직이는 순간 옛 모양으로 되돌아가므로(수선의 발 선에서 실제로 발생),
 //   그리기를 함수 하나로 모아 둔다 (2026-08-22 최정우 추가)
+// 좌표가 촘촘한 구간(정차 등)에서는 큰 마커가 서로 겹쳐 읽히지 않는다. 게이트 마커와 같은
+//   방식으로 줌에 따라 크기를 조절한다 — 멀리서는 작게, 확대하면 크게 (2026-08-23 최정우 추가)
+function ptRadiusForZoom(zoom) { return Math.max(3, Math.min(9, zoom - 9)); }
+const ptMarkers = [];                       // 줌 변경 시 반지름을 다시 계산할 대상
+
 function addGpsMarker(p) {
+  const r = ptRadiusForZoom(map.getZoom());
   const gm = L.circleMarker([p.gps_lat, p.gps_lon],
-    { radius: 4, color: RAW_COLOR, weight: 1, fillColor: RAW_COLOR, fillOpacity: 0.55 })
+    { radius: r, color: RAW_COLOR, weight: 2, fillColor: RAW_COLOR, fillOpacity: 0.6 })
     .addTo(liveRawLayer);
+  ptMarkers.push(gm);
   const gpos = G_LABEL_POS[p.gps_seq % G_LABEL_POS.length];
   bindSeqLabel(gm, 'G' + p.gps_seq, p.gps_lon.toFixed(6) + ', ' + p.gps_lat.toFixed(6), gpos[0], gpos[1]);
   return gm;
 }
 function addMatchMarker(p) {
+  const r = ptRadiusForZoom(map.getZoom());
   const mm = L.circleMarker([p.match_lat, p.match_lon],
-    { radius: 4, color: MATCH_POINT_BORDER, weight: 1.5, fillColor: MATCH_POINT_COLOR, fillOpacity: 0.95 })
+    { radius: r, color: MATCH_POINT_BORDER, weight: 2.5, fillColor: MATCH_POINT_COLOR, fillOpacity: 0.95 })
     .addTo(liveMatchedPointLayer);
+  ptMarkers.push(mm);
   const mpos = M_LABEL_POS[p.gps_seq % M_LABEL_POS.length];
   bindSeqLabel(mm, 'M' + p.gps_seq, p.match_lon.toFixed(6) + ', ' + p.match_lat.toFixed(6), mpos[0], mpos[1]);
   return mm;
@@ -768,6 +790,7 @@ function resetTripState() {
   liveMatchedPointLayer.clearLayers();
   liveMatchedLayer.clearLayers();
   seqLabelMarkers = [];
+  ptMarkers.length = 0;
   const body = document.getElementById('coordBody');
   if (body) body.innerHTML = '';
 }

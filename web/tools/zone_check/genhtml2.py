@@ -12,15 +12,11 @@ import json, io
 SC=WORK
 D=json.load(open(SC+'zonedata.json'))
 POLY=json.load(open(SC+'polydata.json'))
-# RL-Z00014 제안안: 제방길 본선 5개를 10m 버퍼로 감싼 폴리곤 (2026-08-22 생성, DB 미반영)
-# 제안 폴리곤 좌표가 없으면(analysis/z14.py 미실행) 제안안 없이 생성한다
-_z14 = SC+'z14_new.json'
-PROPOSED={} if not _os.path.exists(_z14) else \
-         {'RL-Z00014':{'coords':json.load(open(_z14)),
-                       'note':'제방길 본선 5개(2520119804·2520164100·2520084000·2520120000·2520119801)를 '
-                              '중심선 10m 버퍼로 감싼 안 — 30점 / 약 12,972㎡ / 둘레 약 1,124m'}}
+# 제안 폴리곤 대조 표시용 — 반영이 끝나면 비운다 (2026-08-23 RL-Z00014 반영 완료로 제거)
+PROPOSED={}
 for q in POLY: q['prop']=PROPOSED.get(q['road_id'])
-KIND={'0':'일반도로','1':'개방식','2':'폐쇄식','3':'구간단속','4':'면제구간','5':'주정차단속'}
+# road_kind 코드 — base_roadlink 실제 값 기준 (2026-08-23 정정: 4/5 가 뒤바뀌어 있었음)
+KIND={'0':'일반도로','1':'개방식','2':'폐쇄식','3':'구간단속','4':'주정차단속','5':'면제도로'}
 Z=[z for z in D['zones'] if z['order']]
 
 # 조치 이력 — 무엇을 언제 고쳤는지는 DB 만 봐서는 알 수 없으므로 여기에 축적한다.
@@ -36,6 +32,8 @@ FIXED = {
     'RL-Z00009': ['2026-08-23 — link_ids 주행순 정렬'],
     'RL-Z00010': ['2026-08-23 — link_ids 주행순 정렬, coords 역순 교정'],
     'RL-Z00011': ['2026-08-23 — link_ids 주행순 정렬, coords 역순 교정'],
+    'RL-Z00014': ['2026-08-23 — 좌표 4점 사각형을 제방길 본선 중심선 10m 버퍼(30점)로 교체 '
+                  '→ 본선 5개 포함률 16~75% 에서 전부 100% 로, 면적 14,362㎡ → 12,964㎡'],
 }
 for z in Z:
     z['fixed'] = FIXED.get(z['road_id'], [])
@@ -167,8 +165,14 @@ for q in POLY:
                            '제거하면 폴리곤이 무너져 유지해야 함'%online_n))
     cut=[l for l in q['links'] if l['cut']]
     if cut:
-        cause.append(('bad','대상 링크 %d개가 경계 밖으로 삐져나감 — 밖 구간 합계 약 %dm 가 폴리곤에 안 들어옴 '
-                            '(지도에 빨간 점선)'%(len(cut),round(sum(l['outlen'] for l in cut)))))
+        cause.append(('bad','양끝 노드가 모두 내부인 링크 %d개가 경계 밖으로 삐져나감 — 폴리곤이 도로를 '
+                            '제대로 감싸지 못함 (밖 구간 합계 약 %dm, 지도에 빨간 점선)'
+                            %(len(cut),round(sum(l['outlen'] for l in cut)))))
+    halfcut=[l for l in q['links'] if (not l['cut']) and l['kind']=='한쪽 내부' and l['outlen']>0.5]
+    if halfcut:
+        cause.append(('ok','교차로 진출입 링크 %d개는 경계를 한 번 가로지름 (밖 구간 합계 약 %dm) — '
+                           '블록을 감싸는 닫힌 폴리곤은 블록을 떠나는 모든 도로를 자를 수밖에 없어 정상'
+                           %(len(halfcut),round(sum(l['outlen'] for l in halfcut)))))
     if half: cause.append(('ok','한쪽 노드가 내부인 링크 %d개는 교차로 진출입 구간으로 단속 대상 (포함률 100%% 미만이어도 제외 아님)'%len(half)))
     if both: cause.append(('ok','양끝 노드가 내부인 링크 %d개는 전 구간 단속 대상'%len(both)))
     psecs.append('''<section id="{rid}"><h2>{rid} <small>{nm}</small></h2>

@@ -154,7 +154,7 @@ flowchart TD
 
   <section id="match-pipeline">
     <h2>2. 맵매칭 판정 파이프라인</h2>
-    <div class="src">config: [mapmatch] radius_skip/speed_factor/speed_margin/maxstep/distance, [worker] ttl_sec</div>
+    <div class="src">config: [mapmatch] radius_skip/speed_factor/speed_margin/maxstep/hoppenalty/distance, [worker] ttl_sec</div>
     <div class="easy-name">쉬운 이름: 사전검증 → 방식선택 → 탐색</div>
     <div class="card">
 <pre class="mermaid">
@@ -194,6 +194,9 @@ flowchart TD
       "이어찾기"의 탐색범위 확장은 <b>조기확정 최적화</b>입니다 — 후보가 도로 끝점에 걸리거나 방향이
       많이 어긋날 때만, 여유가 있으면 한 단계 더 넓혀 비교합니다(<code>maxstep</code> 설정이 상한).
       성공 후에도 방향이 심하게 안 맞으면 "새로찾기"로 한 번 더 대조해 더 나은 갈림길 후보가 있는지 확인합니다.
+      <br/><b>2026-08-22 추가</b> — 넓힌 단계에서 찾은 후보에는 <code>hoppenalty</code>(단계당 8m)를
+      비용으로 더합니다. 예전엔 거리·방위각만 비교해서 "가깝지만 멀리 돌아가야 하는" 후보가 뽑혔는데,
+      그 경로를 실제로 주행하려면 교차로를 여러 번 돌아야 해 물리적으로 불가능했습니다.
     </div>
   </section>
 
@@ -327,7 +330,8 @@ flowchart LR
       <tr><td><code>mapmatch.reverse_weight/speed/margin</code></td><td>m_dfReverseWeight/Speed/Margin</td><td>LinkSgmtMapMatch() 역행 페널티 (ContinueMapMatch.cpp:326-437)</td></tr>
       <tr><td><code>mapmatch.reverse_confirm</code></td><td>nReverseConfirm</td><td>bReverseSkip 판정, bConfirmed (RawLogWorker.cpp:848,1135)</td></tr>
       <tr><td><code>mapmatch.speed_factor/margin</code></td><td>dfSpeedFactor/nSpeedMargin</td><td>ShouldSkipImplausibleSpeed 상한식 (RawLogWorker.cpp:393-395)</td></tr>
-      <tr><td><code>mapmatch.maxstep</code></td><td>nMaxStep → GetSearchStep()</td><td>ContinueMapMatch depth 루프 상한 (+ 공백적응 가산) (MapMatch.cpp:180-190)</td></tr>
+      <tr><td><code>mapmatch.maxstep</code></td><td>nMaxStep → GetSearchStep()</td><td>ContinueMapMatch depth 루프 상한 (+ 공백적응 가산) (MapMatch.cpp:180-190). <b>2026-08-22 2→4 상향</b> — 신규 표준노드링크가 교차로를 여러 노드로 쪼개 전국 링크의 29%가 15m 미만이라, 한 틱에 3~4개 링크를 건너뛰는 전이가 흔하다</td></tr>
+      <tr><td><code>mapmatch.hoppenalty</code></td><td>dfHopPenalty → GetHopPenalty()</td><td><b>2026-08-22 신설(기본 8.0m, 0=비활성)</b> — depth 1단계당 비용 가산 (ContinueMapMatch.cpp:140). 거리·방위각만으로 겨루면 3 hop 떨어진 2.3m 후보가 1 hop 5.2m 후보를 이겨 물리적으로 불가능한 우회 경로가 선택된다. 실측 우회 8건→4건, 링크 변경 42건→17건, 역행 오매칭 16건→14건</td></tr>
       <tr><td><code>mapmatch.distance</code></td><td>m_dwMaxDistance / nHeadingMaxDist</td><td>heading 계산 유효 이동거리 상한 (RawLogWorker.cpp:1074-1077)</td></tr>
       <tr><td><code>mapmatch.timeout</code></td><td>nMatchTimeoutMs</td><td>1건 처리시간 초과 시 강제 ERROR (RawLogWorker.cpp:885-896)</td></tr>
       <tr><td><code>mapmatch.geodetic</code></td><td>nCoordinateType</td><td>좌표계 변환 기준</td></tr>

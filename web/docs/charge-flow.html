@@ -95,7 +95,7 @@
 <main>
   <h1>도로이용 과금 알고리즘 플로우차트</h1>
   <p class="subtitle">
-    <b>갱신판(2026-08-06)</b> — 운영 DB <code>ruc</code>에 이미 구축된 실제 마스터/결과 스키마
+    <b>갱신판(2026-08-23)</b> — 운영 DB <code>ruc</code>에 이미 구축된 실제 마스터/결과 스키마
     (<a href="charge-tables.html">charge-tables.html</a>) 기준으로 재작성했습니다. 이전 판이 가정했던
     <code>PRIM_GATE_INFO</code>/<code>PRIM_PARKING_ZONE</code> 신규 설계(<code>roadnet/sql/prim_charge_create.sql</code>)는
     <b>폐기</b>되었습니다(<code>doc/README.txt</code> A절). 진입~진출을 짝지어야 판정되는 유형은
@@ -315,56 +315,73 @@ flowchart TD
   </section>
 
   <section id="parking">
-    <h2>4. PARKING (주정차, ZONEKIND=05)</h2>
-    <div class="src">필요 기준정보: base_mapinfo(zone_kind=05, coords jsonb 폴리곤). 판정 트리거: MAP_MATCH_INPUT.nDriveStatus = DRIVE_STATUS_PARKED(2)</div>
-    <div class="easy-name">쉬운 이름: 정차 시작시각 기억 → 이동 재개(또는 트립종료) 시점에 체류시간 계산 → 금지구역·임계치 여부로 확정</div>
-    <div class="warn">
-      <b>두 가지 미구현 gap이 있습니다.</b> ① <code>base_mapinfo.coords</code>가 PostGIS <code>GEOMETRY</code>가
-      아니라 <code>jsonb</code>라, "정차 좌표가 폴리곤 내부인지" 판정하는 포함여부(point-in-polygon) 로직이
-      애플리케이션 코드 어디에도 없습니다(<code>doc/README.txt</code> F절) — 신규 구현 필요. ②
-      <code>DRIVE_STATUS_PARKED</code> 상수는 <code>MessageType.h</code>에 정의돼 있지만
-      <code>RawLogWorker.cpp</code>에서 아직 참조되지 않습니다(2026-08-06 소스 확인) — 정차 감지 자체가 코드에
-      없는 상태입니다.
+    <h2>4. PARKING (주정차, ROAD_KIND=4)</h2>
+    <div class="src">기준정보: ruc.base_roadlink(road_kind='4', geom_type='POLY', coords jsonb 폴리곤).
+      구현: RawLogWorker.cpp::ProcessParkingCharge() / AppendExpiredParkingCharge().
+      config: [charge] park_buf / park_entrycnt / park_speedmax / park_exitcnt / park_regrace / park_ttl</div>
+    <div class="easy-name">쉬운 이름: 폴리곤 안에 연속으로 머물면 세션 시작 → 벗어나거나 트립종료 시 마감 → 체류시간·이동거리·평균속도 기록</div>
+    <div class="note">
+      <b>2026-08-22~23 전면 재작성.</b> 이전 문서(2026-08-06)는 "point-in-polygon 미구현, DRIVE_STATUS_PARKED
+      미참조"로 적혀 있었으나 지금은 모두 구현됐고 판정 구조도 달라졌습니다.
+      <br/><b>이 서버는 구역 진입 사실만 등록하고 과금 처리는 하지 않습니다.</b> 위반 확정(유예시간 초과 여부)은
+      과금서버 몫이라, 엔진은 <code>charge_yn='Y'</code>/<code>charge_status='0'</code> 고정으로 적재하고
+      <code>dist_m</code>·<code>stay_seconds</code>·<code>speed_kmh</code>(평균속도)만 사실대로 채웁니다.
+      2026-08-13 체류시간 임계 게이팅을 걷어낸 것과 같은 취지로, 속도 임계(<code>park_speedmax</code>)도
+      기본 0(비활성)입니다 — 과금서버가 평균속도로 통과·정차를 구분합니다(실측: 정차 0~1km/h, 통과 11~52km/h).
     </div>
     <div class="card">
 <pre class="mermaid">
 flowchart TD
-    In(["맵매칭 성공 GPS 1건&lt;br/&gt;(MAP_MATCH_INPUT.nDriveStatus 포함)"]) --> Chk1{"현재 세션이&lt;br/&gt;정차 진행 중?"}
+    In(["원시 GPS 1건&lt;br/&gt;(RAW_VLD 무관 — 아래 주석 참고)"]) --> InPoly{"원시 좌표가 폴리곤 내?&lt;br/&gt;(버퍼 = min(park_buf, ACCURACY_M))"}
+    InPoly -->|"아니오"| NoZone(["구역 밖"])
+    InPoly -->|"예"| Rule{"맵매칭 성공?"}
+    Rule -->|"실패(규칙1)"| Slow{"속도 ≤ park_speedmax ?&lt;br/&gt;(0=비활성이면 항상 통과)"}
+    Rule -->|"성공"| MIn{"매칭 좌표도 폴리곤 내?"}
+    MIn -->|"예(규칙2)"| Slow
+    MIn -->|"아니오(규칙4)"| NoZone
 
-    Chk1 -->|"아니오"| ParkStart{"nDriveStatus = DRIVE_STATUS_PARKED(2) ?"}
-    ParkStart -->|"아니오"| Done1(["판정 없음 (다음 GPS로)"])
-    ParkStart -->|"예"| SaveStart["세션 저장:&lt;br/&gt;정차시작시각·정차시작좌표"]
-    SaveStart --> Done1
+    Slow -->|"아니오"| NoZone
+    Slow -->|"예"| Open{"세션 진행 중?"}
+    Open -->|"아니오"| Cnt["연속 충족 카운터 +1"]
+    Cnt --> CntChk{"park_entrycnt 이상?"}
+    CntChk -->|"아니오"| Wait(["대기 (다음 GPS로)"])
+    CntChk -->|"예"| Begin["세션 시작&lt;br/&gt;진입시각·좌표 = 연속의 첫 좌표"]
+    Open -->|"예"| Keep["체류 갱신&lt;br/&gt;PARKED+속도0 이면 거리 미가산(GPS 튐)"]
+    Keep --> Cont(["세션 유지"])
 
-    Chk1 -->|"예"| Resume{"nDriveStatus ≠ PARKED&lt;br/&gt;(이동 재개) 또는 트립 종료?"}
-    Resume -->|"아니오(계속 정차)"| Done2(["세션 유지 (다음 GPS로)"])
-    Resume -->|"예"| Calc["stay_seconds = 지금시각 − 정차시작시각"]
-    Calc --> Zone{"정차 시작좌표가&lt;br/&gt;base_mapinfo(zone_kind=05) 폴리곤 내부?&lt;br/&gt;(coords jsonb — 판정로직 신규구현 필요)"}
-    Zone -->|"아니오"| InsertN1(["prim_chargehand INSERT&lt;br/&gt;charge_type=4(PARKING), charge_yn=N&lt;br/&gt;non_charge_reason=허용구역"])
-    Zone -->|"예"| Over{"stay_seconds &gt;&lt;br/&gt;허용 유예시간 ?&lt;br/&gt;(기준정보 컬럼 부재 — 7절 3번)"}
-    Over -->|"아니오"| InsertN2(["prim_chargehand INSERT&lt;br/&gt;charge_yn=N&lt;br/&gt;non_charge_reason=유예시간이내"])
-    Over -->|"예"| InsertY(["prim_chargehand INSERT&lt;br/&gt;charge_type=4(PARKING), charge_yn=Y&lt;br/&gt;stay_seconds=체류시간, zone_id=구역ID"])
+    NoZone --> Exit{"세션 진행 중?"}
+    Exit -->|"아니오"| Done(["판정 없음"])
+    Exit -->|"예"| Deb["이탈 후보 +1 (park_exitcnt 디바운스)"]
+    Deb --> DebChk{"park_exitcnt 이상?"}
+    DebChk -->|"아니오"| Cont
+    DebChk -->|"예"| Grace{"재가속으로 인한 이탈?"}
+    Grace -->|"예"| Fin
+    Grace -->|"아니오"| GraceW{"park_regrace 초 경과?&lt;br/&gt;(그 안에 복귀하면 병합)"}
+    GraceW -->|"아니오"| Cont
+    GraceW -->|"예"| Fin["마감&lt;br/&gt;종료시각 = 마지막으로 조건을 만족한 시각"]
+    Fin --> Ins(["prim_chargehand INSERT&lt;br/&gt;charge_type=4, charge_yn=Y, charge_status=0&lt;br/&gt;dist_m·stay_seconds·speed_kmh(평균) 기록&lt;br/&gt;occur_dt = 진입 시각"])
 
-    InsertN1 --> Reset["세션 정차 상태 초기화"]
-    InsertN2 --> Reset
-    InsertY --> Reset
-
-    Chk1 -.->|"세션 TTL 만료(재개 없이 트립 종료)"| Orphan(["미종결 처리:&lt;br/&gt;charge_status=AUDIT(1)로 INSERT"])
+    Trip(["트립 종료(TRIP_EVENT=2) 또는 park_ttl 만료"]) -.-> Fin
 
     classDef ok fill:#1e88e5,color:#fff,stroke:#0d47a1;
-    classDef warn fill:#fb8c00,color:#fff,stroke:#e65100;
     classDef mid fill:#94a3b8,color:#fff,stroke:#64748b;
     classDef audit fill:#e53935,color:#fff,stroke:#b71c1c;
-    class InsertY ok;
-    class InsertN1,InsertN2 warn;
-    class SaveStart,Calc mid;
-    class Orphan audit;
+    class Ins ok;
+    class Begin,Keep,Fin,Cnt,Deb mid;
+    class Trip audit;
 </pre>
     </div>
     <div class="note">
-      판정 순서는 <b>구역 여부를 먼저</b> 확인한 뒤 <b>임계치 초과 여부</b>를 보는 것이 자연스러운데, 금지구역이
-      아니면 애초에 유예시간 자체가 무의미하기 때문입니다. 단, <code>base_mapinfo</code>에 유예시간·과태료 컬럼이
-      없어(7절 3번) "허용 유예시간"을 어디서 가져올지는 별도 결정이 필요합니다.
+      <b>RAW_VLD=false 행도 주정차 판정은 수행합니다</b>(2026-08-22 사용자 확정). 차가 멈추면 GPS 가 측위를 놓쳐
+      정확도가 급격히 나빠지는데(실측: DRIVE_STATUS=PARKED 497건 평균 64m, ON_ROAD 는 7m), 하필 주정차 판정이
+      가장 필요한 순간이 그때입니다. 이 행들을 버리면 도착 정차가 통째로 누락됩니다 — 실측에서 어떤 트립의
+      도착 정차 17점·79초가 전부 RAW_VLD=false 였습니다. 맵매칭(다른 3종 과금)은 종전대로 SKIP 합니다:
+      좌표를 링크에 붙이는 일은 정확도가 필요하지만, "폴리곤 안에 있었나"는 훨씬 큰 공간 판정이라 성격이 다릅니다.
+    </div>
+    <div class="note">
+      <b>왜 연속 건수(park_entrycnt)를 두는가.</b> 1~2점(0~3초)짜리는 체류시간 산출 자체가 불가능하고 GPS 튐과
+      구분되지 않습니다. 실측에서 1점 구간 6개·2점 구간 2개가 나왔고, 실제 주차 5건은 모두 13점(75초) 이상이라
+      3으로 잡으면 안전하게 갈립니다. 이건 위반 판정 정책이 아니라 <b>측정 가능성</b>의 문제라 엔진에 둡니다.
     </div>
   </section>
 
@@ -520,6 +537,24 @@ flowchart TD
 
   <section id="open-issues">
     <h2>7. 미해결 이슈 (재작업 전 확인 필요)</h2>
+    <div class="note">
+      <b>2026-08-22~23 반영 내역</b>
+      <ul>
+        <li>주정차 판정 전면 재작성 — 폴리곤 포함(규칙1·2)·매칭 좌표가 폴리곤 밖이면 해제(규칙4)·
+            연속 건수(<code>park_entrycnt</code>)·속도 상한(<code>park_speedmax</code>, 기본 0=비활성).
+            흐름은 4절 참고.</li>
+        <li>RAW_VLD=false 행도 주정차 판정 수행 — 도착 정차가 통째로 누락되던 문제 해소.</li>
+        <li>일반도로(NODE_STEP) — 구역 이탈 시 마지막 링크의 종료 노드까지 누적거리 보정.
+            GPS 표본이 구역 경계에 맞춰 찍히지 않아 통행거리가 짧게 계산되던 문제.</li>
+        <li>맵매칭 — <code>hoppenalty</code>(단계당 8m) 신설, <code>maxstep</code> 2→4.
+            우회 매칭 8건→4건, 링크 변경 42건→17건, 역행 오매칭 16건→14건.</li>
+        <li>과금구역 데이터 교정 — 누락 링크 6개 추가, 5개 구역 <code>link_ids</code> 주행순 정렬,
+            4개 구역 <code>coords</code> 역순 교정(RL-Z00008 입구/출구 게이트 정상화),
+            RL-Z00014 폴리곤을 4점 사각형에서 30점 버퍼로 교체.</li>
+      </ul>
+      <b>남은 것</b> — 주정차 유예시간 기준(과금서버 책임), 정답 경로 데이터가 없어 매칭 정확도 검증 불가,
+      RL-Z00014 폴리곤 모서리를 스치는 용지로 32m 구간.
+    </div>
     <div class="card">
       <ol class="todo">
         <li><b>[해결됨] car_type(차종) 출처</b> — <code>base_carinfo.device_key</code>로 <code>prim_chargehand.device_key</code>와 1:1 조인해 확인(5절). <code>tb_vhcl_info</code>는 별개 코드체계이므로 혼동 금지.</li>

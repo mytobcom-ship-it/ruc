@@ -46,8 +46,12 @@ for rid,nm,kind,co in zs:
                       'inlen':round(inl,1),'ratio':round(inl/ln*100,1) if ln else 0,
                       'fin':fin,'tin':tin,'kind':kind_,
                       'excl':(not fin and not tin),      # 노드가 모두 밖 = 관통만 → 제외 대상
-                      # 대상 링크(노드 하나라도 내부)인데 밖으로 삐져나온 구간 = 경계가 링크를 자른 것
-                      'cut':((fin or tin) and inl < ln-0.5),
+                      # 'cut' = 이상 징후로 볼 만한 잘림만 표시한다 (2026-08-23 수정).
+                      #   양끝 노드가 모두 폴리곤 안인데 링크 일부가 밖에 있으면 폴리곤이 도로를
+                      #   제대로 감싸지 못한 것이므로 이상이다. 반면 한쪽 노드만 내부인 링크(교차로
+                      #   진출입)는 경계를 반드시 한 번 가로지르므로 밖 구간이 있는 게 정상이다 —
+                      #   블록을 감싸는 닫힌 폴리곤은 블록을 떠나는 모든 도로를 자를 수밖에 없다.
+                      'cut':(fin and tin and inl < ln-0.5),
                       'outlen':round(max(ln-inl,0),1),
                       'g':json.loads(g),'gin':json.loads(gin),'gout':json.loads(gout)})
 

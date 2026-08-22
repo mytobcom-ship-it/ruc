@@ -38,6 +38,7 @@ roadnet/
 
 # Large road network data (별도 복사 또는 CreateData로 재생성, GitHub 100MB 제한)
 *.psf
+*.psf.*
 *.tar.gz
 *.zip
 *.bak

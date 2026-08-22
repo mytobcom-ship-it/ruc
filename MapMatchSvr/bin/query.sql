@@ -52,6 +52,14 @@ WHERE
 --   형식을 요구하도록 바뀌어(같은 날 수정) 방향이 반대가 됨 — 그 보정 로직을 남겨두면 유효한
 --   CAR_SEQ_NO 형식을 오히려 무효한 DEVICE_KEY 형식으로 바꿔버리는 역효과가 나서 제거함.
 --   원본(보정 없는) 형태로 되돌림.
+-- 2026-08-23 최정우 수정 — 정렬에서 GPS_DT 제거. 트립 내 순서의 정본은 GPS_SEQ 다.
+--   실측 000376_20260819140856: seq19(도착 이벤트 행)의 GPS_DT 가 직전 seq18 보다 3초 이르고
+--   좌표도 seq17 과 동일했다. GPS_DT 우선 정렬이라 엔진에 17->19->18 순으로 들어갔고,
+--   NeedsBeginReset() 이 seq18 을 역전(rollback)으로 판정해 세션 앵커를 버리고 BEGIN 으로
+--   강등 -> BEGIN 은 heading 을 안 보고 거리만 봐서(bIgnoreHeading) 왕복분리 건너편 차로에
+--   붙는 오매칭이 났다. GPS_SEQ 로만 정렬하면 17->18->19 가 되어 seq18 은 정상 처리되고,
+--   뒤로 튄 중복 좌표인 seq19 는 기존 역행 판정으로 걸러진다.
+-- ※ 이 블록 "안"에는 -- 주석을 쓰지 말 것 — 로더가 SQL 을 한 줄로 이어붙여 뒤가 통째로 잘린다.
 [rawgps_select]
 UPDATE RUC.PRIM_RAWGPS AS U
 SET
@@ -60,7 +68,7 @@ FROM (
 	SELECT TRIP_ID, GPS_SEQ
 	FROM RUC.PRIM_RAWGPS
 	WHERE MATCH_STATUS = 0
-	ORDER BY DEVICE_KEY ASC, TRIP_ID ASC, GPS_DT ASC, GPS_SEQ ASC
+	ORDER BY DEVICE_KEY ASC, TRIP_ID ASC, GPS_SEQ ASC
 	LIMIT $1
 	FOR UPDATE SKIP LOCKED
 ) AS S

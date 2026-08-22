@@ -1039,16 +1039,20 @@ bool CRawLogWorker::ShouldSkipImplausibleSpeed(int nThreadId, const sRawLogInfo&
  * @param[in] stRawLogInfo 원시 GPS
  * @param[in] stSession 현재 trip_id 세션
  * @param[out] pbFullReset true 이면 START 에 의한 전체 세션 초기화
+ * @param[out] pbSeqRollback true 이면 GPS_SEQ 역전(과거·중복 seq) — 반환값은 false 이고
+ *   호출측(ProcessRawLog)이 세션을 건드리지 않은 채 그 행만 SKIP 한다 (2026-08-23 최정우 추가)
  * @remark
- *   - TRIP_EVENT=0(START) 또는 GPS_SEQ<=dwLastGpsSeq(역전·동일 seq 재처리) → 시작
+ *   - TRIP_EVENT=0(START) 또는 TRIP_ID 변경 → 시작(BEGIN 강등)
+ *   - GPS_SEQ<=dwLastGpsSeq(역전·동일 seq 재처리)는 더 이상 BEGIN 강등이 아니다 — pbSeqRollback 로 알린다
 */
 bool CRawLogWorker::NeedsBeginReset(int nThreadId, const sRawLogInfo& stRawLogInfo,
-		const VEHICLE_TRIP_SESSION& stSession, bool *pbFullReset)
+		const VEHICLE_TRIP_SESSION& stSession, bool *pbFullReset, bool *pbSeqRollback)
 {
-	if (pbFullReset == nullptr)
+	if ((pbFullReset == nullptr) || (pbSeqRollback == nullptr))
 		return false;
 
 	*pbFullReset = false;
+	*pbSeqRollback = false;
 
 	if (stRawLogInfo.nTripEvent == TRIP_EVENT_START)
 	{
@@ -1068,13 +1072,17 @@ bool CRawLogWorker::NeedsBeginReset(int nThreadId, const sRawLogInfo& stRawLogIn
 		return true;
 	}
 
+	// GPS_SEQ 역전·중복 — 이미 지나온 시점의 행이다. 세션은 건드리지 않고 신호만 올린다.
+	//   (2026-08-23 최정우 수정 — 이전엔 return true 로 BEGIN 강등했으나 그게 오매칭 원인이었다.
+	//    아래 ProcessRawLog 의 bSeqRollback 처리 주석 참고)
 	if ((stSession.dwLastGpsSeq > 0) && 
 		(stRawLogInfo.dwSeqNo <= stSession.dwLastGpsSeq))
 	{
-		LOGFMTW("[#%02d] gps_seq rollback!device=[%s] trip_id=[%s] seq=[%u] last_seq=[%u]",
+		LOGFMTW("[#%02d] gps_seq rollback!device=[%s] trip_id=[%s] seq=[%u] last_seq=[%u] -> SKIP(세션 유지)",
 			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID,
 			stRawLogInfo.dwSeqNo, stSession.dwLastGpsSeq);
-		return true;
+		*pbSeqRollback = true;
+		return false;
 	}
 
 	return false;
@@ -1564,8 +1572,9 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 	stSession.dtLastSeen = time(nullptr);
 
 	bool bFullReset = false;
+	bool bSeqRollback = false;			// GPS_SEQ 역전 — 아래에서 이 행만 SKIP (2026-08-23 최정우 추가)
 	// 시작(세션 초기화) 필요 여부 판단 (2026-07-08 최정우 주석 추가)
-	if (NeedsBeginReset(nThreadId, stRawLogInfo, stSession, &bFullReset))
+	if (NeedsBeginReset(nThreadId, stRawLogInfo, stSession, &bFullReset, &bSeqRollback))
 	{
 		if (bFullReset)
 		{
@@ -1577,7 +1586,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		// 연속 맵매칭 세션 시작 상태로 초기화 (2026-07-08 최정우 주석 추가)
 		ResetTripSessionForBegin(stSession, bFullReset);
 	}
-	else if (!stSession.bStartWarned && stRawLogInfo.nTripEvent != TRIP_EVENT_START)
+	else if (!bSeqRollback && !stSession.bStartWarned && stRawLogInfo.nTripEvent != TRIP_EVENT_START)
 	{
 		LOGFMTW("[#%02d] trip missing START!device=[%s] trip_id=[%s] seq=[%u] event=[%d]",
 			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID,
@@ -1627,6 +1636,26 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		AppendExpiredSpeedZoneCharge(nThreadId, stRawLogInfo.szDeviceKey, stSession, stRawLogInfo.dtGPS, pvtChargeInserts);
 		if (bWasSpeedZone)
 			stSession.nChargeSeq += 1;
+	}
+
+	// ── GPS_SEQ 역전 행 — 세션 앵커를 유지한 채 이 행만 SKIP (2026-08-23 최정우 추가) ──
+	//   예전에는 NeedsBeginReset() 이 여기서 true 를 돌려 세션 앵커(직전 링크·위치·고도)를 통째로
+	//   버리고 BEGIN 으로 강등했다. 그런데 BEGIN 은 heading 을 아예 안 보고 거리만으로 판정하므로
+	//   (bIgnoreHeading=true, BeginMapMatch.cpp), 왕복분리 도로에서는 10m 옆 건너편 차로가 그냥
+	//   더 가깝다는 이유로 채택된다 — 실측 000376_20260819140856 seq18 에서 반대차로 2.80m 가
+	//   정답차로 7.12m 를 이겨 오매칭됐고, 그 잘못된 앵커가 seq20 까지 번졌다.
+	//   방위각으로는 막을 수 없다: GISUtil::SgmtMatch() 가 양방향 단일 링크 지원을 위해 세그먼트
+	//   방위각의 정·역(+180°) 중 더 잘 맞는 쪽을 채택해서, 실제 167° 어긋난 건너편 차로가 13° 로
+	//   접혀 하드컷(MM_DIR_MAX_DEG=120°)을 그냥 통과한다. 즉 이 쌍에서 유일한 방어선은 위상
+	//   (직전 링크에서 도달 가능한가)인데 BEGIN 에는 그 제약이 없다.
+	//   과거 행 하나 때문에 뒤따르는 정상 행이 그 방어선을 잃을 이유가 없다. 역전 행 자신은
+	//   이미 지나온 시점이라 재매칭 가치가 없으므로 SKIP(3) 로 남긴다.
+	//   트립종료(TRIP_EVENT=END) 기록·보류행 커밋은 바로 위에서 이미 끝냈다.
+	if (bSeqRollback)
+	{
+		if (stRawLogInfo.nTripEvent == TRIP_EVENT_END)
+			*pbTripEnded = true;
+		return AppendUpdateRow(pvtUpdates, stRawLogInfo, MATCH_STATUS_SKIP);
 	}
 
 	// GPS 좌표·RAW_VLD 유효성 검사 — SKIP(3). 세션·DB 좌표 미저장 (2026-07-10 최정우 수정)

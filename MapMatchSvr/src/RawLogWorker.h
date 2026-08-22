@@ -512,8 +512,10 @@ private:
 		const VEHICLE_TRIP_SESSION& stSession, int *pnImpliedSpeedKmh);
 	static bool IsValidTripIdForDevice(const sRawLogInfo& stRawLogInfo);
 	static bool IsValidTripEvent(sint16 nTripEvent);
+	// pbSeqRollback: GPS_SEQ 역전(과거·중복 seq) 감지 시 true — 이 경우 반환값은 false(BEGIN 강등 안 함)
+	//   이고, 호출측이 해당 행만 SKIP 한다 (2026-08-23 최정우 추가)
 	static bool NeedsBeginReset(int nThreadId, const sRawLogInfo& stRawLogInfo,
-		const VEHICLE_TRIP_SESSION& stSession, bool *pbFullReset);
+		const VEHICLE_TRIP_SESSION& stSession, bool *pbFullReset, bool *pbSeqRollback);
 	static void ResetTripSessionForBegin(VEHICLE_TRIP_SESSION& stSession, bool bFullReset);
 	// 하버사인: WGS84 경위도(도) 두 점 사이 지표거리(m) (2026-07-08 최정우 추가)
 	static double HaversineMeters(const POINT& stA, const POINT& stB);

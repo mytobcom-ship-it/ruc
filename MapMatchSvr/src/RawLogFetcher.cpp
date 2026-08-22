@@ -251,11 +251,21 @@ bool CRawLogFetcher::FetchAndDispatch()
 	if (vtRawLogInfos.empty())
 		return false;
 
-	// GroupByTripId 는 device_key/trip_id/gps_dt/gps_seq 순 정렬을 전제로 인접 구간만 묶는데,
+	// GroupByTripId 는 device_key/trip_id/gps_seq 순 정렬을 전제로 인접 구간만 묶는데,
 	//   [rawgps_select]의 ORDER BY는 LIMIT 대상을 고르는 내부 서브쿼리에만 있어 바깥 UPDATE...
 	//   RETURNING 출력 순서까지 보장하지 않음(PostgreSQL 실행계획이 서브쿼리 정렬을 그대로 안 지킬
 	//   수 있음) — 여기서 직접 재정렬해 그 가정을 코드로 보장(2026-08-14 최정우 수정 — "소스상 문제"
-	//   검토 중 발견)
+	//   검토 중 발견). 실제 처리 순서를 정하는 곳은 SQL 이 아니라 여기다.
+	//
+	//   2026-08-23 최정우 수정 — 정렬 키에서 GPS_DT 제거. 트립 안에서 순서의 정본은 GPS_SEQ 다.
+	//     실측 000376_20260819140856: seq19(도착 이벤트 행)의 GPS_DT 가 직전 seq18 보다 3초 이르고
+	//     좌표도 seq17 과 같았다. GPS_DT 를 앞에 두는 바람에 워커에 17->19->18 순으로 들어갔고,
+	//     NeedsBeginReset() 이 seq18 을 역전(rollback)으로 판정 -> 세션 앵커 폐기 -> BEGIN 강등.
+	//     BEGIN 은 heading 을 안 보고 거리만 보므로(bIgnoreHeading) 왕복분리 도로에서 10m 옆
+	//     건너편 차로(2.80m)가 정답 차로(7.12m)를 이겨 오매칭됐다.
+	//     GPS_SEQ 로만 정렬하면 17->18->19 가 되어 seq18 은 정상 처리되고, 뒤로 튄 중복 좌표인
+	//     seq19 는 기존 역행 판정(reverse_confirm)이 걸러낸다.
+	//   ※ [rawgps_select] 의 ORDER BY 도 같이 맞춰뒀다 — 어느 쪽만 봐도 의도가 읽히게.
 	std::stable_sort(vtRawLogInfos.begin(), vtRawLogInfos.end(),
 		[](const sRawLogInfo& stLeft, const sRawLogInfo& stRight) -> bool
 		{
@@ -263,7 +273,6 @@ bool CRawLogFetcher::FetchAndDispatch()
 			if (nDeviceCmp != 0) return nDeviceCmp < 0;
 			int nTripCmp = strcmp(stLeft.szTripID, stRight.szTripID);
 			if (nTripCmp != 0) return nTripCmp < 0;
-			if (stLeft.dtGPS != stRight.dtGPS) return stLeft.dtGPS < stRight.dtGPS;
 			return stLeft.dwSeqNo < stRight.dwSeqNo;
 		});
 

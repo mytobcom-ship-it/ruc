@@ -66,6 +66,7 @@ ruc.code-*
 /Simulator/
 /export/
 /roadnet/
+/scripts/
 
 # OS
 .DS_Store

@@ -132,6 +132,27 @@ bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPU
 		// 이번 depth 후보를 누적 목록에 병합 (2026-07-15 최정우 수정)
 		if (!listMatchEntryList.empty())
 		{
+			// depth(hop) 비용 가산 — 직전 링크에서 멀리 돌아온 후보일수록 불리하게 만든다.
+			//   이 가산이 없으면 3 hop 떨어진 2.3m 후보가 1 hop 5.2m 후보를 이겨, 물리적으로
+			//   불가능한 우회 경로가 선택된다(실측 연속 3점 42건 중 8건, 19%). (2026-08-22 최정우 추가)
+			//
+			//   [보류] 이 가산으로 8건 중 4건이 잡혔고, 남은 4건은 A→B 가 1 hop 이라 hop 비용이
+			//   거의 안 걸리는 유형이다(B 에서 C 로 가는 길이 막힌다는 사실은 B 를 고를 때 알 수 없음).
+			//   이를 잡으려면 "다음 점까지 본 경로 일관성 검사"가 필요하다 —
+			//     조건    : hop(A→B) + hop(B→C) - hop(A→C) >= 4
+			//     위치    : CommitPendingRow() (1틱 지연 커밋 구조 재사용, 추가 지연 없음)
+			//     안전장치: 재매칭 후보가 원래보다 15m 이상 멀면 원래 값 유지
+			//     현재 해당: 4건 / 전이 174건 (2.3%)
+			//   표본 4건으로 임계값을 정하면 과적합이라 실차 데이터가 쌓인 뒤 착수한다 (2026-08-22 판단).
+			if (i > 0)
+			{
+				const double dfHopCost = static_cast<double>(i) * m_pcDataLoader->GetHopPenalty();
+				for (list<MATCH_ENTRY>::iterator it = listMatchEntryList.begin();
+					it != listMatchEntryList.end(); ++it)
+				{
+					it->dfCost += dfHopCost;
+				}
+			}
 			listAllEntryList.insert(listAllEntryList.end(),
 				listMatchEntryList.begin(), listMatchEntryList.end());
 			nBestStep = static_cast<sint16>(i);

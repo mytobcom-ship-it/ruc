@@ -51,6 +51,9 @@ def load_config():
         "web_port": int(web.get("port", "8088")),
         "road_buffer_m": int(web.get("road_buffer_m", "1000")),
         "poll_sec": int(web.get("poll_sec", "5")),
+        # 과금 구역이 LINE(선)일 때 "원시 GPS 가 구역 안"으로 볼 허용 거리(m).
+        #   POLY 는 폴리곤 포함 판정이라 이 값을 쓰지 않는다 (2026-08-22 최정우 추가)
+        "zone_line_buf_m": int(web.get("zone_line_buf_m", "20")),
     }
 
 
@@ -437,6 +440,189 @@ def _query_trip_points(conn, trip_id):
                 "match_reason": infer_match_reason(match_status, r["match_link_id"], intersect_len, accuracy_m),
             })
         return rows
+
+
+# base_roadlink.coords(jsonb [[lon,lat],...]) → PostGIS geometry.
+#   POLY 는 첫 점을 끝에 다시 붙여 닫힌 링으로 만든다(원본이 닫혀 있지 않음).
+_ZONE_GEOM_SQL = """
+    CASE b.geom_type
+      WHEN 'POLY' THEN ST_MakePolygon(ST_AddPoint(
+             ST_MakeLine(ARRAY(SELECT ST_SetSRID(ST_MakePoint((e->>0)::float8,(e->>1)::float8),4326)
+                               FROM jsonb_array_elements(b.coords) e)),
+             ST_SetSRID(ST_MakePoint((b.coords->0->>0)::float8,(b.coords->0->>1)::float8),4326)))
+      ELSE ST_MakeLine(ARRAY(SELECT ST_SetSRID(ST_MakePoint((e->>0)::float8,(e->>1)::float8),4326)
+                             FROM jsonb_array_elements(b.coords) e))
+    END
+"""
+
+
+def _query_trip_charges(conn, trip_id, line_buf_m):
+    """trip_id 의 과금 이력(prim_chargehand) + GPS 순번 범위
+
+    prim_chargehand 에는 GPS 순번 컬럼이 없어 prim_rawgps 와 조인해 역산한다.
+      G 순번 : LINE 구역은 M 과 동일 기준(매칭 링크가 구역 link_ids 소속)이라 M 범위와 항상 일치.
+               POLY 구역(주정차)만 형상 포함(ST_Contains)으로 판정하며 M 은 비어 있음.
+               2026-08-22 사용자 지시로 기하(버퍼) 기준에서 변경 — G·M 순번 불일치 해소
+      M 순번 : 매칭 링크(match_link_id)가 그 구역의 link_ids 에 속한 구간
+    같은 구역을 여러 번 지나면 gps_seq 연속 구간(run)으로 나눠, 구역별 등장 순서대로
+    해당 구역의 과금 이력(trip_seq 순)에 하나씩 대응시킨다.
+    주정차(POLY)는 link_ids 가 비어 있어 M 순번이 나오지 않는다. (2026-08-22 최정우 추가)
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            WITH zone AS (
+                SELECT b.road_id, b.geom_type, b.link_ids, """ + _ZONE_GEOM_SQL + """ AS geom
+                FROM ruc.base_roadlink b WHERE b.use_yn = 'Y'
+            ),
+            gps AS (
+                SELECT gps_seq, gps_lat, gps_lon, match_lat, match_lon, match_link_id, gps_dt
+                FROM ruc.prim_rawgps WHERE trip_id = %(tid)s
+            ),
+            -- G: LINE 구역은 M 과 같은 기준(매칭 링크가 구역 link_ids 에 속함), POLY 구역만 형상 포함
+            --   (2026-08-22 최정우 수정 — 사용자 지시로 G·M 순번을 일치시킴)
+            --   원래는 원시 좌표가 구역선 line_buf_m 이내인지로 G 를 잡았는데, 나란한 옆 도로를
+            --   달릴 때도 버퍼에 걸려 G 가 M 보다 훨씬 넓게 나왔다(실측: 옆 도로 주행 13점이
+            --   구간단속 구역선에서 6.7~18.2m). 매칭 좌표로 바꿔도 옆 링크가 10~12m 라 그대로였고,
+            --   버퍼를 2m 까지 줄여도 M 구간 36개 중 23개(약 64퍼센트)만 일치해 기하 기준으로는
+            --   순번을 맞출 수 없다는 것이 확인됐다. 주정차(POLY)는 link_ids 가 없어 형상 포함으로
+            --   판정하며, 이 경우 M 은 비고 G 만 표시된다.
+            g_hit AS (
+                SELECT z.road_id, p.gps_seq
+                FROM gps p JOIN zone z ON
+                     CASE WHEN z.geom_type = 'POLY'
+                          THEN ST_Contains(z.geom, ST_SetSRID(ST_MakePoint(
+                                   COALESCE(p.match_lon, p.gps_lon),
+                                   COALESCE(p.match_lat, p.gps_lat)), 4326))
+                          ELSE (z.link_ids IS NOT NULL
+                                AND p.match_link_id IN (SELECT jsonb_array_elements_text(z.link_ids)))
+                     END
+                WHERE COALESCE(p.match_lat, p.gps_lat) IS NOT NULL
+                  AND COALESCE(p.match_lon, p.gps_lon) IS NOT NULL
+            ),
+            g_run AS (
+                SELECT road_id, gps_seq,
+                       gps_seq - ROW_NUMBER() OVER (PARTITION BY road_id ORDER BY gps_seq) AS grp
+                FROM g_hit
+            ),
+            g_rng AS (
+                SELECT road_id, MIN(gps_seq) AS s, MAX(gps_seq) AS e,
+                       ROW_NUMBER() OVER (PARTITION BY road_id ORDER BY MIN(gps_seq)) AS rn
+                FROM g_run GROUP BY road_id, grp
+            ),
+            -- M: 매칭 링크가 구역 link_ids 에 속함
+            m_hit AS (
+                SELECT z.road_id, p.gps_seq
+                FROM gps p JOIN zone z
+                  ON z.link_ids IS NOT NULL
+                 AND p.match_link_id IN (SELECT jsonb_array_elements_text(z.link_ids))
+            ),
+            m_run AS (
+                SELECT road_id, gps_seq,
+                       gps_seq - ROW_NUMBER() OVER (PARTITION BY road_id ORDER BY gps_seq) AS grp
+                FROM m_hit
+            ),
+            m_rng AS (
+                SELECT road_id, MIN(gps_seq) AS s, MAX(gps_seq) AS e,
+                       ROW_NUMBER() OVER (PARTITION BY road_id ORDER BY MIN(gps_seq)) AS rn
+                FROM m_run GROUP BY road_id, grp
+            ),
+            ch AS (
+                SELECT c.*,
+                       ROW_NUMBER() OVER (PARTITION BY c.zone_id ORDER BY c.trip_seq) AS zone_rn
+                FROM ruc.prim_chargehand c WHERE c.trip_id = %(tid)s
+            ),
+            -- POLY(주정차) 구역의 G 범위는 기하 run 순번으로 짝지으면 어긋난다. 폴리곤을 스쳐
+            --   지나간 run 이 여러 개인데 실제 기록은 1건뿐일 수 있어, ROW_NUMBER 대응이 엉뚱한
+            --   run 을 붙였다(실측: 통과 구간 G57 이 주정차 기록으로 표시됨). 엔진이 남긴
+            --   occur_dt(=진입 시각, RawLogWorker.cpp: strOccurDt = dtParkEntryTime)와 stay_seconds 로
+--   체류 시각창 [occur_dt, occur_dt+stay_seconds] 를 복원해 그 안의 gps_seq
+            --   를 쓴다 — 기하로 역산하지 않으므로 어긋날 여지가 없다. (2026-08-22 최정우 추가)
+            t_rng AS (
+                SELECT ch.trip_seq, MIN(p.gps_seq) AS s, MAX(p.gps_seq) AS e
+                FROM ch
+                JOIN zone z ON z.road_id = ch.zone_id AND z.geom_type = 'POLY'
+                JOIN gps p ON p.gps_dt >= ch.occur_dt
+                    AND p.gps_dt <= to_char(
+                        to_timestamp(ch.occur_dt, 'YYYYMMDDHH24MISS')
+                        + (COALESCE(ch.stay_seconds, 0) || ' seconds')::interval,
+                        'YYYYMMDDHH24MISS')
+                GROUP BY ch.trip_seq
+            )
+            SELECT ch.trip_seq, ch.charge_type, ch.zone_id, ch.zone_name,
+                   ch.tollgate_id, ch.entry_tollgate_id, ch.exit_tollgate_id,
+                   ch.dist_m, ch.speed_kmh, ch.speed_limit_kmh, ch.stay_seconds,
+                   ch.occur_dt, ch.charge_yn,
+                   COALESCE(t_rng.s, g_rng.s) AS g_from,
+                   COALESCE(t_rng.e, g_rng.e) AS g_to,
+                   m_rng.s AS m_from, m_rng.e AS m_to
+            FROM ch
+            LEFT JOIN t_rng ON t_rng.trip_seq = ch.trip_seq
+            LEFT JOIN g_rng ON g_rng.road_id = ch.zone_id AND g_rng.rn = ch.zone_rn
+            LEFT JOIN m_rng ON m_rng.road_id = ch.zone_id AND m_rng.rn = ch.zone_rn
+            -- G 순번(주행 순서) 오름차순. 구역 형상이 없어 G 를 못 구한 행은 뒤로 보내고
+            --   그 안에서는 trip_seq 순 (2026-08-22 최정우 수정)
+            ORDER BY COALESCE(t_rng.s, g_rng.s) ASC NULLS LAST, ch.trip_seq
+            """,
+            {"tid": trip_id, "buf": line_buf_m},
+        )
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+
+def _query_zones(conn):
+    """과금·비과금 구역(base_roadlink)과 그 게이트(base_tollgate) 전량
+
+    뷰어가 구역 좌표·이름·유형을 소스에 하드코딩하고 있어 DB 와 어긋났다(2026-08-22 확인 —
+    RL-Z00002 이름 불일치, RL-Z00009 를 개방형으로 표시, 강릉 구역 7개 누락).
+    구역 14개·좌표 477점·10kB 로 작고 거의 바뀌지 않아 페이지 로드 시 1회만 읽으면 된다.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT r.road_id, r.road_kind, r.road_nm, r.geom_type, r.coords,
+                   r.speed_limit_kmh, r.link_ids,
+                   COALESCE((
+                     SELECT jsonb_agg(jsonb_build_object(
+                              'tollgate_id', t.tollgate_id, 'gate_div', t.gate_div,
+                              'tollgate_nm', t.tollgate_nm,
+                              'lon', t.lon, 'lat', t.lat, 'link_id', t.link_id)
+                            ORDER BY t.gate_div, t.tollgate_id)
+                     FROM ruc.base_tollgate t
+                     WHERE t.road_id = r.road_id AND t.use_yn = 'Y'
+                   ), '[]'::jsonb) AS gates
+            FROM ruc.base_roadlink r
+            WHERE r.use_yn = 'Y'
+            ORDER BY r.road_kind, r.road_id
+            """
+        )
+        cols = [d[0] for d in cur.description]
+        rows = []
+        for r in cur.fetchall():
+            d = dict(zip(cols, r))
+            # numeric → float (JSON 직렬화)
+            if d.get("speed_limit_kmh") is not None:
+                d["speed_limit_kmh"] = float(d["speed_limit_kmh"])
+            for g in (d.get("gates") or []):
+                for k in ("lon", "lat"):
+                    if g.get(k) is not None:
+                        g[k] = float(g[k])
+            rows.append(d)
+        return rows
+
+
+@app.route("/api/zones")
+def api_zones():
+    with get_conn_points() as conn:
+        return jsonify(_query_zones(conn))
+
+
+@app.route("/api/trip/<path:trip_id>/charges")
+def api_trip_charges(trip_id):
+    buf = load_config()["zone_line_buf_m"]
+    with get_conn_points() as conn:
+        rows = _query_trip_charges(conn, trip_id, buf)
+    return jsonify(rows)
 
 
 @app.route("/api/trip/<path:trip_id>/points")

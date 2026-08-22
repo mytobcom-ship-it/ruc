@@ -71,6 +71,7 @@ typedef struct sConfig
 	int								nRadiusMax;							// radius_max
 	int								nRadiusSkip;						// radius_skip
 	int								nMaxStep;							// maxstep
+	double							dfHopPenalty;						// [mapmatch] hoppenalty — depth 1단계당 가산 비용(m), 0=비활성 (2026-08-22 최정우 추가)
 	int								nDistance;							// distance
 	int								nMatchTimeout;						// timeout
 
@@ -85,6 +86,8 @@ typedef struct sConfig
 	int								nGateReloadSec;						// [charge] gate_reload (단위: sec, 0=재조회 없음) (2026-08-12 최정우 추가)
 	int								nParkBuf;							// [charge] park_buf (단위: m) — 구역판정 버퍼 상한 (2026-08-13 최정우 추가)
 	int								nParkExitCnt;						// [charge] park_exitcnt — 구역 이탈 확정 연속 GPS 건수(디바운스) (2026-08-13 최정우 추가)
+	int								nParkSpeedMax;						// [charge] park_speedmax (단위: km/h) — 이 속도 이하에서만 주정차로 판정 (2026-08-22 최정우 추가)
+	int								nParkEntryCnt;						// [charge] park_entrycnt — 세션 개시에 필요한 연속 충족 GPS 건수 (2026-08-22 최정우 추가)
 	int								nParkRegraceSec;					// [charge] park_regrace (단위: sec) — 재진입 유예시간 (2026-08-14 최정우 추가)
 	int								nParkTtlSec;						// [charge] park_ttl (단위: sec) — 마지막 신뢰(RAW_VLD=true) 확인 후 강제 마감까지의 시간 (2026-08-19 최정우 추가)
 	int								nExemptRegraceSec;					// [charge] exempt_regrace (단위: sec) — 재진입 유예시간 (2026-08-14 최정우 추가)

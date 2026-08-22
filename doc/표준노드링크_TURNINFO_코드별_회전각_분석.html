@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>표준노드·링크 TURNINFO 코드별 회전각 분석</title>
+  <style>
+    :root {
+      --navy: #142b45;
+      --blue: #1769aa;
+      --blue-soft: #eaf4fc;
+      --green: #18794e;
+      --green-soft: #eaf7f0;
+      --amber: #9a6700;
+      --amber-soft: #fff7d6;
+      --red: #b42318;
+      --red-soft: #fff0ee;
+      --ink: #20262e;
+      --muted: #5d6875;
+      --line: #d9e0e7;
+      --surface: #ffffff;
+      --page: #f4f7fa;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--page);
+      font-family: "Pretendard", "Noto Sans KR", "Malgun Gothic", sans-serif;
+      line-height: 1.65;
+    }
+    .hero {
+      padding: 54px 24px 46px;
+      color: #fff;
+      background: linear-gradient(135deg, #10253c 0%, #174f7c 62%, #178070 100%);
+    }
+    .hero-inner, main { max-width: 1240px; margin: 0 auto; }
+    h1 { margin: 0 0 12px; font-size: clamp(28px, 4vw, 44px); line-height: 1.25; }
+    .subtitle { margin: 0; max-width: 880px; color: #d9eafa; font-size: 17px; }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
+    .meta span { padding: 6px 11px; border: 1px solid #ffffff42; border-radius: 999px; background: #ffffff14; font-size: 13px; }
+    main { padding: 30px 22px 70px; }
+    nav, section, .notice {
+      margin-bottom: 22px;
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--surface);
+      box-shadow: 0 6px 20px #18334d0a;
+    }
+    nav { display: flex; flex-wrap: wrap; gap: 8px; }
+    nav a { padding: 7px 11px; border-radius: 8px; color: var(--blue); background: var(--blue-soft); text-decoration: none; font-weight: 700; font-size: 14px; }
+    h2 { margin: 0 0 16px; color: var(--navy); font-size: 25px; }
+    h3 { margin: 22px 0 10px; color: var(--navy); font-size: 18px; }
+    p { margin: 8px 0; }
+    code { padding: 2px 5px; border-radius: 5px; background: #eef2f6; color: #203e5d; font-family: Consolas, monospace; }
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .metric { padding: 17px; border: 1px solid var(--line); border-radius: 12px; background: #fbfdff; }
+    .metric strong { display: block; color: var(--navy); font-size: 27px; line-height: 1.2; }
+    .metric span { color: var(--muted); font-size: 13px; }
+    .notice { border-left: 5px solid var(--amber); background: var(--amber-soft); }
+    .notice strong { color: #704d00; }
+    .ok { border-left-color: var(--green); background: var(--green-soft); }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+    table { width: 100%; border-collapse: collapse; background: #fff; font-size: 14px; }
+    th, td { padding: 11px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { position: sticky; top: 0; background: #edf3f8; color: var(--navy); white-space: nowrap; }
+    tr:last-child td { border-bottom: 0; }
+    tbody tr:hover { background: #f8fbfd; }
+    .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .code { color: var(--blue); font-family: Consolas, monospace; font-size: 16px; font-weight: 800; }
+    .allow { color: var(--green); font-weight: 700; }
+    .restrict { color: var(--red); font-weight: 700; }
+    .small { color: var(--muted); font-size: 12px; }
+    .tag { display: inline-block; margin: 1px 3px 1px 0; padding: 2px 7px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+    .left { color: #6e40aa; background: #f0e9fa; }
+    .right { color: #b54708; background: #fff0e3; }
+    .straight { color: #1261a0; background: #e5f2fc; }
+    .uturn { color: #a31545; background: #fde8ef; }
+    .bar { min-width: 170px; height: 9px; margin-top: 7px; overflow: hidden; border-radius: 99px; background: #e7edf2; }
+    .bar > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #2382c1, #20a17b); }
+    .formula { padding: 14px 16px; border-radius: 9px; background: #10253c; color: #e7f3ff; font-family: Consolas, monospace; white-space: pre-wrap; }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    ul, ol { margin: 8px 0; padding-left: 22px; }
+    footer { max-width: 1240px; margin: 0 auto; padding: 0 22px 40px; color: var(--muted); font-size: 13px; }
+    footer a { color: var(--blue); }
+    @media (max-width: 880px) {
+      .grid, .two-col { grid-template-columns: 1fr 1fr; }
+      th, td { padding: 9px; }
+    }
+    @media (max-width: 560px) {
+      .grid, .two-col { grid-template-columns: 1fr; }
+      .hero { padding-top: 36px; }
+      main { padding-left: 12px; padding-right: 12px; }
+      nav, section, .notice { padding: 17px; border-radius: 10px; }
+    }
+    @media print {
+      body { background: #fff; }
+      .hero { padding: 25px; color: #000; background: #fff; border-bottom: 2px solid #000; }
+      .subtitle { color: #333; }
+      nav { display: none; }
+      section, .notice { box-shadow: none; break-inside: avoid; }
+      th { position: static; }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="hero-inner">
+      <h1>TURNINFO 코드별 회전각 분석</h1>
+      <p class="subtitle">지능형교통체계 표준노드·링크의 <b>TURN_TYPE</b>·<b>TURN_OPER</b> 공식 정의와
+      <code>CreateData/data</code> 전국 원본 형상에서 계산한 회전각 통계를 함께 정리한다.</p>
+      <div class="meta">
+        <span>작성일 2026-08-22</span><span>전국 TURNINFO 44,218건</span><span>EPSG:5186</span><span>신뢰 표본 43,399건</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <nav aria-label="문서 목차">
+      <a href="#summary">요약</a><a href="#turn-type">TURN_TYPE</a><a href="#turn-oper">TURN_OPER</a>
+      <a href="#matrix">코드 조합</a><a href="#angle">각도 기준</a><a href="#quality">품질·한계</a><a href="#sources">근거</a>
+    </nav>
+
+    <div class="notice">
+      <strong>해석 주의:</strong> <code>TURN_TYPE</code>은 회전각 코드가 아니며,
+      <code>TURN_OPER</code>는 허용/금지 플래그가 아니다. 각도는 전국 링크 형상에서 계산한
+      관측값이며 공식 코드 정의를 대체하지 않는다.
+    </div>
+
+    <section id="summary">
+      <h2>분석 요약</h2>
+      <div class="grid">
+        <div class="metric"><strong>44,218</strong><span>TURNINFO 전체</span></div>
+        <div class="metric"><strong>44,149</strong><span>회전각 계산 성공 (99.84%)</span></div>
+        <div class="metric"><strong>43,399</strong><span>30m 이내 신뢰 표본</span></div>
+        <div class="metric"><strong>13</strong><span>시간제 TURN_OPER=1</span></div>
+      </div>
+      <p class="small">신뢰 표본은 회전 노드와 진입·진출 링크 끝점의 거리가 모두 30m 이내인 레코드이다.</p>
+    </section>
+
+    <section id="turn-type">
+      <h2>TURN_TYPE별 코드·회전각·회전 내용</h2>
+      <p><code>|&theta;| P05 / P50 / P95</code>는 신뢰 표본의 절대 회전각 분위수이다.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>코드</th><th>공식 회전 내용</th><th>운행 해석</th><th class="num">전체</th><th class="num">신뢰</th>
+            <th>관측 절대각<br><span class="small">P05 / P50 / P95</span></th><th>주요 형상</th><th>분석 설명</th>
+          </tr></thead>
+          <tbody>
+            <tr>
+              <td class="code">001</td><td class="allow">비보호회전</td><td>조건부 회전 가능</td><td class="num">14</td><td class="num">13</td>
+              <td>77.4° / 91.8° / 158.3°</td><td><span class="tag left">좌회전 84.6%</span></td>
+              <td>주로 비보 좌회전. U턴형 2건이 있으며 표본이 작아 각도 일반화는 불가.</td>
+            </tr>
+            <tr>
+              <td class="code">002</td><td class="allow">버스만회전</td><td>버스만 가능, 기타 차량 제한</td><td class="num">4</td><td class="num">4</td>
+              <td>78.6° / 95.5° / 106.3°</td><td><span class="tag left">좌회전 100%</span></td>
+              <td>현재 원본 4건은 모두 버스 전용 좌회전 형상. 차종 속성을 보존해야 함.</td>
+            </tr>
+            <tr>
+              <td class="code">003</td><td class="restrict">회전금지</td><td><code>ST_LINK→ED_LINK</code> 쌍 제한</td><td class="num">5</td><td class="num">4</td>
+              <td>91.2° / 137.4° / 147.8°</td><td><span class="tag left">좌 3건</span><span class="tag right">우 1건</span></td>
+              <td>특정 방향이 아닌 명시된 링크 쌍 자체의 회전금지.</td>
+            </tr>
+            <tr>
+              <td class="code">011</td><td class="allow">U-TURN</td><td>U턴 가능 규칙</td><td class="num">27,825</td><td class="num">27,401</td>
+              <td>159.8° / 180.0° / 180.0°</td><td><span class="tag uturn">U턴형 99.5%</span><div class="bar"><span style="width:99.5%"></span></div></td>
+              <td>전국 형상에서 U턴이 명확. <code>011=직진</code>으로 해석하면 안 됨.</td>
+            </tr>
+            <tr>
+              <td class="code">012</td><td class="allow">P-TURN</td><td>P턴 가능 규칙</td><td class="num">3</td><td class="num">2</td>
+              <td>174.4° / 177.0° / 179.7°</td><td><span class="tag uturn">U턴형 100%</span></td>
+              <td>접선 각도만으로 U턴과 P턴을 구분할 수 없음. 원본 코드 유지 필수.</td>
+            </tr>
+            <tr>
+              <td class="code">101</td><td class="restrict">좌회전금지</td><td>해당 좌회전 쌍 제한</td><td class="num">13,077</td><td class="num">12,771</td>
+              <td>62.0° / 91.0° / 147.6°</td><td><span class="tag left">좌회전 96.3%</span><div class="bar"><span style="width:96.3%"></span></div></td>
+              <td>대부분 좌회전 형상. “좌회전”이 아니라 <b>좌회전금지</b>.</td>
+            </tr>
+            <tr>
+              <td class="code">102</td><td class="restrict">직진금지</td><td>해당 직진 쌍 제한</td><td class="num">1,008</td><td class="num">943</td>
+              <td>0.0° / 3.2° / 30.4°</td><td><span class="tag straight">직진 94.4%</span><div class="bar"><span style="width:94.4%"></span></div></td>
+              <td>대부분 직진 형상. <code>102=우회전</code>로 해석하면 안 됨.</td>
+            </tr>
+            <tr>
+              <td class="code">103</td><td class="restrict">우회전금지</td><td>해당 우회전 쌍 제한</td><td class="num">2,282</td><td class="num">2,261</td>
+              <td>59.7° / 94.4° / 145.4°</td><td><span class="tag right">우회전 97.4%</span><div class="bar"><span style="width:97.4%"></span></div></td>
+              <td>대부분 우회전 형상. <code>103=U턴</code>으로 해석하면 안 됨.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="turn-oper">
+      <h2>TURN_OPER별 정의·건수</h2>
+      <div class="two-col">
+        <div class="metric">
+          <strong><span class="code">0</span> 전일제</strong>
+          <p><code>TURN_TYPE</code>이 표현하는 규칙이 전일 운영됨.</p>
+          <p class="num"><b>44,205건</b> (99.97%)</p>
+        </div>
+        <div class="metric">
+          <strong><span class="code">1</span> 시간제</strong>
+          <p><code>TURN_TYPE</code>이 표현하는 규칙이 특정 시간대에 운영됨.</p>
+          <p class="num"><b>13건</b> (0.03%)</p>
+        </div>
+      </div>
+      <div class="notice">
+        <strong>잘못된 해석:</strong> <code>0=회전 허용</code>, <code>1=회전 제한/금지</code>가 아니다.
+        허용·제한 종류는 <code>TURN_TYPE</code>, 운영 시간 방식은 <code>TURN_OPER</code>가 나타낸다.
+      </div>
+    </section>
+
+    <section id="matrix">
+      <h2>TURN_TYPE × TURN_OPER 전국 건수</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>TURN_TYPE</th><th>회전 내용</th><th class="num">0 전일제</th><th class="num">1 시간제</th><th class="num">합계</th></tr></thead>
+          <tbody>
+            <tr><td class="code">001</td><td>비보호회전</td><td class="num">14</td><td class="num">0</td><td class="num">14</td></tr>
+            <tr><td class="code">002</td><td>버스만회전</td><td class="num">1</td><td class="num">3</td><td class="num">4</td></tr>
+            <tr><td class="code">003</td><td>회전금지</td><td class="num">5</td><td class="num">0</td><td class="num">5</td></tr>
+            <tr><td class="code">011</td><td>U-TURN</td><td class="num">27,822</td><td class="num">3</td><td class="num">27,825</td></tr>
+            <tr><td class="code">012</td><td>P-TURN</td><td class="num">3</td><td class="num">0</td><td class="num">3</td></tr>
+            <tr><td class="code">101</td><td>좌회전금지</td><td class="num">13,073</td><td class="num">4</td><td class="num">13,077</td></tr>
+            <tr><td class="code">102</td><td>직진금지</td><td class="num">1,007</td><td class="num">1</td><td class="num">1,008</td></tr>
+            <tr><td class="code">103</td><td>우회전금지</td><td class="num">2,280</td><td class="num">2</td><td class="num">2,282</td></tr>
+            <tr><td colspan="2"><b>합계</b></td><td class="num"><b>44,205</b></td><td class="num"><b>13</b></td><td class="num"><b>44,218</b></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="small">현재 `TURNINFO.dbf`의 `REMARK`는 모두 비어 있어 시간제 13건의 실제 운영 시간은 이 파일만으로 복원할 수 없다.</p>
+    </section>
+
+    <section id="angle">
+      <h2>회전각 계산·표기 기준</h2>
+      <div class="two-col">
+        <div>
+          <h3>계산</h3>
+          <ol>
+            <li><code>ST_LINK</code>에서 <code>NODE_ID</code>로 향하는 진입 접선을 구한다.</li>
+            <li><code>NODE_ID</code>에서 <code>ED_LINK</code>로 향하는 진출 접선을 구한다.</li>
+            <li><code>atan2(cross, dot)</code>로 <code>-180°~+180°</code> signed angle을 계산한다.</li>
+          </ol>
+          <p>EPSG:5186에서 <b>+각도=좌회전</b>, <b>-각도=우회전</b>으로 표기한다.</p>
+        </div>
+        <div>
+          <h3>형상 분류용 임계값</h3>
+          <div class="formula">|θ| ≤ 30°        → STRAIGHT
+|θ| ≥ 150°       → UTURN_LIKE
+30° &lt; θ &lt; 150°   → LEFT
+-150° &lt; θ &lt; -30° → RIGHT</div>
+          <p class="small">현재 <code>BinaryMaker.cpp</code>의 기준과 같은 분석용 값이며 공식 TURN_TYPE 규격은 아니다.</p>
+        </div>
+      </div>
+      <div class="notice ok">
+        <strong>권장:</strong> <code>official_turn_type</code>, <code>turn_oper</code>, <code>geometry_turn</code>,
+        <code>turn_angle_deg</code>를 분리한다. `011`을 `11`로 변환하지 말고 3자리 원본 코드를 유지한다.
+      </div>
+    </section>
+
+    <section id="quality">
+      <h2>데이터 품질·해석 한계</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>항목</th><th class="num">건수/값</th><th>영향</th></tr></thead>
+          <tbody>
+            <tr><td>각도 계산 성공</td><td class="num">44,149건</td><td>전체의 99.84%</td></tr>
+            <tr><td>ST_LINK 원본 누락</td><td class="num">48건</td><td>회전각 계산 불가</td></tr>
+            <tr><td>ED_LINK 원본 누락</td><td class="num">21건</td><td>회전각 계산 불가</td></tr>
+            <tr><td>노드–링크 끝점 30m 초과</td><td class="num">750건</td><td>신뢰 통계에서 제외</td></tr>
+            <tr><td>끝점 거리 P50 / P95 / P99</td><td class="num">0.0m / 19.2m / 28.6m</td><td>일부 분리 링크의 노드 오프셋 존재</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <ul>
+        <li><code>001</code>, <code>002</code>, <code>003</code>, <code>012</code>는 표본이 3~14건으로 매우 작다.</li>
+        <li>복잡교차로, 짧은 접근 링크, 링크 분할과 원본 구축 오차로 예상 형상과 다른 각도가 발생할 수 있다.</li>
+        <li>회전각은 방향 표시를 보조할 뿐, 허용·금지·차종·시간제 의미를 대체할 수 없다.</li>
+      </ul>
+    </section>
+
+    <section id="sources">
+      <h2>근거 문서·원본</h2>
+      <ul>
+        <li><a href="지능형교통체계ITS+표준+노드링크+구축+및+운영지침.PDF">지능형교통체계 ITS 표준 노드링크 구축 및 운영지침</a> — TURNINFO 필드 PDF 9쪽, 코드표 PDF 24쪽</li>
+        <li><a href="표준노드링크_TURN_OPER_TURN_TYPE_해석.md">TURN_OPER·TURN_TYPE 규격 해석</a></li>
+        <li><a href="표준노드링크_TURNINFO_전국데이터_회전각_분석.md">TURNINFO 전국 데이터 회전각 분석</a></li>
+        <li>분석 원본: <code>CreateData/data/TURNINFO.dbf</code>, <code>MOCT_LINK.shp/.dbf</code>, <code>MOCT_NODE.shp/.dbf</code></li>
+      </ul>
+      <p class="small">TURNINFO.dbf SHA-256: f4520c99b8bb1abbc1243a0a7de96bc20dff4f4fe7bdf1262a4456f61979eb38</p>
+    </section>
+  </main>
+
+  <footer>표준노드·링크 TURNINFO 코드별 분석 문서 · 전국 원본 기준 2026-08-22</footer>
+</body>
+</html>

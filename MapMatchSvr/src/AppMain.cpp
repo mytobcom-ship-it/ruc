@@ -193,6 +193,14 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 		pstConfig->nParkBuf = CFG_DEF_PARK_BUF;
 	// [charge] park_exitcnt — 구역 이탈 확정 연속 GPS 건수(디바운스) (2026-08-13 최정우 추가)
 	cIniReader.GetProfileInt("charge", "park_exitcnt", CFG_DEF_PARK_EXITCNT, pstConfig->nParkExitCnt);
+
+	// [charge] park_speedmax (단위: km/h) — 이 속도 이하일 때만 주정차 판정. 실측(21트립) 결과
+	//   정차 구간 최대속도 0~5km/h, 통과 구간 12~40km/h 로 완전히 분리됨 (2026-08-22 최정우 추가)
+	cIniReader.GetProfileInt("charge", "park_speedmax", CFG_DEF_PARK_SPEEDMAX, pstConfig->nParkSpeedMax);
+
+	// [charge] park_entrycnt — 조건을 연속으로 이만큼 충족해야 세션 개시. 1~2점(0~3초)짜리는
+	//   체류시간 산출이 불가능하고 GPS 튐과 구분되지 않아 제외 (2026-08-22 최정우 추가)
+	cIniReader.GetProfileInt("charge", "park_entrycnt", CFG_DEF_PARK_ENTRYCNT, pstConfig->nParkEntryCnt);
 	if (pstConfig->nParkExitCnt < 1)
 		pstConfig->nParkExitCnt = CFG_DEF_PARK_EXITCNT;
 	// [charge] park_regrace (단위: sec) — 재진입 유예시간 (2026-08-14 최정우 추가)
@@ -341,6 +349,12 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 
 	// [mapmatch] maxstep (필수 >0) (2026-07-11 최정우 주석 추가)
 	cIniReader.GetProfileInt("mapmatch", "maxstep", 0, pstConfig->nMaxStep);
+
+	// [mapmatch] hoppenalty — 후보가 직전 링크에서 depth(hop) 를 건너뛴 만큼 가산할 비용(m).
+	//   0=비활성. 값이 클수록 "가깝지만 멀리 돌아가야 하는" 후보가 배제된다 (2026-08-22 최정우 추가)
+	cIniReader.GetProfileDouble("mapmatch", "hoppenalty", MM_HOP_PENALTY, pstConfig->dfHopPenalty);
+	if (pstConfig->dfHopPenalty < 0.0)
+		pstConfig->dfHopPenalty = 0.0;
 	if (pstConfig->nMaxStep <= 0)
 	{
 		perror("map match is max step is invalid!\n");

@@ -29,10 +29,16 @@ _PYDEPS = _SCRIPT_DIR / ".pydeps"
 if _PYDEPS.is_dir():
     sys.path.insert(0, str(_PYDEPS))
 
-LINK_INFO_FMT = "<Q I H I B B d B B B B 46s Q I I B Q I I B"
+# link.psf LINK_INFO_DATA 레이아웃 (CreateData/src/DataFormat.h 와 동일해야 함)
+#   2026-08-22 갱신 — nRestVeh(B)/nRoadUse(B) 를 nLanes 뒤에 추가하고,
+#   2026-08-19 추가된 qwOppositeLinkID(Q) 를 반영했다. 122 bytes.
+LINK_INFO_FMT = "<Q I H I B B d B B B B B B 46s Q I I B Q I I B Q"
+# TURN_INFO_DISK 21 bytes — qwInLinkID, qwOutLinkID, nTurnAng, nTurnType, nTurnOper
+TURN_INFO_FMT = "<Q Q h H B"
 LINK_SGMT_FMT = "<I I I H H Q H"
 LINK_INFO_SIZE = struct.calcsize(LINK_INFO_FMT)
 LINK_SGMT_SIZE = struct.calcsize(LINK_SGMT_FMT)
+TURN_INFO_SIZE = struct.calcsize(TURN_INFO_FMT)
 HEAD_FMT = "<15I"
 HEAD_SIZE = struct.calcsize(HEAD_FMT)
 SCALE = 360000.0
@@ -133,8 +139,9 @@ def iter_rows(link_blob: bytes, segs: list[tuple]):
         (
             qw_link_id, dw_sgmt_off, w_sgmt_cnt, _dw_turn_off, _n_turn_cnt,
             n_max_speed, df_len, n_road_rank, n_connect, n_road_type, n_lanes,
+            _n_rest_veh, _n_road_use,
             sz_road_name, qw_st_node, dw_st_x, dw_st_y, _n_st_type,
-            qw_ed_node, dw_ed_x, dw_ed_y, _n_ed_type,
+            qw_ed_node, dw_ed_x, dw_ed_y, _n_ed_type, _qw_opposite,
         ) = row
 
         st_lon = round(dw_st_x / SCALE, 6)

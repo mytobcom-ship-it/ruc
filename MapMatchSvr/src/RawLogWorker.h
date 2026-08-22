@@ -88,7 +88,20 @@ typedef struct sVehicleTripSession
 	double							dfParkLastX;							// 직전 raw GPS 경도 — 누적거리 계산·to_lon(종료 시점 위치)
 	double							dfParkLastY;							// 직전 raw GPS 위도 — to_lat
 	int								nParkExitTicks;							// 구역 이탈/재가속 연속 감지 횟수 — park_exitcnt 이상일 때만 이탈 확정(디바운스)
+	// 세션 개시 전 "조건 충족" 연속 카운터 — park_entrycnt 이상이어야 세션을 연다. 1~2점짜리
+	//   구간은 체류시간을 낼 수 없고 GPS 튐과 구분이 안 돼 제외한다 (2026-08-22 최정우 추가)
+	int								nParkEntryTicks;						// 연속 충족 횟수
+	char							szParkEntryCandRoadId[20+1];			// 후보 구역 road_id (바뀌면 카운터 초기화)
+	time_t							dtParkEntryCandTime;					// 후보 최초 충족 시각 — 세션 개시 시 이 시각을 진입 시각으로 씀
+	double							dfParkEntryCandX;						// 후보 최초 충족 좌표 — from_lon
+	double							dfParkEntryCandY;						// from_lat
 	time_t							dtParkExitCandidateTime;				// 디바운스 통과 후 "무존" 상태가 처음 감지된 시각 — park_regrace 초 이내
+	// 마지막으로 "정차 조건(구역 내 + 저속)"을 만족한 시점·좌표 — 마감 시 이 지점까지만 체류로
+	//   인정한다. 디바운스·유예 대기 중 차량이 이미 가속해 멀어진 구간을 위반에 포함하지 않기 위함
+	//   (2026-08-22 최정우 추가)
+	time_t							dtParkLastInZoneTime;
+	double							dfParkLastInZoneX;
+	double							dfParkLastInZoneY;
 																				//   원래 구역으로 복귀하면 취소, 초과하면 확정 마감(재진입 유예, 2026-08-14 최정우 추가)
 	// 마지막으로 신뢰 가능했던(raw_vld=true) 구역 내 확인 시각·좌표 — 마감을 트리거한 행 자체가
 	//   raw_vld=false(트립종료 강제마감)이면 그 시각까지 구역 안이었다는 근거가 없으므로, 체류시간·
@@ -126,6 +139,8 @@ typedef struct sVehicleTripSession
 	double							dfNodeStepEntryX;						// 진입 시점 매칭 위치 경도 — from_lon
 	double							dfNodeStepEntryY;						// 진입 시점 매칭 위치 위도 — from_lat
 	double							dfNodeStepAccumDistM;					// 진입 이후 매칭 위치 누적 이동거리(m) — dist_m 산출용
+	uint64							qwNodeStepLastLinkID;					// 구역 안에서 마지막으로 매칭된 링크 ID — 이탈 시 그 링크
+																	//   종료 노드까지 거리를 보정하는 데 쓴다 (2026-08-22 최정우 추가)
 	double							dfNodeStepLastX;						// 직전 매칭 위치 경도 — 누적거리 계산·to_lon
 	double							dfNodeStepLastY;						// 직전 매칭 위치 위도 — to_lat
 
@@ -183,7 +198,14 @@ typedef struct sVehicleTripSession
 		dfParkLastX(0.0),										// (2026-08-13 최정우 추가)
 		dfParkLastY(0.0),										// (2026-08-13 최정우 추가)
 		nParkExitTicks(0),										// (2026-08-13 최정우 추가)
+		nParkEntryTicks(0),										// (2026-08-22 최정우 추가)
+		dtParkEntryCandTime(0),									// (2026-08-22 최정우 추가)
+		dfParkEntryCandX(0.0),									// (2026-08-22 최정우 추가)
+		dfParkEntryCandY(0.0),									// (2026-08-22 최정우 추가)
 		dtParkExitCandidateTime(0),								// (2026-08-14 최정우 추가)
+		dtParkLastInZoneTime(0),								// (2026-08-22 최정우 추가)
+		dfParkLastInZoneX(0.0),									// (2026-08-22 최정우 추가)
+		dfParkLastInZoneY(0.0),									// (2026-08-22 최정우 추가)
 		dtParkLastConfirmedTime(0),								// (2026-08-19 최정우 추가)
 		dfParkLastConfirmedX(0.0),								// (2026-08-19 최정우 추가)
 		dfParkLastConfirmedY(0.0),								// (2026-08-19 최정우 추가)
@@ -200,6 +222,7 @@ typedef struct sVehicleTripSession
 		dfNodeStepEntryX(0.0),									// (2026-08-14 최정우 추가)
 		dfNodeStepEntryY(0.0),									// (2026-08-14 최정우 추가)
 		dfNodeStepAccumDistM(0.0),								// (2026-08-14 최정우 추가)
+		qwNodeStepLastLinkID(0),								// (2026-08-22 최정우 추가)
 		dfNodeStepLastX(0.0),									// (2026-08-14 최정우 추가)
 		dfNodeStepLastY(0.0),									// (2026-08-14 최정우 추가)
 		bHasPendingCommit(false),								// (2026-08-21 최정우 추가)
@@ -219,6 +242,7 @@ typedef struct sVehicleTripSession
 		szSpeedZoneRoadId[0] = '\0';							// (2026-08-12 최정우 추가)
 		szSpeedEntryTollgateId[0] = '\0';						// (2026-08-20 최정우 추가)
 		szParkingZoneRoadId[0] = '\0';						// (2026-08-13 최정우 추가)
+		szParkEntryCandRoadId[0] = '\0';					// (2026-08-22 최정우 추가)
 		szExemptZoneRoadId[0] = '\0';							// (2026-08-14 최정우 부활)
 		szNodeStepRoadId[0] = '\0';							// (2026-08-14 최정우 추가)
 		memset(reinterpret_cast<void *>(&stPendingRawLogInfo), 0, RAW_LOG_INFO_SIZE);		// (2026-08-21 최정우 추가)
@@ -330,6 +354,8 @@ typedef struct sRawLogWorkerConfig
 	int								nReverseConfirm;					// config reverse_confirm — 연속 역행 확정 포인트 수 (2026-07-21 최정우 추가)
 	int								nParkBuf;							// config park_buf — 구역판정 버퍼 상한(m) (2026-08-13 최정우 추가)
 	int								nParkExitCnt;						// config park_exitcnt — 구역 이탈 확정 연속 GPS 건수(디바운스) (2026-08-13 최정우 추가)
+	int								nParkSpeedMax;						// config park_speedmax — 주정차 판정 속도 상한(km/h) (2026-08-22 최정우 추가)
+	int								nParkEntryCnt;						// config park_entrycnt — 세션 개시 연속 GPS 건수 (2026-08-22 최정우 추가)
 	int								nParkRegraceSec;					// config park_regrace — 재진입 유예시간(초) (2026-08-14 최정우 추가)
 	int								nParkTtlSec;						// config park_ttl — 마지막 신뢰 확인 후 강제 마감까지의 시간(초) (2026-08-19 최정우 추가)
 	int								nExemptRegraceSec;					// config exempt_regrace — 재진입 유예시간(초) (2026-08-14 최정우 추가)
@@ -395,8 +421,11 @@ private:
 	//   이면 park_regrace 초 동안 즉시 확정하지 않고 대기 — 그 안에 같은 구역으로 복귀하면 병합,
 	//   초과하면 확정 마감. 확정 마감 시점에 이미 다른 구역 위라면 유예 없이 곧바로 그 구역으로
 	//   새 세션 시작(경계 전환 병합, BeginParkingZoneSession 재사용)
+	//   2026-08-22 확장 — 규칙 2(매칭 좌표도 폴리곤 내)·규칙 4(매칭 좌표가 폴리곤 밖이면 즉시 해제)를
+	//   위해 매칭 결과를 함께 받는다. bMatchTrusted=false 면 매칭 좌표를 보지 않고 원시 좌표만으로 판정.
 	void ProcessParkingCharge(int nThreadId, const sRawLogInfo& stRawLogInfo,
-		VEHICLE_TRIP_SESSION *pstSession, vector<CHARGE_INSERT_ROW> *pvtChargeInserts);
+		VEHICLE_TRIP_SESSION *pstSession, vector<CHARGE_INSERT_ROW> *pvtChargeInserts,
+		bool bMatchTrusted = false, double dfMatchX = 0.0, double dfMatchY = 0.0);
 	// TTL 만료로 세션이 지워지기 직전, 아직 열려있는 주정차 세션이 체류 임계 이상이면 위반 1건
 	// 적재 — trip END를 놓쳤든 단말이 전송을 멈췄든 서버는 원인을 구분 못하므로 "계속 정차 중"으로
 	// 간주(사용자 지시, 2026-08-13 추가)

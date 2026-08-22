@@ -55,6 +55,8 @@
 #define CFG_DEF_GATE_RELOAD			0									// [charge]	gate_reload (단위: sec, 0=재조회 없음) (2026-08-12 최정우 추가)
 #define CFG_DEF_PARK_BUF			15									// [charge]	park_buf (단위: m) — 구역판정 버퍼 상한(ACCURACY_M 캡) (2026-08-13 최정우 추가)
 #define CFG_DEF_PARK_EXITCNT		3									// [charge]	park_exitcnt — 구역 이탈 확정 연속 GPS 건수(디바운스) (2026-08-13 최정우 추가)
+#define CFG_DEF_PARK_SPEEDMAX		0									// [charge]	park_speedmax (단위: km/h) — 주정차 판정 속도 상한, 0=비활성 (2026-08-22 최정우 추가)
+#define CFG_DEF_PARK_ENTRYCNT		3									// [charge]	park_entrycnt — 주정차 세션 개시 연속 GPS 건수 (2026-08-22 최정우 추가)
 #define CFG_DEF_PARK_REGRACE		60									// [charge]	park_regrace (단위: sec) — 재진입 유예시간 (2026-08-14 최정우 추가)
 #define CFG_DEF_PARK_TTL			600									// [charge]	park_ttl (단위: sec) — 마지막 신뢰(RAW_VLD=true) 확인 후 좌표 없이 강제 마감까지의 시간 (2026-08-19 최정우 추가, 2026-08-21 최정우 수정 — 실측 raw_vld=false 최장 269초 대비 여유 확보)
 #define CFG_DEF_EXEMPT_REGRACE		60									// [charge]	exempt_regrace (단위: sec) — 재진입 유예시간 (2026-08-14 최정우 추가)

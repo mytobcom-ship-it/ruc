@@ -48,7 +48,39 @@
   .issue-row b { font-weight: 700; margin-right: 3px; }
   .issue-row b.label-issue { color: #e53935; }
   .issue-row b.label-fix { color: #1e88e5; }
-  #map { flex: 1; cursor: default; }
+  /* 지도 + 하단 과금 패널 (2026-08-22 최정우 추가) */
+  #mapWrap { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #map { flex: 1; cursor: default; min-height: 0; }
+  /* 높이를 고정한다 — max-height 로 두면 행 수에 따라 패널이 커지고 그만큼 지도가 줄어드는데,
+     Leaflet 은 컨테이너 크기 변화를 스스로 감지하지 못해 보이는 영역이 어긋난다
+     (과금 이력이 0건→N건으로 바뀔 때 실제로 발생) (2026-08-22 최정우 수정) */
+  #chargePanel {
+    flex: none; background: var(--panel); border-top: 1px solid var(--border);
+    display: flex; flex-direction: column; height: 34vh;
+  }
+  #chargePanel.collapsed { height: auto; }
+  #chargePanel.collapsed #chargeBody { display: none; }
+  #chargeHead {
+    flex: none; display: flex; align-items: center; gap: 10px;
+    padding: 7px 14px; border-bottom: 1px solid var(--border); background: var(--code-bg);
+  }
+  #chargeHead .ch-title { font-size: 13px; font-weight: 700; }
+  #chargeHead .ch-src { font-weight: 400; font-size: 11.5px; color: var(--muted); margin-left: 6px; }
+  #chargeHead .ch-count { font-size: 12px; color: var(--muted); margin-left: auto; }
+  #chargeHead button {
+    border: 1px solid var(--border); background: var(--panel); color: var(--text);
+    border-radius: 5px; cursor: pointer; font-size: 12px; padding: 1px 8px; line-height: 1.6;
+  }
+  #chargeBody { overflow: auto; }
+  #chargeTable { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #chargeTable th, #chargeTable td { border-bottom: 1px solid var(--border); padding: 5px 9px; text-align: left; white-space: nowrap; }
+  #chargeTable th { position: sticky; top: 0; background: var(--code-bg); font-weight: 700; z-index: 1; }
+  #chargeTable td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  #chargeTable td.mono { font-family: ui-monospace, Menlo, monospace; }
+  #chargeTable tr:hover td { background: var(--code-bg); }
+  #chargeTable .ch-empty { text-align: center; color: var(--muted); padding: 14px; }
+  #chargeTable .ch-na { color: var(--muted); }
+  .ch-type { display: inline-block; border-radius: 10px; padding: 1px 8px; font-size: 11px; font-weight: 700; color: #fff; }
   /* 기본 손모양(grab) 대신 화살표 포인터 — 마우스오버 정보(툴팁)가 있는 요소는
      leaflet-interactive 기본 규칙(cursor:pointer)이 그대로 적용돼 화살표와 구분됨 (2026-08-12 최정우 추가) */
   #map.leaflet-grab, #map.leaflet-grab:active, #map.leaflet-dragging { cursor: default; }
@@ -56,6 +88,31 @@
     background: #1e293bdd; color: #fff; border: none; font-size: 10.5px; padding: 1px 5px;
     border-radius: 3px; font-weight: 600; box-shadow: 0 1px 4px rgba(0,0,0,.35);
   }
+  /* 출발·도착 마커 — 3중 테두리로 다른 어떤 마커와도 구분되게 한다 (2026-08-22 최정우 추가).
+     circleMarker 는 테두리가 1겹뿐이라 캔버스 위 다른 원들과 섞였다. divIcon + box-shadow 로
+     '채움 → 밝은 안테두리 → 진한 바깥테두리 → 흰 외곽' 4겹을 만들고, DOM 요소라 캔버스보다
+     항상 위에 그려진다. */
+  .se-mk {
+    width: 18px; height: 18px; border-radius: 50%; box-sizing: border-box;
+  }
+  .se-start {                       /* 출발 — 초록 계열 */
+    background: #2e7d32; border: 3px solid #c8e6c9;
+    box-shadow: 0 0 0 3px #1b5e20, 0 0 0 6px rgba(255,255,255,.95), 0 0 6px 6px rgba(0,0,0,.20);
+  }
+  .se-end {                         /* 도착(트립 종료) — 빨강 계열 */
+    background: #c62828; border: 3px solid #ffcdd2;
+    box-shadow: 0 0 0 3px #7f0000, 0 0 0 6px rgba(255,255,255,.95), 0 0 6px 6px rgba(0,0,0,.20);
+  }
+  .se-live {                        /* 진행중 — 주황 계열 */
+    background: #fb8c00; border: 3px solid #ffe0b2;
+    box-shadow: 0 0 0 3px #e65100, 0 0 0 6px rgba(255,255,255,.95), 0 0 6px 6px rgba(0,0,0,.20);
+  }
+  .leaflet-tooltip.se-label {
+    font-weight: 700; font-size: 12px; padding: 3px 8px; border-width: 2px;
+  }
+  .leaflet-tooltip.se-label.s { border-color: #1b5e20; color: #1b5e20; }
+  .leaflet-tooltip.se-label.e { border-color: #7f0000; color: #7f0000; }
+  .leaflet-tooltip.se-label.l { border-color: #e65100; color: #e65100; }
   .leaflet-tooltip.link-label {
     background: #ffffffee; color: #1e293b; border: 1px solid #94a3b8; font-size: 10.5px;
     padding: 1px 5px; border-radius: 3px; font-weight: 600; box-shadow: 0 1px 4px rgba(0,0,0,.25);
@@ -173,58 +230,38 @@
         <h2>과금 유형 표시</h2>
         <label class="charge-check">
           <input type="checkbox" id="chk-node" data-layer="node" checked />
-          <span class="dot" style="background:#6d4c41;"></span>
-          일반도로 <span class="charge-desc">— base_roadlink(LINE)</span>
+          <span class="dot" style="background:#afb42b;"></span>
+          일반도로 <span class="charge-desc">— base_roadlink(0)</span>
         </label>
         <label class="charge-check">
           <input type="checkbox" id="chk-open" data-layer="open" checked />
           <span class="dot" style="background:#3949ab;"></span>
-          개방형 <span class="charge-desc">— base_roadlink + base_tollgate(M)</span>
+          개방형 <span class="charge-desc">— base_roadlink(1) + base_tollgate(M)</span>
         </label>
         <label class="charge-check">
           <input type="checkbox" id="chk-closed" data-layer="closed" checked />
           <span class="dot" style="background:#e53935;"></span>
-          폐쇄형 <span class="charge-desc">— base_roadlink + base_tollgate(I/O)</span>
+          폐쇄형 <span class="charge-desc">— base_roadlink(2) + base_tollgate(I/O)</span>
         </label>
         <label class="charge-check">
           <input type="checkbox" id="chk-speed" data-layer="speed" checked />
           <span class="dot" style="background:#8e24aa;"></span>
-          구간단속 <span class="charge-desc">— base_roadlink + base_tollgate(I/O)</span>
+          구간단속 <span class="charge-desc">— base_roadlink(3) + base_tollgate(I/O)</span>
         </label>
         <label class="charge-check">
           <input type="checkbox" id="chk-parking" data-layer="parking" checked />
           <span class="dot" style="background:#fdd835; border:2px solid #f57f17;"></span>
-          주정차단속 <span class="charge-desc">— base_roadlink(POLY)</span>
+          주정차단속 <span class="charge-desc">— base_roadlink(4)</span>
         </label>
         <label class="charge-check">
           <input type="checkbox" id="chk-exempt" data-layer="exempt" checked />
           <span class="dot" style="background:#d81b60;"></span>
-          면제도로 <span class="charge-desc">— base_roadlink(LINE)</span>
+          면제도로 <span class="charge-desc">— base_roadlink(5)</span>
         </label>
       </div>
 
       <div class="issue-panel">
         <h2>과금 유형별 이슈·대응방안 <span style="font-weight:400;text-transform:none;letter-spacing:normal;">(미해결만 표시)</span></h2>
-
-        <div class="issue-card" style="border-left-color:#6d4c41;">
-          <div class="issue-title" style="color:#6d4c41;">일반도로 <span style="font-weight:400;font-size:11px;color:var(--muted);">CHARGE_TYPE=0</span></div>
-          <div class="issue-row" style="color:var(--muted);">미해결 이슈 없음 — 2026-08-14 zone(road_kind=0, link_ids) 기반 진입~이탈 판정으로 검증 완료. 실제 과금 대상이라 이탈·트립종료 시 항상 charge_yn='Y'/charge_status='0'으로 기록, occur_dt/upd_dt는 진출 시각 — RawLogWorker.cpp::ProcessNodeStepCharge()/AppendExpiredNodeStepCharge()</div>
-        </div>
-
-        <div class="issue-card" style="border-left-color:#3949ab;">
-          <div class="issue-title" style="color:#3949ab;">개방형 <span style="font-weight:400;font-size:11px;color:var(--muted);">CHARGE_TYPE=1</span></div>
-          <div class="issue-row" style="color:var(--muted);">미해결 이슈 없음 — 2026-08-12 구현·실측검증(23건) 완료</div>
-        </div>
-
-        <div class="issue-card" style="border-left-color:#e53935;">
-          <div class="issue-title" style="color:#b71c1c;">폐쇄형 <span style="font-weight:400;font-size:11px;color:var(--muted);">CHARGE_TYPE=2</span></div>
-          <div class="issue-row" style="color:var(--muted);">미해결 이슈 없음 — 2026-08-20 트립종료(TRIP_EVENT=2) 시 입구만 통과하고 출구 미확인인 세션을 N/3(AUDIT)로 강제 기록하도록 수정 완료(RawLogWorker.cpp::AppendExpiredClosedRoadCharge, 트립 정상종료 경로에도 호출 확장). 못 본 출구게이트는 NULL로 저장(from_id/to_id는 NOT NULL이라 아는 값만 채움)</div>
-        </div>
-
-        <div class="issue-card" style="border-left-color:#8e24aa;">
-          <div class="issue-title" style="color:#6a1b9a;">구간단속 <span style="font-weight:400;font-size:11px;color:var(--muted);">CHARGE_TYPE=3</span></div>
-          <div class="issue-row" style="color:var(--muted);">미해결 이슈 없음 — 2026-08-20 폐쇄형과 동일하게 트립종료 시 미완결 세션 N/3(AUDIT) 강제기록으로 수정 완료(RawLogWorker.cpp::AppendExpiredSpeedZoneCharge)</div>
-        </div>
 
         <div class="issue-card" style="border-left-color:#fdd835;">
           <div class="issue-title" style="color:#f57f17;">주정차단속 <span style="font-weight:400;font-size:11px;color:var(--muted);">CHARGE_TYPE=4</span></div>
@@ -232,24 +269,42 @@
           <div class="issue-row"><b class="label-fix">대응</b> 실제 위반 데이터가 쌓이기 시작하면 최우선으로 대조·튜닝 예정 — RawLogWorker.cpp::ProcessParkingCharge()/AppendExpiredParkingCharge()</div>
         </div>
 
-        <div class="issue-card" style="border-left-color:#d81b60;">
-          <div class="issue-title" style="color:#d81b60;">면제도로 <span style="font-weight:400;font-size:11px;color:var(--muted);">CHARGE_TYPE=5</span></div>
-          <div class="issue-row" style="color:var(--muted);">미해결 이슈 없음 — 2026-08-14 zone(road_kind=5, link_ids) 기반 판정으로 검증 완료. charge_type=5(비과금도로 고유값), from_id/to_id/zone_id는 base_roadlink 등록 road_id, charge_yn='N'/charge_status='4' 고정</div>
-        </div>
       </div>
 
       <div class="doc-links">
         <a href="mapmatch-viewer.html">RUC 맵매칭 GPS 뷰어 (실시간 DB) ↗</a>
-        <a href="matched-gps-viewer.html">CSV 맵매칭 결과 뷰어 ↗</a>
         <a href="docs/table.html">구간단속 2테이블 재사용 설계 ↗</a>
         <a href="docs/parking.html">주정차단속 원본 GPS 판정 설계 ↗</a>
         <a href="docs/columns.html">4유형별 PRIM_CHARGEHAND 컬럼 비교 ↗</a>
         <a href="docs/charge-issues.html" target="_blank" rel="noopener">과금 유형별 문제점·대응방안 요약 ↗</a>
+        <a href="docs/psf-format.html" target="_blank" rel="noopener">link.psf 바이너리 포맷 ↗</a>
+        <a href="docs/zone-link-map.html" target="_blank" rel="noopener">과금구역 링크 연결 점검 ↗</a>
+        <a href="docs/zone-link-map-offline.html" target="_blank" rel="noopener">과금구역 점검 (오프라인 배포용) ↗</a>
       </div>
     </div>
     <footer class="credit">출처: ruc.road_link (59.11.91.162/ruc, update_date 최대 2026-07-16) — 정적 스냅샷. 로컬 roadnet DB와는 별도 적재본</footer>
   </div>
-  <div id="map"></div>
+  <div id="mapWrap">
+    <div id="map"></div>
+    <div id="chargePanel">
+      <div id="chargeHead">
+        <span class="ch-title">과금 이력 <span class="ch-src">ruc.prim_chargehand</span></span>
+        <span class="ch-src" id="buildStamp" title="이 값이 안 보이면 브라우저가 옛 페이지를 쓰고 있습니다">build 0822-4</span>
+        <span id="chargeCount" class="ch-count">—</span>
+        <button id="chargeToggle" title="접기/펼치기">▾</button>
+      </div>
+      <div id="chargeBody">
+        <table id="chargeTable">
+          <thead><tr>
+            <th>#</th><th>유형</th><th>G순번</th><th>M순번</th>
+            <th>구간 ID</th><th>구간명</th><th>본선</th><th>진입</th><th>진출</th>
+            <th>거리(m)</th><th>발생시각</th>
+          </tr></thead>
+          <tbody id="chargeBody2"><tr><td colspan="11" class="ch-empty">트립을 선택하세요</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
 </div>
 
 <div id="tripCtxMenu" class="ctx-menu">
@@ -299,164 +354,140 @@ function bindGateHoverInfo(marker, gate, roadNm) {
   marker.on('mouseout', function () { marker.closePopup(); });
 }
 
-// ---- 폐쇄형(CLOSED) — base_roadlink(RL-Z00005) + base_tollgate(TG00007/TG00008) ----
-const CLOSED_ZONE = {
-  road_id: 'RL-Z00005',
-  road_nm: '제2판교 폐쇄식 구역',
-  // link 2040423801 좌표와 동일(원래 지정된 폐쇄형 링크)
-  coords: [[127.09014280885766, 37.40597985148947], [127.08962917307275, 37.40575375034328], [127.08929358719936, 37.405650053552215], [127.08872670030708, 37.405485835076576], [127.08827675824992, 37.40537385067419], [127.08766587548934, 37.40524891018965], [127.08716780482852, 37.40515703467227], [127.08666116746916, 37.405082027732035], [127.08644371998216, 37.405071126884], [127.08623328996923, 37.40506813688313], [127.08615547936348, 37.405078940436454]]
+// ==== 과금·비과금 구역 — ruc.base_roadlink / base_tollgate 에서 로드 ====
+//   예전에는 구역 좌표·이름·유형을 이 파일에 상수로 박아 두었는데, DB 가 바뀌면서 어긋났다
+//   (2026-08-22 확인 — RL-Z00002 이름 불일치, RL-Z00009 를 개방형으로 표시, 강릉 구역 7개 누락,
+//    TG00009 를 RL-Z00009 에 묶었으나 DB 상 소속은 RL-Z00004). 구역 14개·좌표 477점·10kB 로
+//   작고 거의 바뀌지 않아 페이지 로드 시 1회 읽는다(실측 1.7ms). (2026-08-22 최정우 수정)
+
+// road_kind → 레이어·색상·표시명. base_roadlink.road_kind 는 ROADKIND(0-base) 코드다.
+const ZONE_KIND = {
+  '0': { layer: 'node',    nm: '일반도로',   color: '#afb42b', weight: 13, dash: null      },
+  '1': { layer: 'open',    nm: '개방형',     color: '#00a152', weight: 13, dash: null      },
+  '2': { layer: 'closed',  nm: '폐쇄형',     color: '#b71c1c', weight: 13, dash: null      },
+  '3': { layer: 'speed',   nm: '구간단속',   color: '#8e24aa', weight: 13, dash: '10 6'    },
+  '4': { layer: 'parking', nm: '주정차단속', color: '#f57f17', weight: 3,  dash: null      },
+  '5': { layer: 'exempt',  nm: '면제도로',   color: '#d81b60', weight: 13, dash: null      }
 };
-const CLOSED_GATE_IN = { tollgate_id: 'TG00007', gate_div: 'I', road_id: CLOSED_ZONE.road_id, lon: 127.09014280885766, lat: 37.40597985148947 };
-const CLOSED_GATE_OUT = { tollgate_id: 'TG00008', gate_div: 'O', road_id: CLOSED_ZONE.road_id, lon: 127.08615547936348, lat: 37.405078940436454 };
+const PARKING_FILL = '#fdd835';
 
-L.polyline(CLOSED_ZONE.coords.map(function (c) { return [c[1], c[0]]; }), {
-  color: '#b71c1c', weight: 13, opacity: 0.9, lineCap: 'round', lineJoin: 'round'
-}).bindTooltip(CLOSED_ZONE.road_id + ' · ' + CLOSED_ZONE.road_nm, { sticky: true, className: 'link-label' })
-  .addTo(chargeLayers.closed);
-
-// TG 게이트 마커 반경을 줌 레벨에 비례하게 — 축소 시 반경 9px 고정이면 다른 요소 대비
-// 과하게 커 보이는 문제 대응(2026-08-12 최정우 추가)
 const tgGateMarkers = [];
+// 줌이 커질수록 게이트 마커도 커지되 3~9 범위로 제한 (2026-08-12 최정우 추가)
 function gateRadiusForZoom(zoom, offset) { return Math.max(3, Math.min(9, zoom - 9) + (offset || 0)); }
 
-const closedGateInMarker = L.circleMarker([CLOSED_GATE_IN.lat, CLOSED_GATE_IN.lon], {
-  radius: gateRadiusForZoom(map.getZoom()), color: '#7f0000', weight: 2, fillColor: '#e53935', fillOpacity: 0.95
-}).bindTooltip('① ' + CLOSED_GATE_IN.tollgate_id + '(입구)', { permanent: true, direction: 'right', offset: [10, 0], className: 'link-label' })
-  .addTo(chargeLayers.closed);
-bindGateHoverInfo(closedGateInMarker, CLOSED_GATE_IN, CLOSED_ZONE.road_nm);
-tgGateMarkers.push(closedGateInMarker);
-
-const closedGateOutMarker = L.circleMarker([CLOSED_GATE_OUT.lat, CLOSED_GATE_OUT.lon], {
-  radius: gateRadiusForZoom(map.getZoom()), color: '#7f0000', weight: 2, fillColor: '#e53935', fillOpacity: 0.95
-}).bindTooltip('② ' + CLOSED_GATE_OUT.tollgate_id + '(출구)', { permanent: true, direction: 'left', offset: [-10, 0], className: 'link-label' })
-  .addTo(chargeLayers.closed);
-bindGateHoverInfo(closedGateOutMarker, CLOSED_GATE_OUT, CLOSED_ZONE.road_nm);
-tgGateMarkers.push(closedGateOutMarker);
-
-// ---- 개방형(OPEN) — base_roadlink(RL-Z00009) + base_tollgate(TG00009, gate_div=M) ----
-//   RL-Z00009/TG00009 복구(2026-08-12 최정우 추가) — DB 값 그대로: lon/lat=127.0859650/37.4057790, link_id=2040423603
-const OPEN_ZONE_ROAD_ID = 'RL-Z00009';
-const OPEN_ZONE_ROAD_NM = '제2판교 개방식 구역';
-const OPEN_GATE = { tollgate_id: 'TG00009', gate_div: 'M', road_id: OPEN_ZONE_ROAD_ID, lon: 127.0859650, lat: 37.4057790 };
-// RL-Z00009 실제 좌표(link 2040423603 f_node)로 수정 — 기존 값은 실제 zone 선과 33.56m 떨어진 임의값이었음 (2026-08-12 최정우 수정)
-const OPEN_ZONE_START = { lon: 127.08595066549519, lat: 37.40598860301615 };
-// RL-Z00009.coords(=link 2040423603) — 다른 유형(폐쇄형·구간단속)처럼 구역 선을 직접 그려서 구분되게 표시 (2026-08-12 최정우 추가)
-const OPEN_ZONE_COORDS = [[127.08595066549519, 37.40598860301615], [127.08603303702158, 37.40526911839728], [127.08605647601027, 37.40509351478994]];
-
-// 청록(파랑과 혼동)·마젠타(빨강과 혼동)·검정(너무 어두움) 순으로 시도 후 남색/인디고로 확정 (2026-08-12 최정우 수정)
-const OPEN_COLOR = '#3949ab';
-const OPEN_COLOR_DARK = '#1a237e';
-
-L.polyline(OPEN_ZONE_COORDS.map(function (c) { return [c[1], c[0]]; }), {
-  color: OPEN_COLOR, weight: 8, opacity: 0.9, lineCap: 'round', lineJoin: 'round'
-}).bindTooltip(OPEN_ZONE_ROAD_ID + ' · ' + OPEN_ZONE_ROAD_NM, { sticky: true, className: 'link-label' })
-  .addTo(chargeLayers.open);
-
-L.circleMarker([OPEN_ZONE_START.lat, OPEN_ZONE_START.lon], {
-  radius: 6, color: '#9e9e9e', weight: 2, fillColor: OPEN_COLOR, fillOpacity: 0.9, dashArray: '2 2'
-}).bindTooltip('RL-Z00009', { permanent: true, direction: 'top', offset: [0, -6], className: 'link-label' })
-  .addTo(chargeLayers.open);
-
-// TG00009는 다른 게이트보다 한 단계 작게 표시 (2026-08-12 최정우 수정)
-const openGateMarker = L.circleMarker([OPEN_GATE.lat, OPEN_GATE.lon], {
-  radius: gateRadiusForZoom(map.getZoom(), -2), color: OPEN_COLOR_DARK, weight: 2, fillColor: OPEN_COLOR, fillOpacity: 0.95
-}).bindTooltip(OPEN_GATE.tollgate_id, { permanent: true, direction: 'right', offset: [10, 0], className: 'link-label' })
-  .addTo(chargeLayers.open);
-openGateMarker._gateRadiusOffset = -2;
-bindGateHoverInfo(openGateMarker, OPEN_GATE, OPEN_ZONE_ROAD_NM);
-tgGateMarkers.push(openGateMarker);
-
-// ---- 구간단속(SPEED) — base_roadlink(road_kind=3) + base_tollgate(I/O) ----
-const SPEED_ZONES = [
-  {
-    road_id: 'RL-Z00003', road_nm: '제2판교 구간단속구역', speed_limit_kmh: 60,
-    // 2026-08-11: 실제 링크 2040424301 좌표 — 링크 f_node→t_node 방향 = 입구(TG00012)→출구(TG00013) 방향과 일치시킴
-    coords: [[127.086026,37.406201],[127.087276,37.406282],[127.087578,37.406318],[127.088075,37.406382],[127.088392,37.406449],[127.088686,37.406525],[127.08899,37.406619],[127.089183,37.406708],[127.089342,37.406805],[127.089479,37.406923],[127.089535,37.406985]]
-  },
-  {
-    road_id: 'RL-Z00006', road_nm: '구간단속 테스트', speed_limit_kmh: 50,
-    // 2026-08-11: 실제 링크 체인(2040424901→2040426401→2040403000→2040403001→2040390200→2040390202) 좌표로 정밀화
-    coords: [[127.090273,37.405935],[127.090863,37.40619],[127.09128,37.406394],[127.091501,37.406521],[127.09179,37.406696],[127.092296,37.407008],[127.092559,37.407205],[127.092835,37.40747],[127.09309,37.407737],[127.093374,37.40806],[127.094344,37.409087],[127.094636,37.409415],[127.094819,37.409601],[127.094907,37.409718],[127.094957,37.409834],[127.094979,37.409951],[127.094974,37.410081],[127.094937,37.410765],[127.094933,37.410874],[127.094933,37.411136],[127.09497,37.411305],[127.095004,37.411436],[127.095185,37.411652],[127.095306,37.411798],[127.095521,37.411981],[127.095706,37.412069],[127.095772,37.4121],[127.096392,37.412324],[127.097535,37.41268],[127.097798,37.412728],[127.09789,37.412728],[127.097923,37.412728],[127.098279,37.412687],[127.098421,37.412663],[127.09853,37.412631],[127.098703,37.412581],[127.098774,37.412558],[127.098797,37.412548],[127.09893,37.412494],[127.099079,37.412411],[127.09934,37.412289],[127.099728,37.412217]]
+// 게이트 마커는 채움을 흰색으로 고정하고 테두리 색으로 소속 구역을 구분한다 — 구역선 색을
+//   그대로 채움에 쓰면 굵기 13 선 위에서 마커가 파묻힌다(개방형에서 실제로 발생).
+//   같은 구역의 입·출구는 같은 색, 구역이 다르면 다른 색. 색상환에 고르게 배치한다.
+//   (2026-08-22 최정우 추가)
+const GATE_RING_PALETTE = ['#7f0000', '#1b5e20', '#01579b', '#4a148c', '#e65100', '#004d40',
+                           '#311b92', '#880e4f', '#33691e', '#0d47a1'];
+const gateRingByRoad = {};
+function gateRingColor(roadId) {
+  if (!(roadId in gateRingByRoad)) {
+    gateRingByRoad[roadId] = GATE_RING_PALETTE[Object.keys(gateRingByRoad).length % GATE_RING_PALETTE.length];
   }
-];
-SPEED_ZONES.forEach(function (zone) {
-  const latlngs = zone.coords.map(function (c) { return [c[1], c[0]]; });
-  // 폐쇄형과 동일하게 굵은 선 + 마우스오버 시에만 정보 표시(sticky) — 기존엔 얇은 선(7px)에 항상
-  //   보이는 라벨(permanent)이라 폐쇄형과 표현 방식이 달랐음 (2026-08-20 최정우 수정, 사용자 지시)
-  L.polyline(latlngs, {
-    color: '#8e24aa', weight: 13, opacity: 0.9, dashArray: '10 6', lineCap: 'round', lineJoin: 'round'
-  }).bindTooltip(
-    '<b>' + zone.road_id + '</b><br/>' + zone.road_nm + '<br/>제한속도 ' + zone.speed_limit_kmh + 'km/h',
-    { sticky: true, className: 'link-label' }
-  ).addTo(chargeLayers.speed);
-});
+  return gateRingByRoad[roadId];
+}
+function gateStyle(roadId, zoom) {
+  return {
+    radius: gateRadiusForZoom(zoom), weight: 3,
+    color: gateRingColor(roadId), fillColor: '#ffffff', fillOpacity: 1
+  };
+}
+// 게이트 마커를 같은 캔버스 안에서 맨 앞으로 — 도로 링크(linkLayer)가 트립 선택 후 나중에
+//   추가돼 게이트를 덮는다. 별도 pane(캔버스)으로 올리면 그 캔버스가 마우스 히트테스트를
+//   가로채 아래 레이어의 마우스오버 툴팁이 전부 죽는다 — 실제로 그렇게 만들었다가 되돌렸다.
+//   (2026-08-22 최정우 추가)
+function bringGatesToFront() {
+  tgGateMarkers.forEach(function (m) {
+    if (m && typeof m.bringToFront === 'function') m.bringToFront();
+  });
+}
 
-const SPEED_GATES = [
-  { tollgate_id: 'TG00010', gate_div: 'I', road_id: 'RL-Z00006', lon: 127.09027260134454, lat: 37.40593474090089 },
-  { tollgate_id: 'TG00011', gate_div: 'O', road_id: 'RL-Z00006', lon: 127.09972849937289, lat: 37.41221661509752 },
-  { tollgate_id: 'TG00012', gate_div: 'I', road_id: 'RL-Z00003', lon: 127.08602610752959, lat: 37.406200946041565 },
-  { tollgate_id: 'TG00013', gate_div: 'O', road_id: 'RL-Z00003', lon: 127.08953518236481, lat: 37.406985018192756 }
-];
-SPEED_GATES.forEach(function (gate) {
-  const zone = SPEED_ZONES.find(function (z) { return z.road_id === gate.road_id; });
-  const speedGateMarker = L.circleMarker([gate.lat, gate.lon], {
-    radius: gateRadiusForZoom(map.getZoom()), color: '#4a148c', weight: 2, fillColor: '#8e24aa', fillOpacity: 0.95
-  }).bindTooltip(
-    gate.tollgate_id + '(' + (gate.gate_div === 'I' ? '진입' : '진출') + ')',
-    { permanent: true, direction: gate.gate_div === 'I' ? 'left' : 'right', offset: [gate.gate_div === 'I' ? -10 : 10, 0], className: 'link-label' }
-  ).addTo(chargeLayers.speed);
-  bindGateHoverInfo(speedGateMarker, gate, zone ? zone.road_nm : '');
-  tgGateMarkers.push(speedGateMarker);
-});
+// 게이트 마커 마우스오버 정보 — 항상 보이는 짧은 라벨은 그대로 두고 상세는 popup 으로
+function bindGateHoverInfo(marker, gate, roadId, roadNm) {
+  const html =
+    '<b>' + gate.tollgate_id + '</b>' + (gate.tollgate_nm ? ' · ' + gate.tollgate_nm : '') + '<br/>' +
+    '구분: ' + gateDivLabel(gate.gate_div) + '<br/>' +
+    '소속 구역: ' + roadId + (roadNm ? ' · ' + roadNm : '') + '<br/>' +
+    '좌표: ' + gate.lat.toFixed(6) + ', ' + gate.lon.toFixed(6);
+  marker.bindPopup(html, { closeButton: false, className: 'gate-popup' });
+  marker.on('mouseover', function () { marker.openPopup(); });
+  marker.on('mouseout', function () { marker.closePopup(); });
+}
 
-// ---- 주정차단속(PARKING) — base_roadlink(road_kind=4, POLY) ----
-const PARKING_ZONES = [
-  {
-    road_id: 'RL-Z00001', road_nm: '제2판교 주정차단속',
-    // 2026-08-11: 실제 링크 3개(2040425301→2040425201→2040425801)와 각각의 상/하행 반대편 링크
-    // (2040425401/2040425101/2040425701) 사이 중간점으로 정밀화 — 인접 반대방향 링크 포함 방지
-    coords: [[127.090053,37.407943],[127.090219,37.407935],[127.090373,37.407921],[127.090507,37.407893],[127.090635,37.407856],[127.090775,37.407773],[127.09087,37.407659],[127.090937,37.407532],[127.090971,37.407411],[127.090978,37.407278],[127.090947,37.407138],[127.090856,37.407009],[127.090649,37.406884],[127.089921,37.406577],[127.089847,37.406598],[127.089569,37.407025],[127.089567,37.407107],[127.089772,37.407349],[127.089881,37.407563],[127.089967,37.407831],[127.089983,37.40791]]
+let zoneList = [];
+
+function renderZones(zones) {
+  zoneList = zones || [];
+  Object.keys(chargeLayers).forEach(function (k) { chargeLayers[k].clearLayers(); });
+  tgGateMarkers.length = 0;
+
+  zoneList.forEach(function (z) {
+    const kind = ZONE_KIND[String(z.road_kind)];
+    if (!kind) return;                       // 미정의 road_kind 는 건너뜀
+    const layer = chargeLayers[kind.layer];
+    const latlngs = (z.coords || []).map(function (c) { return [c[1], c[0]]; });
+    if (latlngs.length < 2) return;
+
+    const tip = '<b>' + z.road_id + '</b><br/>' + z.road_nm + '<br/>' + kind.nm
+      + ' (road_kind=' + z.road_kind + ')'
+      + (z.speed_limit_kmh != null ? '<br/>제한속도 ' + z.speed_limit_kmh + ' km/h' : '');
+
+    if (z.geom_type === 'POLY') {
+      L.polygon(latlngs, {
+        color: kind.color, weight: kind.weight, opacity: 0.95,
+        fillColor: PARKING_FILL, fillOpacity: 0.45
+      }).bindTooltip(tip, { sticky: true, className: 'link-label' }).addTo(layer);
+    } else {
+      const opt = { color: kind.color, weight: kind.weight, opacity: 0.9,
+                    lineCap: 'round', lineJoin: 'round' };
+      if (kind.dash) opt.dashArray = kind.dash;
+      L.polyline(latlngs, opt).bindTooltip(tip, { sticky: true, className: 'link-label' }).addTo(layer);
+    }
+
+    (z.gates || []).forEach(function (g) {
+      if (g.lon == null || g.lat == null) return;
+      const m = L.circleMarker([g.lat, g.lon], gateStyle(z.road_id, map.getZoom()))
+        .bindTooltip(
+          g.tollgate_id + '(' + gateDivShort(g.gate_div) + ')',
+          { permanent: true,
+            direction: g.gate_div === 'I' ? 'left' : 'right',
+            offset: [g.gate_div === 'I' ? -10 : 10, 0], className: 'link-label' }
+        ).addTo(layer);
+      m._gateRoadId = z.road_id;
+      bindGateHoverInfo(m, g, z.road_id, z.road_nm);
+      tgGateMarkers.push(m);
+    });
+  });
+  bringGatesToFront();
+}
+
+function gateDivShort(div) {
+  switch (div) {
+    case 'I': return '진입';
+    case 'O': return '진출';
+    case 'M': return '본선';
+    case 'B': return '양방향';
+    default: return div || '-';
   }
-];
-PARKING_ZONES.forEach(function (zone) {
-  const latlngs = zone.coords.map(function (c) { return [c[1], c[0]]; });
-  // 일반 도로 링크와 동일한 방식 — 마우스오버 시에만 정보 표시(sticky) + 강조 스타일 (2026-08-12 최정우 수정)
-  const poly = L.polygon(latlngs, {
-    color: '#f57f17', weight: 3, opacity: 0.95, fillColor: '#fdd835', fillOpacity: 0.45
-  }).bindTooltip(
-    '<b>' + zone.road_id + '</b><br/>' + zone.road_nm + '<br/>주정차단속(POLY)',
-    { sticky: true, className: 'link-label' }
-  ).addTo(chargeLayers.parking);
-  poly.on('mouseover', function () { poly.setStyle({ weight: 6, fillOpacity: 0.65 }); });
-  poly.on('mouseout', function () { poly.setStyle({ weight: 3, fillOpacity: 0.45 }); });
+}
+
+// 줌 변경 시 게이트 마커 크기 갱신
+map.on('zoomend', function () {
+  const zoom = map.getZoom();
+  tgGateMarkers.forEach(function (m) { m.setRadius(gateRadiusForZoom(zoom)); });
 });
 
-// ---- 일반도로(NODE_STEP, ROAD_KIND=0) — base_roadlink(RL-Z00002) link_ids/coords 참조 (2026-08-14 최정우 추가)
-// 게이트 없이 구간(coords)만 존재 — 다른 유형과 동일하게 전용 구역선으로 표시
-// 청록(#00acc1)이 기본 도로 링크색(#1e88e5)·개방형(#3949ab)과 같은 파랑 계열이라 구분이 잘 안 돼
-// 갈색으로 변경 — 다른 어느 유형과도 안 겹치는 색(2026-08-14 최정우 수정)
-const NODE_COLOR = '#6d4c41';
-const NODE_ZONE = {
-  road_id: 'RL-Z00002', road_nm: '제2판교 과금구역', link_ids: ['2040425701', '2040424401'],
-  coords: [[127.08991952571627,37.40792377298369],[127.08986431415477,37.40770153584479],[127.08979888318792,37.40752666695008],[127.08971501703131,37.40736525522197],[127.08959579267336,37.407212734463684],[127.08953116081354,37.40714966347632],[127.08945512474419,37.40707626313108],[127.08935839347079,37.40697417264467],[127.08922619349894,37.40687005509689],[127.08906143518635,37.406779345680896],[127.08883590159948,37.406696310649934],[127.08850029399485,37.406595992269324],[127.08818019392578,37.40650136032173],[127.08780765545508,37.40643921940428],[127.08726566358241,37.40637085211115],[127.08601377496107,37.4062944264585]]
-};
-L.polyline(NODE_ZONE.coords.map(function (c) { return [c[1], c[0]]; }), {
-  color: NODE_COLOR, weight: 8, opacity: 0.9, lineCap: 'round', lineJoin: 'round'
-}).bindTooltip(NODE_ZONE.road_id + ' · ' + NODE_ZONE.road_nm, { sticky: true, className: 'link-label' })
-  .addTo(chargeLayers.node);
+async function loadZones() {
+  try {
+    const zones = await fetchJson(apiBase() + '/zones');
+    renderZones(zones);
+  } catch (e) {
+    console.warn('[viewer] 구역 조회 실패:', e.message);
+  }
+}
 
-// ---- 면제도로(비과금도로, ROAD_KIND=5) — base_roadlink(RL-Z00007) link_ids/coords 참조 (2026-08-14 최정우 수정)
-// 게이트 없이 구간(coords)만 존재 — 다른 유형과 동일하게 전용 구역선으로 표시
-// 기존 노드 점 색(#43a047)과 겹쳐 구분이 안 돼 다른 어느 유형에도 안 쓰인 마젠타로 변경
-const EXEMPT_COLOR = '#d81b60';
-const EXEMPT_ZONE = {
-  road_id: 'RL-Z00007', road_nm: '제2판교 면제구간', link_ids: ['2040005902', '2040005903'],
-  coords: [[127.08449106245467,37.40666251019703],[127.08451133001792,37.40666930565867],[127.08473689235052,37.40675408698892],[127.0849439071557,37.40682603368133],[127.08508444647524,37.40687930745788]]
-};
-L.polyline(EXEMPT_ZONE.coords.map(function (c) { return [c[1], c[0]]; }), {
-  color: EXEMPT_COLOR, weight: 8, opacity: 0.9, lineCap: 'round', lineJoin: 'round'
-}).bindTooltip(EXEMPT_ZONE.road_id + ' · ' + EXEMPT_ZONE.road_nm, { sticky: true, className: 'link-label' })
-  .addTo(chargeLayers.exempt);
 
 // ==== 기본 표시 — 도로 링크 ====
 // 예전엔 판교·금토 특정 구역(geumto-data 임베드) 링크만 고정으로 그렸는데, 그 범위 밖의
@@ -485,12 +516,15 @@ async function loadTripRoads(tripId) {
     const pl = L.polyline(latlngs, {
       color: colorFor(link), weight: weightFor(link), opacity: 0.85
     }).addTo(linkLayer);
+    // 주행방향 화살표 — 속이 빈 7px 선 화살표는 굵은 링크 위에서 잘 안 보여, 속을 채운
+    //   12px 삼각형으로 키우고 진한 남색으로 바꿨다. 간격도 90px→70px 로 좁혀 짧은 링크에도
+    //   최소 한 개는 찍히게 한다 (2026-08-22 최정우 수정)
     L.polylineDecorator(pl, {
       patterns: [{
-        offset: '15%', repeat: '90px',
+        offset: '12%', repeat: '70px',
         symbol: L.Symbol.arrowHead({
-          pixelSize: 7, polygon: false,
-          pathOptions: { stroke: true, color: '#0d47a1', weight: 1.5, opacity: 0.75 }
+          pixelSize: 12, headAngle: 55, polygon: true,
+          pathOptions: { stroke: false, fill: true, fillColor: '#0d1b4b', fillOpacity: 0.95 }
         })
       }]
     }).addTo(linkLayer);
@@ -505,6 +539,8 @@ async function loadTripRoads(tripId) {
     pl.on('mouseout', function () { pl.setStyle({ weight: weightFor(link), opacity: 0.85 }); });
     allLinkPolylines.push(pl);
   });
+  // 링크가 나중에 추가돼 게이트 마커를 덮으므로 다시 맨 앞으로 (2026-08-22 최정우 추가)
+  bringGatesToFront();
 }
 
 // ---- 체크박스 토글 ----
@@ -538,10 +574,7 @@ DATA.nodes.forEach(function (node) {
 });
 
 // 줌 변경 시 TG 게이트 마커 반경 재조정 (2026-08-12 최정우 추가)
-map.on('zoomend', function () {
-  const zoom = map.getZoom();
-  tgGateMarkers.forEach(function (m) { m.setRadius(gateRadiusForZoom(zoom, m._gateRadiusOffset || 0)); });
-});
+
 
 // ==== 마지막 주행 TRIP_ID — 원격/로컬 DB 선택 가능 GPS/맵매칭 좌표 (2026-08-18 최정우 추가) ====
 // dbSourceToggle 라디오 버튼으로 원격(/api/remote/*)·로컬(/api/*) 전환 — 원격은 읽기전용
@@ -554,6 +587,7 @@ document.querySelectorAll('input[name="dbSource"]').forEach(function (radio) {
   radio.addEventListener('change', function () {
     if (!radio.checked) return;
     dataSource = radio.value;
+    loadZones();      // 데이터 소스가 바뀌면 구역도 다시 (2026-08-22 최정우 추가)
     // 데이터 소스가 바뀌면 trip_id 목록 자체가 달라지므로(로컬/원격에 존재하는 trip_id가
     //   다를 수 있음) 선택 유지·현재 트립 상태를 모두 초기화하고 새로 불러온다 (2026-08-19 최정우 추가)
     userPicked = false;
@@ -562,10 +596,12 @@ document.querySelectorAll('input[name="dbSource"]').forEach(function (radio) {
   });
 });
 const POLL_MS = 5000;
-// MATCH_COLOR 는 배경 도로 링크(LINK_COLOR_DEFAULT, #1e88e5)와 겹치지 않는 색으로 —
-//   같은 파랑이면 매칭 경로선이 그 밑 배경 링크를 덮어 그려 바로 옆(왕복분리 반대방향
-//   등) 링크가 상대적으로 안 보이는 것처럼 느껴짐 (2026-08-19 최정우 수정)
-const RAW_COLOR = '#e53935', MATCH_COLOR = '#ff6f00';
+// 매칭 경로선 색 (2026-08-22 최정우 수정)
+//   기존 #ff6f00(주황)은 주정차단속 구역선 #f57f17·진행중 마커 #fb8c00 과 사실상 같은 색이라
+//   폴리곤 위에서 경로가 묻혔다. 과금 팔레트가 이미 올리브·초록·적갈·보라·주황·마젠타를 쓰고
+//   있어 남은 색이 없으므로, 지도학에서 쓰는 케이싱(casing) 방식으로 바꾼다 —
+//   짙은 테두리 위에 흰 심을 얹으면 어떤 배경색 위에서도 분리돼 보이고, 팔레트와 충돌하지 않는다.
+const RAW_COLOR = '#e53935', MATCH_COLOR = '#ffffff', MATCH_CASING = '#263238';
 // 맵매칭 좌표 마커 전용 색 — 과금 유형 팔레트(브라운/인디고/레드/퍼플/옐로/마젠타)·기존 노드점
 //   (#43a047, 초록)·매칭 경로선(#1e88e5, 파랑) 등 이미 쓰인 색과 겹치지 않는 청록(cyan)으로
 //   지도 위에서 바로 눈에 띄게 (2026-08-19 최정우 수정 — 초록이 노드점과 비슷해 청록으로 변경)
@@ -637,12 +673,51 @@ const accumPoints = new Map();
 let matchedSegments = [];              // [[[lat,lon],...], [[lat,lon],...], ...] 구간별 좌표
 let lastMatchedSeq = null;             // 마지막으로 추가한 매칭점의 gps_seq — 연속 여부 판정용
 let matchedRouteLine = null;           // 지속 폴리라인(멀티라인) — setLatLngs 로 연장(재생성 안 함)
+let matchedRouteCasing = null;         // 경로선 테두리(아래에 깔리는 짙은 선) (2026-08-22 최정우 추가)
 let startMarker = null;
 let endMarker = null;
+let endMarkerCls = null;                                  // 현재 도착 마커 클래스(불필요한 재생성 방지)
+
+// 출발·도착 전용 마커 아이콘 — box-shadow 로 다중 테두리를 만든다 (2026-08-22 최정우 추가)
+function seIcon(cls) {
+  return L.divIcon({ className: '', html: '<div class="se-mk ' + cls + '"></div>',
+                     iconSize: [18, 18], iconAnchor: [9, 9] });
+}
 let currentTripId = null;              // 트립 전환 감지용
 
 // 맵매칭 실패(SKIP=3/ERROR=4) 판정 및 GPS 마커 위 X 표시 (2026-08-20 최정우 추가)
 function isMatchFailed(p) { return p.match_status === 3 || p.match_status === 4; }
+
+// 수선의 발 선(G↔M) — 화면 재구성(renderVisiblePoints)과 폴링 두 경로에서 그리는데, 예전엔
+//   각자 다른 스타일로 그려서 지도를 움직이면 연한 2px 선으로 되돌아갔다(실측: G83 이 링크에
+//   묻혀 안 보임). 한 함수로 합쳐 항상 같은 모양이 되게 한다 (2026-08-22 최정우 추가)
+function addPerpLine(p) {
+  L.polyline([[p.gps_lat, p.gps_lon], [p.match_lat, p.match_lon]], {
+    color: '#0f172a', weight: 4.5, opacity: 1, dashArray: '6 4'
+  }).bindTooltip(
+    (p.intersect_len != null ? p.intersect_len + 'm' : '-'),
+    { sticky: true, className: 'tip-intersect' }
+  ).addTo(liveRawLayer).bringToFront();
+}
+// G(원시)·M(매칭) 마커도 화면 재구성과 폴링 두 경로에서 각각 그린다. 스타일을 바꿀 때 한쪽만
+//   고치면 지도를 움직이는 순간 옛 모양으로 되돌아가므로(수선의 발 선에서 실제로 발생),
+//   그리기를 함수 하나로 모아 둔다 (2026-08-22 최정우 추가)
+function addGpsMarker(p) {
+  const gm = L.circleMarker([p.gps_lat, p.gps_lon],
+    { radius: 4, color: RAW_COLOR, weight: 1, fillColor: RAW_COLOR, fillOpacity: 0.55 })
+    .addTo(liveRawLayer);
+  const gpos = G_LABEL_POS[p.gps_seq % G_LABEL_POS.length];
+  bindSeqLabel(gm, 'G' + p.gps_seq, p.gps_lon.toFixed(6) + ', ' + p.gps_lat.toFixed(6), gpos[0], gpos[1]);
+  return gm;
+}
+function addMatchMarker(p) {
+  const mm = L.circleMarker([p.match_lat, p.match_lon],
+    { radius: 4, color: MATCH_POINT_BORDER, weight: 1.5, fillColor: MATCH_POINT_COLOR, fillOpacity: 0.95 })
+    .addTo(liveMatchedPointLayer);
+  const mpos = M_LABEL_POS[p.gps_seq % M_LABEL_POS.length];
+  bindSeqLabel(mm, 'M' + p.gps_seq, p.match_lon.toFixed(6) + ', ' + p.match_lat.toFixed(6), mpos[0], mpos[1]);
+  return mm;
+}
 function addFailXMarker(lat, lon, layer) {
   L.marker([lat, lon], {
     icon: L.divIcon({ className: '', html: '<div class="fail-x-marker">✕</div>', iconSize: [14, 14], iconAnchor: [7, 7] }),
@@ -658,30 +733,17 @@ function renderVisiblePoints() {
   accumPoints.forEach(function (p) {
     if (p.gps_lat == null || p.gps_lon == null) return;
     if (!bounds.contains([p.gps_lat, p.gps_lon])) return;
-    const gm = L.circleMarker([p.gps_lat, p.gps_lon], { radius: 4, color: RAW_COLOR, weight: 1, fillColor: RAW_COLOR, fillOpacity: 0.55 })
-      .addTo(liveRawLayer);
-    const gpos = G_LABEL_POS[p.gps_seq % G_LABEL_POS.length];
-    bindSeqLabel(gm, 'G' + p.gps_seq, p.gps_lon.toFixed(6) + ', ' + p.gps_lat.toFixed(6), gpos[0], gpos[1]);
+    addGpsMarker(p);
     if (isMatchFailed(p)) addFailXMarker(p.gps_lat, p.gps_lon, liveRawLayer);
 
-    if (p.match_lat != null && p.match_lon != null) {
-      L.polyline([[p.gps_lat, p.gps_lon], [p.match_lat, p.match_lon]], {
-        color: '#94a3b8', weight: 2, opacity: 0.85, dashArray: '4 4'
-      }).bindTooltip(
-        (p.intersect_len != null ? p.intersect_len + 'm' : '-'),
-        { sticky: true, className: 'tip-intersect' }
-      ).addTo(liveRawLayer);
-    }
+    if (p.match_lat != null && p.match_lon != null) addPerpLine(p);
   });
 
   liveMatchedPointLayer.clearLayers();
   accumPoints.forEach(function (p) {
     if (p.match_status !== 1 || p.match_lat == null || p.match_lon == null) return;
     if (!bounds.contains([p.match_lat, p.match_lon])) return;
-    const mm = L.circleMarker([p.match_lat, p.match_lon], { radius: 4, color: MATCH_POINT_BORDER, weight: 1.5, fillColor: MATCH_POINT_COLOR, fillOpacity: 0.95 })
-      .addTo(liveMatchedPointLayer);
-    const mpos = M_LABEL_POS[p.gps_seq % M_LABEL_POS.length];
-    bindSeqLabel(mm, 'M' + p.gps_seq, p.match_lon.toFixed(6) + ', ' + p.match_lat.toFixed(6), mpos[0], mpos[1]);
+    addMatchMarker(p);
   });
 }
 map.on('moveend', renderVisiblePoints);
@@ -692,8 +754,10 @@ function resetTripState() {
   matchedSegments = [];
   lastMatchedSeq = null;
   matchedRouteLine = null;
+  matchedRouteCasing = null;
   startMarker = null;
   endMarker = null;
+  endMarkerCls = null;
   liveRawLayer.clearLayers();
   liveMatchedPointLayer.clearLayers();
   liveMatchedLayer.clearLayers();
@@ -706,9 +770,16 @@ function resetTripState() {
 function updateRouteLine() {
   // 구간이 하나도 없거나 전부 점 하나짜리(선 못 그림)면 스킵
   if (!matchedSegments.some(function (seg) { return seg.length >= 2; })) return;
+  // interactive:false — 경로선이 마우스 이벤트를 가로채면 그 아래 도로 링크에 마우스를 올려도
+  //   링크 ID 툴팁이 안 뜬다. 경로선 자체는 정보를 담고 있지 않으므로 이벤트를 통과시킨다
+  //   (2026-08-22 최정우 수정)
   if (!matchedRouteLine) {
-    matchedRouteLine = L.polyline(matchedSegments, { color: MATCH_COLOR, weight: 4, opacity: 0.9 }).addTo(liveMatchedLayer);
+    matchedRouteCasing = L.polyline(matchedSegments,
+      { color: MATCH_CASING, weight: 8, opacity: 0.85, interactive: false }).addTo(liveMatchedLayer);
+    matchedRouteLine = L.polyline(matchedSegments,
+      { color: MATCH_COLOR, weight: 4, opacity: 1, interactive: false }).addTo(liveMatchedLayer);
   } else {
+    if (matchedRouteCasing) matchedRouteCasing.setLatLngs(matchedSegments);
     matchedRouteLine.setLatLngs(matchedSegments);
   }
 }
@@ -721,21 +792,26 @@ function updateStartEndMarkers(t) {
   const lastSeg = matchedSegments[matchedSegments.length - 1];
   if (firstSeg.length === 0 || lastSeg.length === 0) return;
   if (!startMarker) {
-    startMarker = L.circleMarker(firstSeg[0], { radius: 8, color: '#1b5e20', weight: 2, fillColor: '#43a047', fillOpacity: 1 })
-      .bindTooltip('① 시작 (' + fmtTime(t.gps_dt_min) + ')', { permanent: true, direction: 'right', offset: [10, 0], className: 'link-label' })
+    startMarker = L.marker(firstSeg[0], { icon: seIcon('se-start'), zIndexOffset: 900 })
+      .bindTooltip('① 출발 (' + fmtTime(t.gps_dt_min) + ')',
+        { permanent: true, direction: 'right', offset: [14, 0], className: 'se-label s' })
       .addTo(liveMatchedLayer);
   }
   const last = lastSeg[lastSeg.length - 1];
-  const endColor = t.complete ? '#7f0000' : '#e65100';
-  const endFill = t.complete ? '#e53935' : '#fb8c00';
-  const endTooltip = '② ' + (t.complete ? '종료' : '진행중') + ' (' + fmtTime(t.gps_dt_max) + ')';
+  const endCls = t.complete ? 'se-end' : 'se-live';
+  const endTooltip = '② ' + (t.complete ? '도착' : '진행중') + ' (' + fmtTime(t.gps_dt_max) + ')';
   if (!endMarker) {
-    endMarker = L.circleMarker(last, { radius: 8, color: endColor, weight: 2, fillColor: endFill, fillOpacity: 1 })
-      .bindTooltip(endTooltip, { permanent: true, direction: 'right', offset: [10, 0], className: 'link-label' })
+    endMarker = L.marker(last, { icon: seIcon(endCls), zIndexOffset: 1000 })
+      .bindTooltip(endTooltip,
+        { permanent: true, direction: 'right', offset: [14, 0], className: 'se-label ' + (t.complete ? 'e' : 'l') })
       .addTo(liveMatchedLayer);
+    endMarkerCls = endCls;
   } else {
     endMarker.setLatLng(last);
-    endMarker.setStyle({ color: endColor, fillColor: endFill });
+    if (endMarkerCls !== endCls) {                       // 진행중 → 도착 전환 시에만 아이콘 교체
+      endMarker.setIcon(seIcon(endCls));
+      endMarkerCls = endCls;
+    }
     endMarker.setTooltipContent(endTooltip);
   }
 }
@@ -769,6 +845,27 @@ function upsertTableRow(p) {
 //   trip 최초 로드/전환 직후에는 accumPoints 가 비어 있어 모든 점이 "새 점"으로 처리되므로
 //   이 함수 하나로 최초 렌더·트립 전환·증분 갱신을 전부 처리한다(별도 "전체 렌더" 함수 불필요
 //   → 코드 경로가 하나뿐이라 두 경로 간 불일치 버그 위험이 없음) (2026-08-19 최정우 추가)
+// 이미 그린 점의 매칭 결과가 "뒤로" 바뀌었는지 검사 (2026-08-22 최정우 추가)
+//   applyIncrementalUpdate 는 새로 생긴 점만 그리고 지우지는 않는다(폴링 때마다 다시 그리면
+//   지도가 깜빡이므로). 그래서 재매칭으로 match_status 가 풀리거나 다른 링크로 바뀌면
+//   옛 마커·경로선이 그대로 남는다. 그런 변화를 감지하면 전체를 다시 그린다.
+//   앞으로만 진행하는 정상 폴링(미매칭→매칭)에서는 false 라 기존 동작이 유지된다.
+console.log('[viewer] build 0822-4 — needsFullRedraw 포함');
+function needsFullRedraw(points) {
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    const prev = accumPoints.get(p.gps_seq);
+    if (!prev) continue;
+    // 매칭됐던 점이 풀림 (재매칭 대기로 초기화 등)
+    if (prev.match_status === 1 && p.match_status !== 1) return true;
+    // 매칭 링크·좌표가 바뀜 (보정·재매칭 결과)
+    if (prev.match_status === 1 && p.match_status === 1 &&
+        (prev.match_link_id !== p.match_link_id ||
+         prev.match_lat !== p.match_lat || prev.match_lon !== p.match_lon)) return true;
+  }
+  return false;
+}
+
 function applyIncrementalUpdate(points, t) {
   const bounds = map.getBounds().pad(0.25);
 
@@ -786,10 +883,7 @@ function applyIncrementalUpdate(points, t) {
     upsertTableRow(p);
 
     if (isNewSeq && p.gps_lat != null && p.gps_lon != null && bounds.contains([p.gps_lat, p.gps_lon])) {
-      const gm = L.circleMarker([p.gps_lat, p.gps_lon], { radius: 4, color: RAW_COLOR, weight: 1, fillColor: RAW_COLOR, fillOpacity: 0.55 })
-        .addTo(liveRawLayer);
-      const gpos = G_LABEL_POS[p.gps_seq % G_LABEL_POS.length];
-      bindSeqLabel(gm, 'G' + p.gps_seq, p.gps_lon.toFixed(6) + ', ' + p.gps_lat.toFixed(6), gpos[0], gpos[1]);
+      addGpsMarker(p);
     }
 
     if (justFailed && p.gps_lat != null && p.gps_lon != null && bounds.contains([p.gps_lat, p.gps_lon])) {
@@ -807,17 +901,8 @@ function applyIncrementalUpdate(points, t) {
       }
       lastMatchedSeq = p.gps_seq;
       if (p.gps_lat != null && p.gps_lon != null && bounds.contains([p.match_lat, p.match_lon])) {
-        const mm = L.circleMarker([p.match_lat, p.match_lon], { radius: 4, color: MATCH_POINT_BORDER, weight: 1.5, fillColor: MATCH_POINT_COLOR, fillOpacity: 0.95 })
-          .addTo(liveMatchedPointLayer);
-        const mpos = M_LABEL_POS[p.gps_seq % M_LABEL_POS.length];
-        bindSeqLabel(mm, 'M' + p.gps_seq, p.match_lon.toFixed(6) + ', ' + p.match_lat.toFixed(6), mpos[0], mpos[1]);
-
-        L.polyline([[p.gps_lat, p.gps_lon], [p.match_lat, p.match_lon]], {
-          color: '#94a3b8', weight: 2, opacity: 0.85, dashArray: '4 4'
-        }).bindTooltip(
-          (p.intersect_len != null ? p.intersect_len + 'm' : '-'),
-          { sticky: true, className: 'tip-intersect' }
-        ).addTo(liveRawLayer);
+        addMatchMarker(p);
+        addPerpLine(p);
       }
     }
   });
@@ -1031,6 +1116,84 @@ async function fullRefreshKeepTrip() {
   window.addEventListener('resize', hideMenu);
 })();
 
+// ── 지도 아래 과금 이력 패널 (2026-08-22 최정우 추가) ──
+//   prim_chargehand 에는 GPS 순번 컬럼이 없어 서버(/api/trip/<id>/charges)가 prim_rawgps 와
+//   조인해 역산한다. G = 원시 GPS 좌표가 구역 형상 안에 있던 순번 구간(POLY는 폴리곤 포함,
+//   LINE은 zone_line_buf_m 이내), M = 매칭 링크가 그 구역 link_ids 에 속한 구간.
+//   주정차(POLY)는 link_ids 가 없어 M 이 비고, 구역 형상이 없는 유형은 G 가 빈다.
+const CHARGE_TYPE_LABEL = {
+  0: { nm: '일반도로', color: '#afb42b' },
+  1: { nm: '개방형',   color: '#00a152' },
+  2: { nm: '폐쇄형',   color: '#b71c1c' },
+  3: { nm: '구간단속', color: '#8e24aa' },
+  4: { nm: '주정차',   color: '#f57f17' },
+  5: { nm: '면제도로', color: '#d81b60' }
+};
+
+function fmtSeqRange(from, to) {
+  if (from == null || to == null) return '<span class="ch-na">—</span>';
+  return (from === to) ? String(from) : (from + ' ~ ' + to);
+}
+
+function renderChargeRows(rows) {
+  const body = document.getElementById('chargeBody2');
+  const cnt = document.getElementById('chargeCount');
+  if (!body) return;
+  if (!rows || rows.length === 0) {
+    body.innerHTML = '<tr><td colspan="11" class="ch-empty">과금 이력 없음</td></tr>';
+    if (cnt) cnt.textContent = '0건';
+    return;
+  }
+  if (cnt) cnt.textContent = rows.length + '건';
+  body.innerHTML = rows.map(function (r) {
+    const t = CHARGE_TYPE_LABEL[r.charge_type] || { nm: '유형' + r.charge_type, color: '#78909c' };
+    const na = '<span class="ch-na">—</span>';
+    return '<tr>'
+      + '<td class="num">' + r.trip_seq + '</td>'
+      + '<td><span class="ch-type" style="background:' + t.color + '">' + t.nm + '</span></td>'
+      + '<td class="mono">' + fmtSeqRange(r.g_from, r.g_to) + '</td>'
+      + '<td class="mono">' + fmtSeqRange(r.m_from, r.m_to) + '</td>'
+      + '<td class="mono">' + (r.zone_id || na) + '</td>'
+      + '<td>' + (r.zone_name || na) + '</td>'
+      + '<td class="mono">' + (r.tollgate_id || na) + '</td>'
+      + '<td class="mono">' + (r.entry_tollgate_id || na) + '</td>'
+      + '<td class="mono">' + (r.exit_tollgate_id || na) + '</td>'
+      + '<td class="num">' + (r.dist_m != null ? r.dist_m : 0) + '</td>'
+      + '<td class="mono">' + fmtTime(r.occur_dt) + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
+// 패널 높이는 CSS 로 고정했지만, 접힘 상태 전환·창 크기 변경 등으로 지도 영역이 바뀔 수 있어
+//   렌더 후 한 번 알려 준다. 중심·줌은 유지된다 (2026-08-22 최정우 추가)
+function notifyMapResize() {
+  if (typeof map !== 'undefined' && map && typeof map.invalidateSize === 'function') {
+    map.invalidateSize({ animate: false, pan: false });
+  }
+}
+
+async function loadTripCharges(tripId) {
+  const body = document.getElementById('chargeBody2');
+  if (!tripId) { renderChargeRows([]); return; }
+  try {
+    const rows = await fetchJson(apiBase() + '/trip/' + encodeURIComponent(tripId) + '/charges');
+    renderChargeRows(rows);
+  } catch (e) {
+    if (body) body.innerHTML = '<tr><td colspan="11" class="ch-empty">조회 실패: ' + e.message + '</td></tr>';
+  }
+}
+
+(function () {
+  const btn = document.getElementById('chargeToggle');
+  const panel = document.getElementById('chargePanel');
+  if (!btn || !panel) return;
+  btn.addEventListener('click', function () {
+    panel.classList.toggle('collapsed');
+    btn.textContent = panel.classList.contains('collapsed') ? '▴' : '▾';
+    notifyMapResize();      // 지도 높이가 바뀌므로 Leaflet 에 알림(중심·줌 유지)
+  });
+})();
+
 async function refreshLiveTrip() {
   if (pollInFlight) return;
   pollInFlight = true;
@@ -1049,6 +1212,7 @@ async function refreshLiveTrip() {
       document.getElementById('kvState').textContent = '-';
       document.getElementById('lastPoll').textContent =
         '마지막 조회: ' + new Date().toLocaleTimeString('ko-KR') + ' — 트립 없음';
+      renderChargeRows([]);     // 과금 패널도 함께 비움 (2026-08-22 최정우 추가)
       return;
     }
     const tripId = document.getElementById('tripSelect').value || trips[0].trip_id;
@@ -1070,6 +1234,9 @@ async function refreshLiveTrip() {
       points = await fetchJson(apiBase() + '/trip/' + encodeURIComponent(t.trip_id) + '/points');
     } catch (e) {
       document.getElementById('lastPoll').textContent = '조회 실패: ' + e.message;
+      // 옛 과금 이력이 그대로 남아 "지금 데이터"로 오해되지 않게 함께 표시 (2026-08-22 최정우 추가)
+      const cb = document.getElementById('chargeBody2');
+      if (cb) cb.innerHTML = '<tr><td colspan="11" class="ch-empty">조회 실패 — 서버 응답 없음</td></tr>';
       return;
     }
 
@@ -1095,9 +1262,18 @@ async function refreshLiveTrip() {
       loadTripRoads(tripId);
     }
 
+    // 재매칭 등으로 기존 점의 결과가 바뀌었으면 누적 상태를 버리고 처음부터 다시 그린다.
+    //   지도 시점(중심·줌)은 건드리지 않는다 (2026-08-22 최정우 추가)
+    if (!isTripSwitch && needsFullRedraw(points)) {
+      resetTripState();
+    }
+
     // 트립 최초 로드/전환 시엔 accumPoints 가 비어 있어 모든 점이 "새 점"으로 처리되므로
     //   이 한 함수로 최초 렌더·전환·증분 갱신을 모두 처리 (2026-08-19 최정우 추가)
     applyIncrementalUpdate(points, t);
+
+    // 지도 아래 과금 이력 패널 갱신 (2026-08-22 최정우 추가)
+    loadTripCharges(t.trip_id);
 
     document.getElementById('lastPoll').textContent =
       '마지막 조회: ' + new Date().toLocaleTimeString('ko-KR') + ' (' + (POLL_MS/1000) + '초마다 갱신)';
@@ -1119,8 +1295,12 @@ document.getElementById('chkMatched').addEventListener('change', function (e) {
   }
 });
 
+loadZones();          // 과금 구역·게이트를 DB 에서 로드 (2026-08-22 최정우 추가)
 refreshLiveTrip();
 setInterval(refreshLiveTrip, POLL_MS);
+// 과금 패널이 자리를 차지한 뒤 지도 크기를 확정 (2026-08-22 최정우 추가)
+notifyMapResize();
+window.addEventListener('resize', notifyMapResize);
 </script>
 </body>
 </html>

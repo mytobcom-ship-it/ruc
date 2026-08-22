@@ -10,6 +10,7 @@
 CDataLoader::CDataLoader() :
 	m_bLoad(false), 
 	m_nMaxStep(0), 
+	m_dfHopPenalty(MM_HOP_PENALTY), 
 	m_dwGridInfoSize(0), 
 	m_dwGridSgmtInfoSize(0), 
 	m_dwLinkSgmtInfoSize(0), 

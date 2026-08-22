@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>link.psf 바이너리 포맷</title>
+<style>
+  :root {
+    --bg: #f8fafc; --panel: #ffffff; --text: #1e293b; --muted: #64748b;
+    --border: #e2e8f0; --accent: #1e88e5; --code-bg: #f1f5f9;
+    --add: #2e7d32; --del: #c62828; --warn: #ef6c00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a; --panel: #1e293b; --text: #e2e8f0; --muted: #94a3b8;
+      --border: #334155; --accent: #60a5fa; --code-bg: #0b1220;
+      --add: #66bb6a; --del: #ef5350; --warn: #ffa726;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", sans-serif;
+    line-height: 1.65; font-size: 18px;
+  }
+  #layout { display: flex; min-height: 100vh; }
+  nav {
+    width: 260px; flex: none; background: var(--panel); border-right: 1px solid var(--border);
+    padding: 22px 16px; position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  }
+  nav h2 { font-size: 15px; margin: 0 0 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  nav a { display: block; font-size: 15.5px; color: var(--text); text-decoration: none; padding: 7px 9px; border-radius: 6px; line-height: 1.4; }
+  nav a:hover { background: var(--code-bg); }
+  nav .grp { margin-top: 18px; font-size: 12.5px; color: var(--muted); font-weight: 700; padding: 0 9px; }
+  main { flex: 1; padding: 32px 40px 90px; max-width: 1200px; }
+  h1 { font-size: 32px; margin: 0 0 8px; }
+  .subtitle { color: var(--muted); font-size: 16.5px; margin-bottom: 26px; }
+  section { margin-bottom: 56px; scroll-margin-top: 16px; }
+  section h2 { font-size: 26px; border-bottom: 3px solid var(--accent); padding-bottom: 8px; margin-bottom: 10px; }
+  section h3 { font-size: 18px; margin: 26px 0 8px; }
+  section h3 .sz { font-size: 14px; color: var(--muted); font-weight: 400; margin-left: 8px; }
+  .badge-type {
+    display: inline-block; font-size: 14px; font-weight: 700; color: #fff;
+    background: var(--accent); border-radius: 20px; padding: 3px 14px; margin-left: 10px; vertical-align: middle;
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px; overflow-x: auto; margin-bottom: 16px;
+  }
+  code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 14px; }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; overflow-x: auto; font-size: 13.5px; line-height: 1.7; margin: 0 0 16px;
+  }
+  pre b { color: var(--add); }
+  pre s { color: var(--del); text-decoration: line-through; }
+  pre i { color: var(--muted); font-style: normal; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); white-space: nowrap; }
+  td.f { font-family: ui-monospace, Menlo, monospace; font-weight: 700; white-space: nowrap; }
+  td.t { font-family: ui-monospace, Menlo, monospace; color: var(--muted); white-space: nowrap; }
+  td.n { font-family: ui-monospace, Menlo, monospace; text-align: right; white-space: nowrap; }
+  tr.add td { background: color-mix(in srgb, var(--add) 12%, transparent); }
+  .shared {
+    background: var(--code-bg); border-radius: 8px; padding: 10px 16px; font-size: 14.5px; margin: 20px 0;
+  }
+  .shared.warn { border-left: 4px solid var(--warn); }
+  .shared.ok { border-left: 4px solid var(--add); }
+  .shared.info { border-left: 4px solid var(--accent); }
+  footer { color: var(--muted); font-size: 14px; padding: 22px 40px 44px; }
+</style>
+</head>
+<body>
+<div id="layout">
+<nav>
+  <h2>link.psf 포맷</h2>
+  <a href="#overview">파일 구조</a>
+  <a href="#head">FILE_HEAD</a>
+  <a href="#grid">GRID_INFO</a>
+  <a href="#gridsgmt">GRID_SGMT</a>
+  <a href="#linksgmt">LINK_SGMT</a>
+  <a href="#link">LINK_INFO</a>
+  <a href="#turn">TURN_INFO</a>
+  <a href="#struct">구조체 정의</a>
+  <a href="#verify">크기 검증</a>
+  <a href="#change">2026-08-22 변경</a>
+  <div class="grp">참고</div>
+  <a href="../index.html">← 웹 뷰어로</a>
+  <a href="charge-issues.html">→ 과금 유형별 문제점·대응방안</a>
+  <a href="columns.html">→ PRIM_CHARGEHAND 컬럼 비교</a>
+</nav>
+
+<main>
+<h1>link.psf 바이너리 포맷<span class="badge-type">2026-08-22</span></h1>
+<p class="subtitle">
+  맵매칭 기반 데이터 파일의 디스크 레이아웃. <code>CreateData</code>(MakeBinary)가 만들고
+  <code>MapMatchSvr</code>가 읽는다. 두 모듈의 구조체가 <b>바이트 단위로 같아야</b> 한다.
+</p>
+
+<!-- 개요 -->
+<section id="overview">
+<h2>1. 파일 구조</h2>
+<p>
+  모든 구조체는 <code>#pragma pack(push, 1)</code>으로 패딩 없이 저장된다. 엔진은 각 영역을
+  <code>fread</code>로 배열에 통째로 읽어들이므로, 필드 하나만 어긋나도 그 뒤 전체가 밀린다.
+</p>
+<pre>0                                                                        EOF
+├──────────┬───────────┬────────────────┬────────────────┬──────────┬─────────┤
+│ FILE_HEAD│ GRID_INFO │  GRID_SGMT     │  LINK_SGMT     │ LINK_INFO│TURN_INFO│
+│   60 B   │  10 B × N │   26 B × N     │   26 B × N     │ 122 B × N│ 21 B × N│
+└──────────┴───────────┴────────────────┴────────────────┴──────────┴─────────┘
+ 고정        6,224,778   11,138,893       10,227,751      1,555,150  2,244,502</pre>
+
+<div class="card">
+<table>
+  <thead><tr><th>영역</th><th>레코드 크기</th><th>건수</th><th>영역 크기</th><th>시작 위치</th></tr></thead>
+  <tbody>
+    <tr><td class="f">FILE_HEAD</td><td class="n">60 B</td><td class="n">1</td><td class="n">60</td><td class="n">0</td></tr>
+    <tr><td class="f">GRID_INFO</td><td class="n">10 B</td><td class="n">6,224,778</td><td class="n">62,247,780</td><td class="n">60</td></tr>
+    <tr><td class="f">GRID_SGMT</td><td class="n">26 B</td><td class="n">11,138,893</td><td class="n">289,611,218</td><td class="n">62,247,840</td></tr>
+    <tr><td class="f">LINK_SGMT</td><td class="n">26 B</td><td class="n">10,227,751</td><td class="n">265,921,526</td><td class="n">351,859,058</td></tr>
+    <tr><td class="f">LINK_INFO</td><td class="n">122 B</td><td class="n">1,555,150</td><td class="n">189,728,300</td><td class="n">617,780,584</td></tr>
+    <tr><td class="f">TURN_INFO</td><td class="n">21 B</td><td class="n">2,244,502</td><td class="n">47,134,542</td><td class="n">807,508,884</td></tr>
+  </tbody>
+</table>
+</div>
+<p style="font-size:15px;color:var(--muted)">
+  2026-08-22 생성본 실측 · 전체 854,643,426 bytes (815 MB) · 생성 소요 52.8초
+</p>
+</section>
+
+<!-- FILE_HEAD -->
+<section id="head">
+<h2>2. FILE_HEAD<span class="sz"></span></h2>
+<p>파일 선두 60바이트. <code>uint32</code> 15개로 각 영역의 건수·시작위치·크기를 담는다. 버전 필드는 없다.</p>
+<div class="card">
+<table>
+  <thead><tr><th>필드</th><th>형</th><th>크기</th><th>설명</th></tr></thead>
+  <tbody>
+    <tr><td class="f">GRID_COUNT</td><td class="t">uint32</td><td class="n">4</td><td>그리드 셀 개수</td></tr>
+    <tr><td class="f">GRIDSGMT_COUNT</td><td class="t">uint32</td><td class="n">4</td><td>그리드별 세그먼트 개수</td></tr>
+    <tr><td class="f">LINKSGMT_COUNT</td><td class="t">uint32</td><td class="n">4</td><td>링크별 세그먼트 개수</td></tr>
+    <tr><td class="f">LINK_COUNT</td><td class="t">uint32</td><td class="n">4</td><td>링크 개수</td></tr>
+    <tr><td class="f">TURN_COUNT</td><td class="t">uint32</td><td class="n">4</td><td>회전정보 개수</td></tr>
+    <tr><td class="f">GRID_OFFSET / SIZE</td><td class="t">uint32 ×2</td><td class="n">8</td><td>그리드 영역 시작위치·크기</td></tr>
+    <tr><td class="f">GRIDSGMT_OFFSET / SIZE</td><td class="t">uint32 ×2</td><td class="n">8</td><td>그리드 세그먼트 영역</td></tr>
+    <tr><td class="f">LINKSGMT_OFFSET / SIZE</td><td class="t">uint32 ×2</td><td class="n">8</td><td>링크 세그먼트 영역</td></tr>
+    <tr><td class="f">LINK_OFFSET / SIZE</td><td class="t">uint32 ×2</td><td class="n">8</td><td>링크 정보 영역</td></tr>
+    <tr><td class="f">TURN_OFFSET / SIZE</td><td class="t">uint32 ×2</td><td class="n">8</td><td>회전정보 영역</td></tr>
+  </tbody>
+</table>
+</div>
+</section>
+
+<!-- GRID_INFO -->
+<section id="grid">
+<h2>3. GRID_INFO<span class="sz"> — 10 bytes</span></h2>
+<p>
+  전국을 <code>0.003°</code> 격자로 나눈 셀 하나. <b>2,667 × 2,334 = 6,224,778셀</b>이 빈 셀까지
+  전부 미리 생성돼 있어, 좌표로 셀 번호만 계산하면 그 자리의 세그먼트 목록을 바로 얻는다.
+</p>
+<div class="shared info">
+  셀 크기는 도(degree) 단위라 실제 미터가 위도에 따라 다르다 — 수도권(37.5°N) 기준
+  <b>가로 265 m × 세로 333 m</b>, 남해안(34.5°N)은 가로 276 m. 코드 주석의 “300m”는 근사치다.
+  매칭 반경(<code>radius_max=75</code>)이 셀보다 훨씬 작고 3×3 인접 셀을 훑으므로 영향은 없다.
+</div>
+<div class="card">
+<table>
+  <thead><tr><th>필드</th><th>형</th><th>크기</th><th>설명</th></tr></thead>
+  <tbody>
+    <tr><td class="f">GRID_ID</td><td class="t">uint32</td><td class="n">4</td><td>ROW × 2667 + COL</td></tr>
+    <tr><td class="f">SGMT_OFFSET</td><td class="t">uint32</td><td class="n">4</td><td>이 셀의 세그먼트 시작 위치</td></tr>
+    <tr><td class="f">SGMT_COUNT</td><td class="t">uint16</td><td class="n">2</td><td>이 셀의 세그먼트 개수</td></tr>
+  </tbody>
+</table>
+</div>
+</section>
+
+<!-- GRID_SGMT -->
+<section id="gridsgmt">
+<h2>4. GRID_SGMT<span class="sz"> — 26 bytes</span></h2>
+<p>셀 경계로 잘린(clip) 세그먼트. 좌표 기반 후보 검색에 쓰인다.</p>
+<div class="shared ok">
+  한 세그먼트가 여러 셀을 가로지르면 <b>셀마다 잘라 각각 등록</b>한다. 그래서
+  <code>GRIDSGMT_COUNT</code>(11,138,893) ≥ <code>LINKSGMT_COUNT</code>(10,227,751)가
+  항상 성립해야 한다 — 검증 관문의 불변식.
+</div>
+<div class="card">
+<table>
+  <thead><tr><th>필드</th><th>형</th><th>크기</th><th>설명</th></tr></thead>
+  <tbody>
+    <tr><td class="f">SGMT_OFFSET</td><td class="t">uint32</td><td class="n">4</td><td>세그먼트 순번</td></tr>
+    <tr><td class="f">POS_X</td><td class="t">uint32</td><td class="n">4</td><td>시작 경도 × 360000</td></tr>
+    <tr><td class="f">POS_Y</td><td class="t">uint32</td><td class="n">4</td><td>시작 위도 × 360000</td></tr>
+    <tr><td class="f">DIR_ANG</td><td class="t">uint16</td><td class="n">2</td><td>진행 방위각(도)</td></tr>
+    <tr><td class="f">SGMT_LEN</td><td class="t">uint16</td><td class="n">2</td><td>세그먼트 길이(m)</td></tr>
+    <tr><td class="f">LINK_ID</td><td class="t">uint64</td><td class="n">8</td><td>소속 링크</td></tr>
+    <tr><td class="f">FROM_LEN</td><td class="t">uint16</td><td class="n">2</td><td>링크 시작점부터의 거리(m)</td></tr>
+  </tbody>
+</table>
+</div>
+</section>
+
+<!-- LINK_SGMT -->
+<section id="linksgmt">
+<h2>5. LINK_SGMT<span class="sz"> — 26 bytes</span></h2>
+<p>링크별 원본 세그먼트. 필드 구성은 <code>GRID_SGMT</code>와 동일하나 셀 클립이 없다.</p>
+<div class="card">
+<table>
+  <thead><tr><th>필드</th><th>형</th><th>크기</th><th>설명</th></tr></thead>
+  <tbody>
+    <tr><td class="f">SGMT_OFFSET</td><td class="t">uint32</td><td class="n">4</td><td>세그먼트 순번</td></tr>
+    <tr><td class="f">POS_X / POS_Y</td><td class="t">uint32 ×2</td><td class="n">8</td><td>시작 좌표 × 360000</td></tr>
+    <tr><td class="f">DIR_ANG</td><td class="t">uint16</td><td class="n">2</td><td>진행 방위각(도)</td></tr>
+    <tr><td class="f">SGMT_LEN</td><td class="t">uint16</td><td class="n">2</td><td>세그먼트 길이(m)</td></tr>
+    <tr><td class="f">LINK_ID</td><td class="t">uint64</td><td class="n">8</td><td>소속 링크</td></tr>
+    <tr><td class="f">FROM_LEN</td><td class="t">uint16</td><td class="n">2</td><td>링크 시작점부터의 거리(m)</td></tr>
+  </tbody>
+</table>
+</div>
+</section>
+
+<!-- LINK_INFO -->
+<section id="link">
+<h2>6. LINK_INFO<span class="sz"> — 122 bytes (디스크) / 114 bytes (메모리)</span></h2>
+<p>
+  링크 1건의 속성. 엔진은 <code>LINK_ID</code>를 키로 <code>unordered_map</code>을 만들고
+  나머지 <b>114바이트만</b> 값으로 담는다 — 디스크 레코드와 메모리 구조체가 의도적으로 8바이트 다르다.
+</p>
+<div class="card">
+<table>
+  <thead><tr><th>필드</th><th>형</th><th>크기</th><th>설명</th></tr></thead>
+  <tbody>
+    <tr><td class="f">LINK_ID</td><td class="t">uint64</td><td class="n">8</td><td>링크 ID</td></tr>
+    <tr><td class="f">SGMT_OFFSET</td><td class="t">uint32</td><td class="n">4</td><td>세그먼트 시작 위치</td></tr>
+    <tr><td class="f">SGMT_COUNT</td><td class="t">uint16</td><td class="n">2</td><td>세그먼트 개수</td></tr>
+    <tr><td class="f">TURN_OFFSET</td><td class="t">uint32</td><td class="n">4</td><td>회전정보 시작 위치</td></tr>
+    <tr><td class="f">TURN_COUNT</td><td class="t">uint8</td><td class="n">1</td><td>진출 링크 개수</td></tr>
+    <tr><td class="f">MAX_SPD</td><td class="t">uint8</td><td class="n">1</td><td>제한속도(km/h)</td></tr>
+    <tr><td class="f">LINK_LEN</td><td class="t">double</td><td class="n">8</td><td>링크 길이(m)</td></tr>
+    <tr><td class="f">ROAD_RANK</td><td class="t">uint8</td><td class="n">1</td><td>도로등급 101~107</td></tr>
+    <tr><td class="f">CONNECT</td><td class="t">uint8</td><td class="n">1</td><td>연결로 0·1 (규격 101~107은 현 배포본 0건)</td></tr>
+    <tr><td class="f">ROAD_TYPE</td><td class="t">uint8</td><td class="n">1</td><td>000 일반 · 001 고가차도 · 002 지하차도 · 003 교량 · 004 터널</td></tr>
+    <tr><td class="f">LANES</td><td class="t">uint8</td><td class="n">1</td><td>차선 수</td></tr>
+    <tr class="add"><td class="f">REST_VEH</td><td class="t">uint8</td><td class="n">1</td><td>통행제한차량 0 모두 · 3 버스 · 4 트럭 · 5 이륜차 · 6 기타 <b>(신규)</b></td></tr>
+    <tr class="add"><td class="f">ROAD_USE</td><td class="t">uint8</td><td class="n">1</td><td>0 사용 · 1 미사용(4,244건) <b>(신규)</b></td></tr>
+    <tr><td class="f">ROAD_NAME</td><td class="t">char[46]</td><td class="n">46</td><td>도로명</td></tr>
+    <tr><td class="f">STNODE_ID</td><td class="t">uint64</td><td class="n">8</td><td>시작 노드 ID</td></tr>
+    <tr><td class="f">STNODE_X / Y</td><td class="t">uint32 ×2</td><td class="n">8</td><td>시작 노드 좌표 × 360000</td></tr>
+    <tr><td class="f">STNODE_TYPE</td><td class="t">uint8</td><td class="n">1</td><td>노드유형 101~107</td></tr>
+    <tr><td class="f">EDNODE_ID</td><td class="t">uint64</td><td class="n">8</td><td>종료 노드 ID</td></tr>
+    <tr><td class="f">EDNODE_X / Y</td><td class="t">uint32 ×2</td><td class="n">8</td><td>종료 노드 좌표 × 360000</td></tr>
+    <tr><td class="f">EDNODE_TYPE</td><td class="t">uint8</td><td class="n">1</td><td>노드유형 101~107</td></tr>
+    <tr><td class="f">OPPOSITE_ID</td><td class="t">uint64</td><td class="n">8</td><td>반대방향(왕복분리) 짝 링크, 0 = 없음 · 356,796건 채워짐</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="shared info">
+  <b>주행 방향</b>은 <code>STNODE_ID → EDNODE_ID</code>가 정의한다. “A에서 B로 갈 수 있는가”는
+  <code>A.EDNODE_ID == B.STNODE_ID</code>로 판정하며, 그 결과를 미리 펼쳐 놓은 것이 <code>TURN_INFO</code>다.
+  <code>OPPOSITE_ID</code>는 <b>나란히 있는 반대방향 링크</b>로 개념이 다르다 — 짝 링크가 회전 후보로도
+  등장하는 경우는 0.1%뿐이라 둘 다 필요하다.
+</div>
+</section>
+
+<!-- TURN_INFO -->
+<section id="turn">
+<h2>7. TURN_INFO<span class="sz"> — 21 bytes</span></h2>
+<p>
+  진입 → 진출 회전쌍 1건. <b>링크별로 연속 배치</b>되며, 엔진은
+  <code>LINK_INFO.TURN_OFFSET</code>부터 <code>TURN_COUNT</code>개를 순회한다.
+</p>
+<div class="card">
+<table>
+  <thead><tr><th>필드</th><th>형</th><th>크기</th><th>설명</th></tr></thead>
+  <tbody>
+    <tr><td class="f">INLINK_ID</td><td class="t">uint64</td><td class="n">8</td><td>진입 링크</td></tr>
+    <tr><td class="f">OUTLINK_ID</td><td class="t">uint64</td><td class="n">8</td><td>진출 링크 — 엔진이 실제로 읽는 유일한 필드</td></tr>
+    <tr><td class="f">TURN_ANG</td><td class="t">sint16</td><td class="n">2</td><td>회전각 −180 ~ +180(도)</td></tr>
+    <tr class="add"><td class="f">TURN_TYPE</td><td class="t">uint16</td><td class="n">2</td>
+        <td>MOCT 회전제한유형 <b>(신규)</b></td></tr>
+    <tr class="add"><td class="f">TURN_OPER</td><td class="t">uint8</td><td class="n">1</td>
+        <td>0 전일제 · 1 시간제 <b>(신규)</b></td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>TURN_TYPE 코드값</h3>
+<div class="card">
+<table>
+  <thead><tr><th>코드</th><th>규격 정의</th><th>계열</th><th>psf 수록</th></tr></thead>
+  <tbody>
+    <tr><td class="f">001</td><td>비보호회전</td><td>허용</td><td class="n">14</td></tr>
+    <tr><td class="f">002</td><td>버스만회전</td><td>허용</td><td class="n">4</td></tr>
+    <tr><td class="f">003</td><td>회전금지</td><td>금지</td><td class="n">0 (제외됨)</td></tr>
+    <tr><td class="f">011</td><td>U-TURN</td><td>허용</td><td class="n">27,779</td></tr>
+    <tr><td class="f">012</td><td>P-TURN</td><td>허용</td><td class="n">3</td></tr>
+    <tr><td class="f">101</td><td>좌회전금지</td><td>금지</td><td class="n">0 (제외됨)</td></tr>
+    <tr><td class="f">102</td><td>직진금지</td><td>금지</td><td class="n">0 (제외됨)</td></tr>
+    <tr><td class="f">103</td><td>우회전금지</td><td>금지</td><td class="n">0 (제외됨)</td></tr>
+    <tr><td class="f">0</td><td>TURNINFO 미등록</td><td>—</td><td class="n">2,216,701</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="shared warn">
+  <b>표기 주의</b> — <code>strtoul</code>로 읽어 <code>011</code>이 정수 <code>11</code>로 저장된다.
+  값 충돌은 없지만 규격 표기와 달라지므로 <b>출력·로그는 항상 <code>%03u</code></b>로 찍을 것.
+  <br><br>
+  금지 유형은 <code>BinaryMaker</code>가 빌드 시점에 제외하므로 psf에 남지 않는다. 다만 전국
+  16,372건 중 실제로 제외되는 것은 <b>2,273건</b>뿐이다 — 나머지는 진출 링크가 진입 노드에서
+  약 12 m 떨어진 다른 노드에서 시작해(교차로가 방향별로 여러 노드로 분할됨) 애초에 회전 후보가
+  아니기 때문이다.
+</div>
+</section>
+
+<!-- 구조체 -->
+<section id="struct">
+<h2>8. 구조체 정의</h2>
+<p>
+  <code>CreateData/src/DataFormat.h</code>와 <code>MapMatchSvr/src/DataFormat.h</code>에
+  <b>동일하게</b> 반영해야 한다. 구조체명은 구·신 구분 없이 하나를 유지한다.
+</p>
+<pre>#pragma pack(push, 1)
+
+typedef struct sTurnInfoDisk        <i>// 21 bytes</i>
+{
+    uint64      qwInLinkID;         <i>// 진입 링크 ID</i>
+    uint64      qwOutLinkID;        <i>// 진출 링크 ID</i>
+    sint16      nTurnAng;           <i>// 회전 각도 (Degree, -180~180)</i>
+    <b>uint16      nTurnType;          // MOCT 회전제한유형 (011 은 11 로 저장)</b>
+    <b>uint8       nTurnOper;          // MOCT 회전제한운영 0:전일제, 1:시간제</b>
+} TURN_INFO_DISK, *PTURN_INFO_DISK;
+
+typedef struct sLinkInfoData        <i>// 122 bytes</i>
+{
+    uint64      qwLinkID;           <i>// 링크 ID</i>
+    uint32      dwSgmtOffset;       <i>// 세그먼트 시작 Offset</i>
+    uint16      wSgmtCount;         <i>// 세그먼트 개수</i>
+    uint32      dwTurnOffset;       <i>// 회전 정보 Offset</i>
+    uint8       nTurnCount;         <i>// 진출 링크 개수</i>
+    uint8       nMaxSpeed;          <i>// 제한 속도 (km/h)</i>
+    double      dfLen;              <i>// 링크 길이 (m)</i>
+    uint8       nRoadRank;          <i>// 도로 등급</i>
+    uint8       nConnect;           <i>// 연결로 코드</i>
+    uint8       nRoadType;          <i>// 도로 유형</i>
+    uint8       nLanes;             <i>// 차선 수</i>
+    <b>uint8       nRestVeh;           // 통행제한차량 (현재 매칭 판정 미사용)</b>
+    <b>uint8       nRoadUse;           // 도로사용여부 (현재 매칭 판정 미사용)</b>
+    char        szRoadName[46];     <i>// 도로명</i>
+    uint64      qwStNodeID;         <i>// 시작 노드 ID</i>
+    uint32      dwStNodeX;          <i>// 시작 노드 X (Degree * 360000)</i>
+    uint32      dwStNodeY;          <i>// 시작 노드 Y</i>
+    uint8       nStNodeType;        <i>// 시작 노드 유형</i>
+    uint64      qwEdNodeID;         <i>// 종료 노드 ID</i>
+    uint32      dwEdNodeX;          <i>// 종료 노드 X</i>
+    uint32      dwEdNodeY;          <i>// 종료 노드 Y</i>
+    uint8       nEdNodeType;        <i>// 종료 노드 유형</i>
+    uint64      qwOppositeLinkID;   <i>// 반대방향 짝 링크 ID, 0=없음</i>
+} LINK_INFO_DATA, *PLINK_INFO_DATA;
+
+#pragma pack(pop)</pre>
+</section>
+
+<!-- 검증 -->
+<section id="verify">
+<h2>9. 크기 검증 — 버전 필드를 대신한다</h2>
+<p>
+  헤더에 버전 필드가 없지만, 엔진이 로드 시점에 <b>5개 영역 전부</b>를 검사한다.
+  구조체 크기가 바뀌면 여기서 걸려 기동이 중단되므로 조용한 오파싱은 일어나지 않는다.
+</p>
+<pre><i>// MapMatchSvr/src/DataLoader.cpp — 영역마다 동일한 형태로 5회</i>
+if ((dwTurnInfoCount * TURN_INFO_SIZE) != dwTurnInfoSize)
+{
+    LOGFMTE("turn info size is not same!");
+    return m_bLoad;              <i>// false</i>
+}
+
+<i>// Server.cpp — 로드 실패는 기동 실패로 이어진다</i>
+if (!m_pcDataLoader-&gt;SetDataUpdate())
+{
+    LOGFMTE("binary data load failed!file=[%s]", m_strDataFile.c_str());
+    Uninitialize();
+    return false;                <i>// 서버 기동 중단</i>
+}</pre>
+<div class="shared warn">
+  <b>한계</b> — 크기가 바뀌지 않는 변경(같은 <code>uint8</code> 필드의 코드 의미만 바뀌는 등)은
+  이 검사로 잡히지 않는다. 그런 변경이 필요해지면 그때 버전 도입을 다시 검토할 것.
+  <br><br>
+  <b>배포 제약</b> — <code>CreateData</code>와 <code>MapMatchSvr</code>는 반드시 함께 재빌드·배포해야 한다.
+  <code>make</code>는 <code>src/</code>에 만들고 실행은 <code>bin/</code>에서 하므로
+  <b><code>make install</code>을 빠뜨리면 구버전이 돌아 구포맷 psf가 생성된다.</b>
+</div>
+</section>
+
+<!-- 변경 -->
+<section id="change">
+<h2>10. 2026-08-22 변경 내역</h2>
+<div class="card">
+<table>
+  <thead><tr><th>구조체</th><th>변경</th><th>크기</th><th>사유</th></tr></thead>
+  <tbody>
+    <tr><td class="f">TURN_INFO</td>
+        <td><code>dwTurnOffset</code> 제거<br><code>nTurnType</code>·<code>nTurnOper</code> 추가</td>
+        <td class="n">22 → 21</td>
+        <td>제거한 필드는 값이 자기 배열 인덱스와 항상 같아(전국 2,219,122건 전량 확인) 읽는 쪽이 이미 아는 정보였다. 회전 유형은 빌드 시점에만 쓰이고 버려지던 것을 엔진까지 전달한다.</td></tr>
+    <tr><td class="f">LINK_INFO</td>
+        <td><code>nRestVeh</code>·<code>nRoadUse</code> 추가</td>
+        <td class="n">120 → 122</td>
+        <td>현재 매칭 판정에는 쓰지 않으나, 차종 축 정리·미사용 도로 제외를 나중에 하려면 psf를 또 재생성해야 하므로 미리 싣는다.</td></tr>
+    <tr><td class="f">FILE_HEAD</td>
+        <td>변경 없음 (버전 필드 미도입)</td>
+        <td class="n">60</td>
+        <td>위 9절의 크기 검증이 같은 역할을 한다.</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="shared ok">
+  회전정보는 <b>2,216,851 → 2,244,502건(+27,651)</b>으로 늘었다. <code>TURNINFO</code>가
+  “회전 가능”으로 명시했지만 노드ID로는 이어지지 않던 쌍을 보완해 넣은 결과로, U-TURN이
+  <b>150건 → 27,779건</b>이 됐다. 노드 좌표 근접(15 m)으로 넓히는 방식은 회전 후보가
+  <b>+129%</b> 폭증해 채택하지 않았다.
+</div>
+</section>
+
+<footer>
+  구조체 원본 <code>CreateData/src/DataFormat.h</code> · <code>MapMatchSvr/src/DataFormat.h</code><br>
+  코드값 근거 <code>doc/지능형교통체계ITS+표준+노드링크+구축+및+운영지침.PDF</code> 24쪽 ·
+  DB <code>network.moct_code</code> 53건<br>
+  실측 <code>MapMatchSvr/bin/link.psf</code> 2026-08-22 생성본
+</footer>
+</main>
+</div>
+</body>
+</html>

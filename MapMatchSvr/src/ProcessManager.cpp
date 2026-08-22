@@ -312,6 +312,40 @@ bool CProcessManager::FindNearestSegment(const sRawLogInfo& stRawLogInfo,
 }
 
 /**
+ * @brief 특정 링크 쪽으로 편향해 초기(BEGIN) 재매칭
+ * @param[in] stRawLogInfo 원시 GPS 로그
+ * @param[in] qwBiasLinkID 편향 기준 링크 (보통 "다음 확정 링크")
+ * @param[out] pstMatchLinkInfo 재매칭 결과
+ * @return true(성공), false(실패)
+ * @remark
+ * \tBEGIN 매칭은 heading 을 무시하고 거리만으로 판정한다(bIgnoreHeading, 2026-08-19).
+ * \t왕복분리 도로는 짝 링크가 10m 남짓 옆에 나란히 있어 거리 차가 무의미한데도 더 가까운
+ * \t쪽이 뽑히므로, 트립 첫 점이 반대방향 링크에 붙는 일이 생긴다.
+ * \t(실측 trip 000376_20260819094414 seq1 — 정답 7.68m, 반대방향 4.16m)
+ *
+ * \t첫 점 heading 은 신뢰할 수 없다(전국 21트립 실측: 이후 점들의 평균 방향과 41° 어긋남).
+ * \t그래서 heading 이 아니라 "이미 확정된 다음 점의 링크"를 편향 기준으로 삼아 다시 고른다.
+ * \tqwBiasLinkID 는 BuildConnectedSet 으로 연결 집합이 되고, 그 밖의 후보는 cost 에
+ * \tMM_CONNECT_PENALTY(30m)가 붙는다 — 위 사례의 거리차 3.5m 를 충분히 뒤집는다.
+ * \t(2026-08-22 최정우 추가)
+*/
+bool CProcessManager::RematchBeginBiased(const sRawLogInfo& stRawLogInfo,
+		uint64 qwBiasLinkID, MATCH_LINK_INFO *pstMatchLinkInfo)
+{
+	if ((m_pcMapMatch == nullptr) || (pstMatchLinkInfo == nullptr) || (qwBiasLinkID == 0))
+		return false;
+
+	MAP_MATCH_INPUT stInput;
+	BuildMapMatchInput(stRawLogInfo, &stInput, 0, nullptr);
+	stInput.qwLinkID = 0;					// 연속 아님 — BEGIN 경로로 태운다
+	stInput.qwBiasLinkID = qwBiasLinkID;	// 다음 확정 링크 쪽으로 편향
+
+	MATCH_TRACE_CTX stTraceCtx;
+	FillMatchTraceCtx(stTraceCtx, m_nThreadId, stRawLogInfo, stInput, 0, false, nullptr);
+	return m_pcMapMatch->BeginMapMatch(stInput, pstMatchLinkInfo, &stTraceCtx);
+}
+
+/**
  * @brief 진단반경 초과여도 기하 최근접 세그먼트 1건 (SKIP 참고용) (2026-07-10 최정우 수정)
  * @remark 정식·진단반경 매칭 실패 후 호출. MATCHED 아님, 세션 링크·앵커 미갱신.
 */

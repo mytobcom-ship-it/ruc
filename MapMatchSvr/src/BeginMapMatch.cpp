@@ -27,6 +27,78 @@ CBeginMapMatch::~CBeginMapMatch()
  * @param[out] pstMatchEntry 검색 정보
  * @return true(성공), false(실패)
 */
+/**
+ * @brief 링크 진행 방위각 (시작 노드 → 종료 노드)
+*/
+sint16 CBeginMapMatch::GetLinkAzimuth(PLINK_INFO pstLinkInfo)
+{
+	POINT stFrom;
+	POINT stTo;
+	stFrom.dfX = static_cast<double>(pstLinkInfo->dwStNodeX);
+	stFrom.dfY = static_cast<double>(pstLinkInfo->dwStNodeY);
+	stTo.dfX   = static_cast<double>(pstLinkInfo->dwEdNodeX);
+	stTo.dfY   = static_cast<double>(pstLinkInfo->dwEdNodeY);
+	return m_cGISUtil.GetDirAngleDegree(stFrom, stTo);
+}
+
+/**
+ * @brief 왕복분리 짝 링크 heading 교정
+ * @param[in] stSgmtMatchInput 세그먼트 매칭 입력 (heading·속도)
+ * @param[in,out] listMatchEntryList 비용순 정렬된 후보 목록 (교정 시 짝 링크를 맨 앞으로)
+ * @remark
+ * \t자세한 배경은 DataDefine.h 의 MM_OPP_FIX_* 주석 참고.
+ * \t확신이 없으면(채택 링크·짝 링크 둘 다 애매) 아무것도 하지 않는다.
+ * \t(2026-08-22 최정우 추가)
+*/
+void CBeginMapMatch::FixOppositePairByHeading(const SGMT_MATCH_INPUT& stSgmtMatchInput,
+		list<MATCH_ENTRY>& listMatchEntryList)
+{
+	if (listMatchEntryList.empty())
+		return;
+	if (stSgmtMatchInput.nDirAng == NO_ANGLE)
+		return;
+	// 정지·저속 구간의 heading 은 신뢰할 수 없다
+	if ((stSgmtMatchInput.nSpeed == NO_SPEED) || (stSgmtMatchInput.nSpeed < MM_OPP_FIX_MIN_SPEED))
+		return;
+	if (m_pcDataLoader == nullptr)
+		return;
+
+	const uint64 qwTopLinkID = listMatchEntryList.begin()->qwLinkID;
+	PLINK_INFO pstTop = m_pcDataLoader->GetLinkInfo(qwTopLinkID);
+	if ((pstTop == nullptr) || (pstTop->qwOppositeLinkID == 0))
+		return;
+
+	PLINK_INFO pstOpp = m_pcDataLoader->GetLinkInfo(pstTop->qwOppositeLinkID);
+	if (pstOpp == nullptr)
+		return;
+
+	sint16 nHeading = stSgmtMatchInput.nDirAng;
+	sint16 nTopAz = GetLinkAzimuth(pstTop);
+	sint16 nOppAz = GetLinkAzimuth(pstOpp);
+
+	// 채택 링크가 heading 과 거의 정반대가 아니면 교정 대상이 아니다
+	if (abs(m_cGISUtil.GetAngleDiff(nTopAz, nHeading)) < MM_OPP_FIX_REV_DEG)
+		return;
+	// 짝 링크도 heading 과 안 맞으면 확신이 없으므로 건드리지 않는다
+	if (abs(m_cGISUtil.GetAngleDiff(nOppAz, nHeading)) > MM_OPP_FIX_FWD_DEG)
+		return;
+
+	// 후보 목록에 짝 링크가 있으면 맨 앞으로 (반경 밖이면 후보에 없을 수 있다)
+	for (list<MATCH_ENTRY>::iterator it = listMatchEntryList.begin();
+			it != listMatchEntryList.end(); ++it)
+	{
+		if (it->qwLinkID != pstTop->qwOppositeLinkID)
+			continue;
+
+		LOGFMTI("begin opposite pair fix!link=[%lu]->[%lu], heading=[%d], az=[%d]->[%d], speed=[%d]",
+			qwTopLinkID, pstTop->qwOppositeLinkID, nHeading, nTopAz, nOppAz, stSgmtMatchInput.nSpeed);
+		MATCH_ENTRY stFixed = *it;
+		listMatchEntryList.erase(it);
+		listMatchEntryList.push_front(stFixed);
+		return;
+	}
+}
+
 bool CBeginMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& stSgmtMatchInput, 
 		uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry, PMATCH_TRACE_CTX pstTraceCtx,
 		uint64 qwBiasLinkID)
@@ -104,6 +176,9 @@ bool CBeginMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& 
 
 	*pwErrorCode = NO_ERROR;
 	listMatchEntryList.sort();
+	// 왕복분리 짝 링크 오매칭 교정 — BEGIN 은 heading 을 무시하므로 거리로만 고르면
+	//   10m 옆 반대방향 링크가 채택될 수 있다 (2026-08-22 최정우 추가)
+	FixOppositePairByHeading(stSgmtMatchInput, listMatchEntryList);
 	if (pstTraceCtx != nullptr)
 	{
 		pstTraceCtx->nMatchedStep = 0;

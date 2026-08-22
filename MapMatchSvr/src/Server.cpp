@@ -188,6 +188,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	m_nCoordinateType = static_cast<uint8>(stConfig.nGeodetic);
 	m_nRadius = static_cast<sint16>(stConfig.nRadius);
 	m_nMaxStep = static_cast<uint16>(stConfig.nMaxStep);
+	m_dfHopPenalty = stConfig.dfHopPenalty;					// (2026-08-22 최정우 추가)
 	m_dwMaxDistance = static_cast<uint32>(stConfig.nDistance);
 	m_nMatchTimeout = stConfig.nMatchTimeout;
 	m_dfRadiusScale = stConfig.dfRadiusScale;
@@ -213,6 +214,8 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	m_nGateReloadSec = stConfig.nGateReloadSec;					// (2026-08-12 최정우 추가)
 	m_nParkBuf = stConfig.nParkBuf;								// (2026-08-13 최정우 추가)
 	m_nParkExitCnt = stConfig.nParkExitCnt;						// (2026-08-13 최정우 추가)
+	m_nParkSpeedMax = stConfig.nParkSpeedMax;					// (2026-08-22 최정우 추가)
+	m_nParkEntryCnt = stConfig.nParkEntryCnt;					// (2026-08-22 최정우 추가)
 	m_nParkRegraceSec = stConfig.nParkRegraceSec;					// (2026-08-14 최정우 추가)
 	m_nParkTtlSec = stConfig.nParkTtlSec;							// (2026-08-19 최정우 추가)
 	m_nExemptRegraceSec = stConfig.nExemptRegraceSec;				// (2026-08-14 최정우 추가)
@@ -407,6 +410,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	LOGFMTI("data loader memory allocate success!");
 
 	// 맵매칭 바이너리 데이터 로더 경로·maxstep 설정 (2026-07-08 최정우 주석 추가)
+	m_pcDataLoader->SetHopPenalty(m_dfHopPenalty);				// (2026-08-22 최정우 추가)
 	m_pcDataLoader->Initialize(m_strDataFile, m_nMaxStep);
 	// link.psf 등 기반 데이터 메모리 적재 (2026-07-08 최정우 주석 추가)
 	if (!m_pcDataLoader->SetDataUpdate())
@@ -511,6 +515,8 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	stWorkerConfig.nHeadingMaxDist = static_cast<int>(m_dwMaxDistance);	// [mapmatch] distance → live heading 거리 상한 (2026-07-15 최정우 추가)
 	stWorkerConfig.nParkBuf = m_nParkBuf;						// (2026-08-13 최정우 추가)
 	stWorkerConfig.nParkExitCnt = m_nParkExitCnt;				// (2026-08-13 최정우 추가)
+	stWorkerConfig.nParkSpeedMax = m_nParkSpeedMax;				// (2026-08-22 최정우 추가)
+	stWorkerConfig.nParkEntryCnt = m_nParkEntryCnt;				// (2026-08-22 최정우 추가)
 	stWorkerConfig.nParkRegraceSec = m_nParkRegraceSec;			// (2026-08-14 최정우 추가)
 	stWorkerConfig.nParkTtlSec = m_nParkTtlSec;					// (2026-08-19 최정우 추가)
 	stWorkerConfig.nExemptRegraceSec = m_nExemptRegraceSec;		// (2026-08-14 최정우 추가)

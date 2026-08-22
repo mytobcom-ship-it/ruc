@@ -32,6 +32,10 @@ public:
 	virtual ~CBeginMapMatch();
 
 	// qwBiasLinkID : 연속실패 후 Begin 재검색 시 직전 성공 링크(연결성 편향, 0=미적용) (2026-07-15 최정우 추가)
+	// 왕복분리 짝 링크 heading 교정 (2026-08-22 최정우 추가)
+	sint16 GetLinkAzimuth(PLINK_INFO pstLinkInfo);
+	void FixOppositePairByHeading(const SGMT_MATCH_INPUT& stSgmtMatchInput,
+			list<MATCH_ENTRY>& listMatchEntryList);
 	bool StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& stSgmtMatchInput, 
 		uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry, PMATCH_TRACE_CTX pstTraceCtx = nullptr,
 		uint64 qwBiasLinkID = 0);

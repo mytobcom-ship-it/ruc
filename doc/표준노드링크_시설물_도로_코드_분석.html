@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>표준노드·링크 시설물·도로 코드 분석</title>
+  <style>
+    :root { --navy:#142b45; --blue:#1769aa; --green:#18794e; --amber:#9a6700; --red:#b42318; --ink:#20262e; --muted:#5d6875; --line:#d9e0e7; --page:#f4f7fa; }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; }
+    body { margin:0; color:var(--ink); background:var(--page); font-family:"Pretendard","Noto Sans KR","Malgun Gothic",sans-serif; line-height:1.65; }
+    .hero { padding:54px 24px 46px; color:#fff; background:linear-gradient(135deg,#10253c 0%,#174f7c 60%,#178070 100%); }
+    .hero-inner, main { max-width:1260px; margin:0 auto; }
+    h1 { margin:0 0 12px; font-size:clamp(28px,4vw,44px); line-height:1.25; }
+    .subtitle { max-width:920px; margin:0; color:#d9eafa; font-size:17px; }
+    .meta { display:flex; flex-wrap:wrap; gap:8px; margin-top:22px; }
+    .meta span { padding:6px 11px; border:1px solid #ffffff42; border-radius:999px; background:#ffffff14; font-size:13px; }
+    main { padding:30px 22px 70px; }
+    nav, section, .notice { margin-bottom:22px; padding:24px; border:1px solid var(--line); border-radius:14px; background:#fff; box-shadow:0 6px 20px #18334d0a; }
+    nav { display:flex; flex-wrap:wrap; gap:8px; }
+    nav a { padding:7px 11px; border-radius:8px; color:var(--blue); background:#eaf4fc; text-decoration:none; font-weight:700; font-size:14px; }
+    h2 { margin:0 0 16px; color:var(--navy); font-size:25px; }
+    h3 { margin:23px 0 10px; color:var(--navy); font-size:19px; }
+    p { margin:8px 0; }
+    code { padding:2px 5px; border-radius:5px; color:#203e5d; background:#eef2f6; font-family:Consolas,monospace; }
+    .grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:13px; }
+    .metric { padding:18px; border:1px solid var(--line); border-radius:12px; background:#fbfdff; }
+    .metric strong { display:block; color:var(--navy); font-size:27px; line-height:1.2; }
+    .metric span { color:var(--muted); font-size:13px; }
+    .notice { border-left:5px solid var(--amber); background:#fff7d6; }
+    .notice strong { color:#704d00; }
+    .danger { border-left-color:var(--red); background:#fff0ee; }
+    .ok { border-left-color:var(--green); background:#eaf7f0; }
+    .table-wrap { overflow-x:auto; border:1px solid var(--line); border-radius:10px; }
+    table { width:100%; border-collapse:collapse; background:#fff; font-size:14px; }
+    th, td { padding:11px 12px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { position:sticky; top:0; color:var(--navy); background:#edf3f8; white-space:nowrap; }
+    tbody tr:hover { background:#f8fbfd; }
+    tr:last-child td { border-bottom:0; }
+    .num { text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
+    .code { color:var(--blue); font-family:Consolas,monospace; font-size:16px; font-weight:800; }
+    .zero { color:var(--muted); }
+    .warn { color:var(--red); font-weight:700; }
+    .same { color:var(--green); font-weight:700; }
+    .tag { display:inline-block; padding:2px 7px; border-radius:999px; color:#1261a0; background:#e5f2fc; font-size:12px; font-weight:700; }
+    .bar { min-width:130px; height:8px; margin-top:6px; overflow:hidden; border-radius:99px; background:#e7edf2; }
+    .bar span { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,#2382c1,#20a17b); }
+    .two-col { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+    ul { margin:8px 0; padding-left:22px; }
+    a { color:var(--blue); }
+    .small { color:var(--muted); font-size:12px; }
+    footer { max-width:1260px; margin:0 auto; padding:0 22px 40px; color:var(--muted); font-size:13px; }
+    @media(max-width:820px) { .grid,.two-col{grid-template-columns:1fr;} main{padding-left:12px;padding-right:12px;} nav,section,.notice{padding:17px;} }
+    @media print { body{background:#fff;} .hero{padding:25px;color:#000;background:#fff;border-bottom:2px solid #000;} .subtitle{color:#333;} nav{display:none;} section,.notice{box-shadow:none;break-inside:avoid;} th{position:static;} }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="hero-inner">
+      <h1>시설물·도로 코드 분석</h1>
+      <p class="subtitle">지능형교통체계 표준노드·링크의 노드유형, 도로유형, 도로등급,
+        연결로·사용·중용구간·통행제한 코드를 공식 정의와 전국 원본 건수로 정리한다.</p>
+      <div class="meta"><span>작성일 2026-08-22</span><span>노드 1,178,457건</span><span>링크 1,555,150건</span><span>원본 CreateData/data</span></div>
+    </div>
+  </header>
+
+  <main>
+    <nav><a href="#summary">요약</a><a href="#node-type">노드·시설물</a><a href="#road-type">도로유형</a><a href="#road-rank">도로등급</a><a href="#road-flags">도로 속성</a><a href="#conflicts">코드 차이</a><a href="#sources">근거</a></nav>
+
+    <div class="notice danger">
+      <strong>중요:</strong> 현재 <code>CreateData/src/DataDefine.h</code>의 <code>ROAD_TYPE</code>·<code>NODE_TYPE</code>
+      설명은 2023년 국토교통부 고시 코드표와 다르다. 본 문서는 공식 규격을 기준으로 하고,
+      실제 원본의 코드 건수를 병기한다.
+    </div>
+
+    <section id="summary">
+      <h2>1. 분석 범위</h2>
+      <div class="grid">
+        <div class="metric"><strong>1,178,457</strong><span>MOCT_NODE 전체</span></div>
+        <div class="metric"><strong>1,555,150</strong><span>MOCT_LINK 전체</span></div>
+        <div class="metric"><strong>7 + 5</strong><span>실제 NODE_TYPE + ROAD_TYPE 코드</span></div>
+      </div>
+      <p>“시설물 코드”는 노드가 설치된 이유를 나타내는 <code>NODE_TYPE</code>과,
+        링크의 물리적 구조를 나타내는 <code>ROAD_TYPE</code>으로 나누어 정리했다.</p>
+    </section>
+
+    <section id="node-type">
+      <h2>2. NODE_TYPE — 노드·시설물 유형</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>코드</th><th>2023 공식 정의</th><th>노드 설정 위치·설명</th><th class="num">실제 건수</th><th class="num">비율</th><th>분포</th></tr></thead>
+          <tbody>
+            <tr><td class="code">101</td><td>교차로 시·종점</td><td>교차로의 진입·진출 경계</td><td class="num">885,309</td><td class="num">75.124%</td><td><div class="bar"><span style="width:75.124%"></span></div></td></tr>
+            <tr><td class="code">102</td><td>도로 시·종점</td><td>도로가 시작되거나 종료되는 지점</td><td class="num">42,566</td><td class="num">3.612%</td><td><div class="bar"><span style="width:3.612%"></span></div></td></tr>
+            <tr><td class="code">103</td><td>속성변화점</td><td>도로 부가시설물, 도로운영 변환점 등</td><td class="num">22,057</td><td class="num">1.872%</td><td><div class="bar"><span style="width:1.872%"></span></div></td></tr>
+            <tr><td class="code">104</td><td>도로시설물</td><td>교량·터널·고가·지하차도 등 도로구조 변환점, 교통 진출입점</td><td class="num">71,692</td><td class="num">6.084%</td><td><div class="bar"><span style="width:6.084%"></span></div></td></tr>
+            <tr><td class="code">105</td><td>행정경계</td><td>시·도, 시·군·구 등 행정구역 변환점</td><td class="num">4,329</td><td class="num">0.367%</td><td><div class="bar"><span style="width:0.367%"></span></div></td></tr>
+            <tr><td class="code">106</td><td>연결로접속부</td><td>진출입로 또는 IC·JC 연결로의 접속지점</td><td class="num">12,106</td><td class="num">1.027%</td><td><div class="bar"><span style="width:1.027%"></span></div></td></tr>
+            <tr><td class="code">107</td><td>최소노드배치점</td><td>연속류도로·교차로 간 링크가 긴 경우 분할하는 지점</td><td class="num">140,398</td><td class="num">11.914%</td><td><div class="bar"><span style="width:11.914%"></span></div></td></tr>
+            <tr class="zero"><td class="code">109</td><td>기타</td><td>위 유형으로 분류할 수 없는 노드</td><td class="num">0</td><td class="num">0%</td><td>현재 원본에 없음</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="small">원본 NODE_NAME 확인 결과 `103`은 “속성변화점”, `104`는 교량·터널·지하차도, `105`는 행정경계, `106`은 IC·JC, `107`은 “최소노드배치점” 명칭과 일치했다.</p>
+    </section>
+
+    <section id="road-type">
+      <h2>3. ROAD_TYPE — 도로구조·시설물 유형</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>코드</th><th>공식 정의</th><th>해석</th><th class="num">실제 건수</th><th class="num">비율</th><th>분포</th></tr></thead>
+          <tbody>
+            <tr><td class="code">000</td><td>일반도로</td><td>고가·지하·교량·터널이 아닌 일반 구간</td><td class="num">1,509,012</td><td class="num">97.033%</td><td><div class="bar"><span style="width:97.033%"></span></div></td></tr>
+            <tr><td class="code">001</td><td>고가차도</td><td>다른 도로·지형 위를 통과하는 고가 구간</td><td class="num">1,405</td><td class="num">0.090%</td><td><div class="bar"><span style="width:0.09%"></span></div></td></tr>
+            <tr><td class="code">002</td><td>지하차도</td><td>다른 도로·지형 아래를 통과하는 지하 구간</td><td class="num">2,459</td><td class="num">0.158%</td><td><div class="bar"><span style="width:0.158%"></span></div></td></tr>
+            <tr><td class="code">003</td><td>교량</td><td>하천·계곡·도로 등을 건너는 교량 구간</td><td class="num">35,813</td><td class="num">2.303%</td><td><div class="bar"><span style="width:2.303%"></span></div></td></tr>
+            <tr><td class="code">004</td><td>터널</td><td>산지·지하 등을 관통하는 터널 구간</td><td class="num">6,461</td><td class="num">0.415%</td><td><div class="bar"><span style="width:0.415%"></span></div></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="notice danger"><strong>소스 불일치:</strong> <code>DataDefine.h</code>는 `001=교량, 002=터널, 003=고가, 004=지하`로 정의하지만,
+        공식 2023 코드표는 `001=고가차도, 002=지하차도, 003=교량, 004=터널`이다.</div>
+    </section>
+
+    <section id="road-rank">
+      <h2>4. ROAD_RANK — 도로등급</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>코드</th><th>공식 정의</th><th class="num">실제 건수</th><th class="num">비율</th><th>분포</th></tr></thead>
+          <tbody>
+            <tr><td class="code">101</td><td>고속국도</td><td class="num">28,339</td><td class="num">1.822%</td><td><div class="bar"><span style="width:1.822%"></span></div></td></tr>
+            <tr><td class="code">102</td><td>도시고속국도</td><td class="num">3,028</td><td class="num">0.195%</td><td><div class="bar"><span style="width:0.195%"></span></div></td></tr>
+            <tr><td class="code">103</td><td>일반국도</td><td class="num">141,467</td><td class="num">9.097%</td><td><div class="bar"><span style="width:9.097%"></span></div></td></tr>
+            <tr><td class="code">104</td><td>특별·광역시도</td><td class="num">253,571</td><td class="num">16.305%</td><td><div class="bar"><span style="width:16.305%"></span></div></td></tr>
+            <tr><td class="code">105</td><td>국가지원지방도</td><td class="num">41,712</td><td class="num">2.682%</td><td><div class="bar"><span style="width:2.682%"></span></div></td></tr>
+            <tr><td class="code">106</td><td>지방도</td><td class="num">140,144</td><td class="num">9.012%</td><td><div class="bar"><span style="width:9.012%"></span></div></td></tr>
+            <tr><td class="code">107</td><td>시·군도</td><td class="num">946,889</td><td class="num">60.887%</td><td><div class="bar"><span style="width:60.887%"></span></div></td></tr>
+            <tr class="zero"><td class="code">108</td><td>기타</td><td class="num">0</td><td class="num">0%</td><td>현재 원본에 없음</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="road-flags">
+      <h2>5. 기타 도로 속성 코드</h2>
+      <div class="two-col">
+        <div>
+          <h3>ROAD_USE — 도로사용여부</h3>
+          <div class="table-wrap"><table><thead><tr><th>코드</th><th>의미</th><th class="num">건수</th><th class="num">비율</th></tr></thead><tbody>
+            <tr><td class="code">0</td><td>사용</td><td class="num">1,550,906</td><td class="num">99.727%</td></tr>
+            <tr><td class="code">1</td><td>미사용</td><td class="num">4,244</td><td class="num">0.273%</td></tr>
+          </tbody></table></div>
+        </div>
+        <div>
+          <h3>MULTI_LINK — 중용구간여부</h3>
+          <div class="table-wrap"><table><thead><tr><th>코드</th><th>의미</th><th class="num">건수</th><th class="num">비율</th></tr></thead><tbody>
+            <tr><td class="code">0</td><td>독립구간</td><td class="num">1,536,885</td><td class="num">98.826%</td></tr>
+            <tr><td class="code">1</td><td>중용구간</td><td class="num">18,265</td><td class="num">1.174%</td></tr>
+          </tbody></table></div>
+        </div>
+      </div>
+
+      <div class="two-col">
+        <div>
+          <h3>CONNECT — 연결로코드</h3>
+          <div class="table-wrap"><table><thead><tr><th>코드</th><th>의미</th><th class="num">건수</th><th class="num">비율</th></tr></thead><tbody>
+            <tr><td class="code">0</td><td>없음</td><td class="num">1,537,045</td><td class="num">98.836%</td></tr>
+            <tr><td class="code">1</td><td>있음</td><td class="num">18,105</td><td class="num">1.164%</td></tr>
+          </tbody></table></div>
+          <p class="small">현재 신규 원본은 0/1만 사용한다. 101~108 도로등급별 연결로는 구 포맷 코드로 구분한다.</p>
+        </div>
+        <div>
+          <h3>REST_VEH — 통행제한차량</h3>
+          <div class="table-wrap"><table><thead><tr><th>코드</th><th>공식 의미</th><th class="num">실제 건수</th></tr></thead><tbody>
+            <tr><td class="code">0</td><td>모두 통행가능</td><td class="num">1,507,782</td></tr>
+            <tr class="zero"><td class="code">1</td><td>승용차</td><td class="num">0</td></tr>
+            <tr class="zero"><td class="code">2</td><td>승합차</td><td class="num">0</td></tr>
+            <tr class="zero"><td class="code">3</td><td>버스</td><td class="num">0</td></tr>
+            <tr><td class="code">4</td><td>트럭</td><td class="num">1,315</td></tr>
+            <tr><td class="code">5</td><td>이륜차</td><td class="num">46,050</td></tr>
+            <tr><td class="code">6</td><td>기타</td><td class="num">3</td></tr>
+          </tbody></table></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="conflicts">
+      <h2>6. 공식 규격·현재 코드 정의 차이</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>필드</th><th>코드</th><th>2023 공식 정의</th><th>현재 소스 정의</th><th>판정</th></tr></thead>
+          <tbody>
+            <tr><td>ROAD_TYPE</td><td class="code">001</td><td>고가차도</td><td>교량</td><td class="warn">불일치</td></tr>
+            <tr><td>ROAD_TYPE</td><td class="code">002</td><td>지하차도</td><td>터널</td><td class="warn">불일치</td></tr>
+            <tr><td>ROAD_TYPE</td><td class="code">003</td><td>교량</td><td>고가차도</td><td class="warn">불일치</td></tr>
+            <tr><td>ROAD_TYPE</td><td class="code">004</td><td>터널</td><td>지하차도</td><td class="warn">불일치</td></tr>
+            <tr><td>NODE_TYPE</td><td class="code">102</td><td>도로 시·종점</td><td>JC</td><td class="warn">불일치</td></tr>
+            <tr><td>NODE_TYPE</td><td class="code">103</td><td>속성변화점</td><td>SA/휴게소</td><td class="warn">불일치</td></tr>
+            <tr><td>NODE_TYPE</td><td class="code">104</td><td>도로시설물</td><td>IC</td><td class="warn">불일치</td></tr>
+            <tr><td>NODE_TYPE</td><td class="code">105</td><td>행정경계</td><td>TG</td><td class="warn">불일치</td></tr>
+            <tr><td>NODE_TYPE</td><td class="code">106</td><td>연결로접속부</td><td>기타</td><td class="warn">불일치</td></tr>
+            <tr><td>NODE_TYPE</td><td class="code">107</td><td>최소노드배치점</td><td>시·군도 노드 등</td><td class="warn">불일치</td></tr>
+            <tr><td>ROAD_RANK</td><td class="code">101~107</td><td>도로등급</td><td>동일</td><td class="same">일치</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="notice ok"><strong>권장:</strong> 바이너리 생성·맵매칭에서 시설물 상태를 사용하기 전에
+        <code>DataDefine.h</code>의 enum과 주석을 공식 2023 코드표로 정정해야 한다. 특히 고도 보조 점수의
+        고가·교량·터널·지하 판정이 반대로 적용될 수 있다.</div>
+    </section>
+
+    <section id="sources">
+      <h2>7. 근거 문서·원본</h2>
+      <ul>
+        <li><a href="https://www.codil.or.kr/filebank/moct2014/202301/MOCT3000_0.PDF?nserialno=3000">국토교통부고시 제2023-22호 — 지능형교통체계 표준 노드·링크 구축기준</a></li>
+        <li><a href="지능형교통체계ITS+표준+노드링크+구축+및+운영지침.PDF">저장소 내 구 구축·운영지침</a> — PDF 24쪽 기초정보 코드값</li>
+        <li>전국 원본: <code>CreateData/data/MOCT_NODE.dbf</code>, <code>CreateData/data/MOCT_LINK.dbf</code></li>
+        <li>현재 정의: <code>CreateData/src/DataDefine.h</code>, <code>CreateData/src/DataFormat.h</code></li>
+        <li>관련 스키마: <code>roadnet/docs/SCHEMA.md</code></li>
+      </ul>
+      <p class="small">실제 건수는 2026-08-22에 `CreateData/data`의 DBF 전체 레코드를 직접 집계한 결과이다.</p>
+    </section>
+  </main>
+  <footer>표준노드·링크 시설물·도로 코드 분석 · 2026-08-22</footer>
+</body>
+</html>

@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>표준노드·링크 TURN_OPER 전국 데이터 분석</title>
+  <style>
+    :root { --navy:#142b45; --blue:#1769aa; --green:#18794e; --amber:#9a6700; --red:#b42318; --ink:#20262e; --muted:#5d6875; --line:#d9e0e7; --page:#f4f7fa; }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; }
+    body { margin:0; color:var(--ink); background:var(--page); font-family:"Pretendard","Noto Sans KR","Malgun Gothic",sans-serif; line-height:1.65; }
+    .hero { padding:54px 24px 46px; color:#fff; background:linear-gradient(135deg,#10253c 0%,#174f7c 62%,#178070 100%); }
+    .hero-inner, main { max-width:1200px; margin:0 auto; }
+    h1 { margin:0 0 12px; font-size:clamp(28px,4vw,44px); line-height:1.25; }
+    .subtitle { max-width:850px; margin:0; color:#d9eafa; font-size:17px; }
+    .meta { display:flex; flex-wrap:wrap; gap:8px; margin-top:22px; }
+    .meta span { padding:6px 11px; border:1px solid #ffffff42; border-radius:999px; background:#ffffff14; font-size:13px; }
+    main { padding:30px 22px 70px; }
+    nav, section, .notice { margin-bottom:22px; padding:24px; border:1px solid var(--line); border-radius:14px; background:#fff; box-shadow:0 6px 20px #18334d0a; }
+    nav { display:flex; flex-wrap:wrap; gap:8px; }
+    nav a { padding:7px 11px; border-radius:8px; color:var(--blue); background:#eaf4fc; text-decoration:none; font-weight:700; font-size:14px; }
+    h2 { margin:0 0 16px; color:var(--navy); font-size:25px; }
+    h3 { margin:22px 0 10px; color:var(--navy); font-size:18px; }
+    p { margin:8px 0; }
+    code { padding:2px 5px; border-radius:5px; color:#203e5d; background:#eef2f6; font-family:Consolas,monospace; }
+    .grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }
+    .card { padding:20px; border:1px solid var(--line); border-radius:12px; background:#fbfdff; }
+    .card strong { display:block; color:var(--navy); font-size:27px; line-height:1.25; }
+    .card .number { margin-top:12px; color:var(--blue); font-size:24px; font-weight:800; }
+    .small { color:var(--muted); font-size:12px; }
+    .notice { border-left:5px solid var(--amber); background:#fff7d6; }
+    .notice strong { color:#704d00; }
+    .danger { border-left-color:var(--red); background:#fff0ee; }
+    .ok { border-left-color:var(--green); background:#eaf7f0; }
+    .table-wrap { overflow-x:auto; border:1px solid var(--line); border-radius:10px; }
+    table { width:100%; border-collapse:collapse; background:#fff; font-size:14px; }
+    th, td { padding:11px 12px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { position:sticky; top:0; color:var(--navy); background:#edf3f8; white-space:nowrap; }
+    tbody tr:hover { background:#f8fbfd; }
+    tr:last-child td { border-bottom:0; }
+    .num { text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
+    .code { color:var(--blue); font-family:Consolas,monospace; font-weight:800; }
+    .all-day { color:var(--green); font-weight:800; }
+    .timed { color:var(--amber); font-weight:800; }
+    .bar { height:15px; overflow:hidden; border-radius:99px; background:#f0c14b; }
+    .bar span { display:block; width:99.9706%; height:100%; background:linear-gradient(90deg,#1769aa,#20a17b); }
+    .flow { display:grid; grid-template-columns:1fr auto 1fr; gap:14px; align-items:center; }
+    .flow > div { padding:18px; border:1px solid var(--line); border-radius:10px; background:#fbfdff; }
+    .arrow { color:var(--blue); font-size:28px; font-weight:800; }
+    ul, ol { margin:8px 0; padding-left:22px; }
+    a { color:var(--blue); }
+    footer { max-width:1200px; margin:0 auto; padding:0 22px 40px; color:var(--muted); font-size:13px; }
+    @media(max-width:760px) { .grid{grid-template-columns:1fr;} .flow{grid-template-columns:1fr;} .arrow{text-align:center;transform:rotate(90deg);} main{padding-left:12px;padding-right:12px;} nav,section,.notice{padding:17px;} }
+    @media print { body{background:#fff;} .hero{padding:25px;color:#000;background:#fff;border-bottom:2px solid #000;} .subtitle{color:#333;} nav{display:none;} section,.notice{box-shadow:none;break-inside:avoid;} th{position:static;} }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="hero-inner">
+      <h1>TURN_OPER 전국 데이터 분석</h1>
+      <p class="subtitle">표준노드·링크 <code>TURNINFO.dbf</code>의 <b>TURN_OPER</b> 공식 정의,
+        TURN_TYPE별 분포, 시간제 13건의 실데이터와 회전각을 정리한다.</p>
+      <div class="meta"><span>작성일 2026-08-22</span><span>TURNINFO 44,218건</span><span>전일제 44,205건</span><span>시간제 13건</span></div>
+    </div>
+  </header>
+
+  <main>
+    <nav><a href="#definition">공식 정의</a><a href="#distribution">전국 분포</a><a href="#matrix">TURN_TYPE 조합</a><a href="#timed">시간제 13건</a><a href="#implementation">구현 영향</a><a href="#sources">근거</a></nav>
+
+    <div class="notice danger">
+      <strong>핵심 정정:</strong> <code>TURN_OPER=0</code>은 “회전 허용”, <code>TURN_OPER=1</code>은
+      “회전 제한/금지”를 뜻하지 않는다. 공식 의미는 각각 <b>전일제</b>와 <b>시간제</b>이다.
+    </div>
+
+    <section id="definition">
+      <h2>1. TURN_OPER 공식 정의</h2>
+      <div class="grid">
+        <div class="card">
+          <strong><span class="code">0</span> <span class="all-day">전일제</span></strong>
+          <p><code>TURN_TYPE</code>이 나타내는 회전 규칙이 전일 운영된다.</p>
+          <div class="number">44,205건</div><span class="small">전체의 99.9706%</span>
+        </div>
+        <div class="card">
+          <strong><span class="code">1</span> <span class="timed">시간제</span></strong>
+          <p><code>TURN_TYPE</code>이 나타내는 회전 규칙이 특정 시간대에 운영된다.</p>
+          <div class="number">13건</div><span class="small">전체의 0.0294%</span>
+        </div>
+        <div class="card">
+          <strong>의미 결합</strong>
+          <p>회전 내용은 <code>TURN_TYPE</code>, 운영 시간 방식은 <code>TURN_OPER</code>를 결합해 해석한다.</p>
+          <p><code>101 + 0</code> = 좌회전금지 전일제</p>
+        </div>
+      </div>
+      <h3>해석 순서</h3>
+      <div class="flow">
+        <div><b>TURN_TYPE</b><br>비보호, U턴, 좌회전금지 등<br><span class="small">무엇을 허용·제한하는가?</span></div>
+        <span class="arrow">→</span>
+        <div><b>TURN_OPER</b><br>전일제 또는 시간제<br><span class="small">언제 운영하는가?</span></div>
+      </div>
+    </section>
+
+    <section id="distribution">
+      <h2>2. TURN_OPER 전국 분포</h2>
+      <div class="bar" title="전일제 99.9706%, 시간제 0.0294%"><span></span></div>
+      <p><span class="all-day">■ 전일제 44,205건</span> · <span class="timed">■ 시간제 13건</span></p>
+      <p>시간제는 전체의 0.03%에 불과하지만, 이를 영구 금지로 오해하면 시간에 따라 허용되는 경로를 상시 차단할 수 있다.</p>
+    </section>
+
+    <section id="matrix">
+      <h2>3. TURN_TYPE별 TURN_OPER 분포</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>TURN_TYPE</th><th>회전 내용</th><th class="num">0 전일제</th><th class="num">1 시간제</th><th class="num">합계</th><th>시간제 해석</th></tr></thead>
+          <tbody>
+            <tr><td class="code">001</td><td>비보호회전</td><td class="num">14</td><td class="num">0</td><td class="num">14</td><td>없음</td></tr>
+            <tr><td class="code">002</td><td>버스만회전</td><td class="num">1</td><td class="num">3</td><td class="num">4</td><td>특정 시간대에 버스만 회전</td></tr>
+            <tr><td class="code">003</td><td>회전금지</td><td class="num">5</td><td class="num">0</td><td class="num">5</td><td>없음</td></tr>
+            <tr><td class="code">011</td><td>U-TURN</td><td class="num">27,822</td><td class="num">3</td><td class="num">27,825</td><td>특정 시간대에 U턴 규칙 운영</td></tr>
+            <tr><td class="code">012</td><td>P-TURN</td><td class="num">3</td><td class="num">0</td><td class="num">3</td><td>없음</td></tr>
+            <tr><td class="code">101</td><td>좌회전금지</td><td class="num">13,073</td><td class="num">4</td><td class="num">13,077</td><td>특정 시간대의 좌회전금지</td></tr>
+            <tr><td class="code">102</td><td>직진금지</td><td class="num">1,007</td><td class="num">1</td><td class="num">1,008</td><td>특정 시간대의 직진금지</td></tr>
+            <tr><td class="code">103</td><td>우회전금지</td><td class="num">2,280</td><td class="num">2</td><td class="num">2,282</td><td>특정 시간대의 우회전금지</td></tr>
+            <tr><td colspan="2"><b>합계</b></td><td class="num"><b>44,205</b></td><td class="num"><b>13</b></td><td class="num"><b>44,218</b></td><td></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="timed">
+      <h2>4. TURN_OPER=1 시간제 13건</h2>
+      <p>회전각은 <code>ST_LINK → NODE_ID → ED_LINK</code> 접선으로 계산했다. `+`는 좌회전, `-`는 우회전이다.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>NODE_ID</th><th>ST_LINK</th><th>ED_LINK</th><th>TYPE</th><th>회전 내용</th><th class="num">관측 각도</th><th>형상 확인</th></tr></thead>
+          <tbody>
+            <tr><td class="code">1220041604</td><td>1220110104</td><td>1220029500</td><td class="code">101</td><td>좌회전금지</td><td class="num">+93.251°</td><td>좌회전</td></tr>
+            <tr><td class="code">1380000111</td><td>1380048700</td><td>1380000301</td><td class="code">102</td><td>직진금지</td><td class="num">-17.404°</td><td>직진</td></tr>
+            <tr><td class="code">1500000502</td><td>1500000800</td><td>1500006200</td><td class="code">002</td><td>버스만회전</td><td class="num">+107.237°</td><td>좌회전</td></tr>
+            <tr><td class="code">1240005604</td><td>1240019900</td><td>1240020000</td><td class="code">011</td><td>U-TURN</td><td class="num">-180.000°</td><td>U턴형</td></tr>
+            <tr><td class="code">1240022204</td><td>1240019703</td><td>1240019803</td><td class="code">011</td><td>U-TURN</td><td class="num">+180.000°</td><td>U턴형</td></tr>
+            <tr><td class="code">1630015403</td><td>1630050100</td><td>1630048800</td><td class="code">103</td><td>우회전금지</td><td class="num">-84.338°</td><td>우회전</td></tr>
+            <tr><td class="code">2060007601</td><td>2060021600</td><td>2060017200</td><td class="code">101</td><td>좌회전금지</td><td class="num">+90.233°</td><td>좌회전</td></tr>
+            <tr><td class="code">1240028604</td><td>1240055202</td><td>1240055300</td><td class="code">011</td><td>U-TURN</td><td class="num">+180.000°</td><td>U턴형</td></tr>
+            <tr><td class="code">1040023607</td><td>1040043106</td><td>1030036200</td><td class="code">101</td><td>좌회전금지</td><td class="num">+101.283°</td><td>좌회전</td></tr>
+            <tr><td class="code">1650003706</td><td>1650008504</td><td>1650020000</td><td class="code">101</td><td>좌회전금지</td><td class="num">+102.973°</td><td>좌회전</td></tr>
+            <tr><td class="code">1620000307</td><td>1620000400</td><td>1620003600</td><td class="code">103</td><td>우회전금지</td><td class="num">-141.851°</td><td>우회전</td></tr>
+            <tr><td class="code">1500004401</td><td>1500014902</td><td>1500012600</td><td class="code">002</td><td>버스만회전</td><td class="num">+89.710°</td><td>좌회전</td></tr>
+            <tr><td class="code">1500001309</td><td>1500003202</td><td>1500002600</td><td class="code">002</td><td>버스만회전</td><td class="num">+76.677°</td><td>좌회전</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="notice">
+        <strong>시간 정보 부재:</strong> 13건 모두 <code>REMARK</code>가 비어 있다. 따라서 원본
+        <code>TURNINFO.dbf</code>만으로는 요일·시작·종료 시간을 복원할 수 없다.
+      </div>
+    </section>
+
+    <section id="implementation">
+      <h2>5. CreateData 구현 영향과 권장안</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>위치</th><th>현재 처리</th><th>영향</th><th>권장</th></tr></thead>
+          <tbody>
+            <tr><td><code>DataFormat.h</code></td><td><code>0=허용</code>, <code>1=제한</code> 상수명</td><td>공식 전일제/시간제 의미와 불일치</td><td><code>ALL_DAY=0</code>, <code>TIME_BASED=1</code> 등으로 정정</td></tr>
+            <tr><td><code>TurnInfoLoader.cpp</code></td><td><code>TURN_OPER=1</code>을 restricted로 판정</td><td>시간제 13건을 항상 금지된 회전으로 처리</td><td>시간제 속성을 별도 보존</td></tr>
+            <tr><td><code>BinaryMaker.cpp</code></td><td>restricted 회전을 바이너리에서 제외</td><td>시간제 규칙과 시간 정보 손실</td><td>서비스 정책을 결정하고 메타데이터로 저장</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h3>권장 데이터 모델</h3>
+      <pre><code>turn_type       : "001" | "002" | "003" | "011" | "012" | "101" | "102" | "103"
+turn_oper       : "0" | "1"          # ALL_DAY | TIME_BASED
+schedule_known  : true | false
+schedule        : optional day/time ranges
+turn_angle_deg  : optional -180.0 ~ +180.0</code></pre>
+      <p>시간대를 알 수 없는 현재 13건은 “시간 미상의 시간제 규칙”으로 보존하고,
+        보수적 차단·경고 후 허용 등 서비스 정책을 별도로 결정하는 것이 안전하다.</p>
+    </section>
+
+    <section id="sources">
+      <h2>6. 근거 문서·원본</h2>
+      <ul>
+        <li><a href="지능형교통체계ITS+표준+노드링크+구축+및+운영지침.PDF">지능형교통체계 ITS 표준 노드링크 구축 및 운영지침</a> — 코드표 PDF 24쪽</li>
+        <li><a href="표준노드링크_TURN_OPER_TURN_TYPE_해석.md">TURN_OPER·TURN_TYPE 규격 해석</a></li>
+        <li><a href="표준노드링크_TURNINFO_전국데이터_회전각_분석.md">TURNINFO 전국 회전각 분석</a></li>
+        <li><a href="표준노드링크_TURNINFO_코드별_회전각_분석.html">TURNINFO 코드별 회전각 분석 HTML</a></li>
+        <li>분석 원본: <code>CreateData/data/TURNINFO.dbf</code>, <code>MOCT_LINK.shp/.dbf</code>, <code>MOCT_NODE.shp/.dbf</code></li>
+      </ul>
+      <p class="small">TURNINFO.dbf SHA-256: f4520c99b8bb1abbc1243a0a7de96bc20dff4f4fe7bdf1262a4456f61979eb38</p>
+    </section>
+  </main>
+  <footer>표준노드·링크 TURN_OPER 전국 데이터 분석 · 2026-08-22</footer>
+</body>
+</html>

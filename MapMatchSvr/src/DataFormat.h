@@ -165,6 +165,11 @@ typedef struct sLinkInfoData
 	uint8							nConnect;							// 연결로 코드
 	uint8							nRoadType;							// 도로 유형
 	uint8							nLanes;								// 차선 정보
+	uint8							nRestVeh;							// 통행제한차량 0:모두 3:버스 4:트럭 5:이륜차 (MOCT_LINK.REST_VEH)
+																		//   현재 매칭 판정 미사용 — 차종 축 정리 후 활용 (2026-08-22 최정우 추가)
+	uint8							nRoadUse;							// 도로사용여부 0:사용, 1:미사용 (MOCT_LINK.ROAD_USE)
+																		//   미사용 4,244건은 개통예정·폐지 구간. 현재 매칭 판정 미사용 —
+																		//   후보 제외 여부는 추후 결정 (2026-08-22 최정우 추가)
 	char							szRoadName[46];						// 도로명
 	uint64							qwStNodeID;							// 시작 노드 ID
 	uint32							dwStNodeX;							// 시작 노드 X
@@ -200,6 +205,11 @@ typedef struct sLinkInfo
 	uint8							nConnect;							// 연결로 코드
 	uint8							nRoadType;							// 도로 유형
 	uint8							nLanes;								// 차선 정보
+	uint8							nRestVeh;							// 통행제한차량 0:모두 3:버스 4:트럭 5:이륜차 (MOCT_LINK.REST_VEH)
+																		//   현재 매칭 판정 미사용 — 차종 축 정리 후 활용 (2026-08-22 최정우 추가)
+	uint8							nRoadUse;							// 도로사용여부 0:사용, 1:미사용 (MOCT_LINK.ROAD_USE)
+																		//   미사용 4,244건은 개통예정·폐지 구간. 현재 매칭 판정 미사용 —
+																		//   후보 제외 여부는 추후 결정 (2026-08-22 최정우 추가)
 	char							szRoadName[46];						// 도로명
 	uint64							qwStNodeID;							// 시작 노드 ID
 	uint32							dwStNodeX;							// 시작 노드 X
@@ -221,10 +231,11 @@ typedef unordered_map<uint64, LINK_INFO>								mapLinkInfo;
 */
 typedef struct sTurnInfo
 {
-	uint32							dwTurnOffset;						// 진출 링크 회전정보 Offset
 	uint64							qwInLinkID;							// 진입 링크 ID
 	uint64							qwOutLinkID;						// 진출 링크 ID
 	sint16							nTurnAng;							// 진입 링크에서 진출 링크의 회전 각도 (Degree, -180~180)
+	uint16							nTurnType;							// MOCT 회전제한유형 (011 은 11 로 저장, 출력은 %03u)
+	uint8							nTurnOper;							// MOCT 회전제한운영 0:전일제, 1:시간제
 
 	bool operator<(const struct sTurnInfo& stTurnInfo) const
 	{

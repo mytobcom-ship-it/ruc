@@ -1022,6 +1022,11 @@ bool CRawLogWorker::ShouldSkipGpsInput(int nThreadId, const sRawLogInfo& stRawLo
 		return true;
 	}
 
+	// RAW_VLD=false 는 주정차 판정에도 태우지 않는다(2026-08-22 사용자 확정). 실측에서 이런 좌표의
+	//   ACCURACY_M 이 78~362m(평균 149m)였는데, RL-Z00001 폴리곤은 면적 12,624m^2 로 대각선이 약 110m
+	//   라 "폴리곤 안에 있었다"는 사실 자체를 신뢰할 수 없다. 그 결과 실제 정차 2건(178초·75초)이
+	//   기록되지 않지만, 이건 이 검사가 도입된 시점부터의 동작이고 규칙 변경과 무관하다.
+	//   완화하려면 폴리곤 크기 대비 ACCURACY_M 임계값을 구역별로 둬야 해서 관리비용이 크다고 판단.
 	if ((!stRawLogInfo.bRawVldKnown) || (!stRawLogInfo.bRawVld))
 	{
 		LOGFMTW("[#%02d] reject invalid raw_vld!device=[%s] trip_id=[%s] seq=[%u] known=[%d] raw_vld=[%d]",
@@ -1488,6 +1493,43 @@ void CRawLogWorker::CommitPendingRow(int nThreadId, VEHICLE_TRIP_SESSION *pstSes
 	sint16 nFinalStatus = pstSession->nPendingFinalStatus;
 	bool bMatched = (nFinalStatus == MATCH_STATUS_MATCHED);
 
+	// ── 트립 첫 점(BEGIN) 반대방향 오매칭 보정 (2026-08-22 최정우 추가) ──
+	//   BEGIN 은 heading 을 무시하고 거리만으로 판정한다(bIgnoreHeading, 2026-08-19). 왕복분리
+	//   도로는 짝 링크가 10m 남짓 옆에 나란히 있어 거리차가 무의미한데도 더 가까운 쪽이 뽑힌다.
+	//   실측 trip 000376_20260819094414 seq1 — 정답 2040426801 이 7.68m, 반대방향 2040426701 이
+	//   4.16m 라 반대방향이 채택됐다(heading 276° vs 채택 링크 방위각 99°, 177° 어긋남).
+	//
+	//   첫 점 heading 으로 고치려던 접근은 버렸다 — 전국 21트립 실측에서 첫 점 heading 이
+	//   이후 점들의 평균 방향과 41° 어긋나 신뢰할 수 없고, 애초에 BEGIN 후보 목록은
+	//   그리드 셀당 최선 1건만 담아(GridSgmtMapMatch) 짝 링크가 목록에 오르지도 않는다.
+	//
+	//   대신 "이미 확정된 다음 점의 링크"를 편향 기준으로 BEGIN 을 다시 태운다. 그 링크가
+	//   보류 행 링크의 왕복분리 짝(qwOppositeLinkID)일 때만 — 즉 첫 점이 건너편에 붙은 것이
+	//   분명할 때만 — 재매칭한다. 진입 가능한 다른 링크로 넘어간 정상 전이는 건드리지 않는다.
+	//   (전국 21트립 검증: 보정 대상 1건, 정상 전이 9건은 미개입)
+	if (bMatched && (pstSession->qwLastConfirmedLinkID == 0)
+		&& bHasNextLinkID && (qwNextLinkID != stMatchLinkInfo.qwLinkID)
+		&& (m_stConfig.pcDataLoader != nullptr) && (m_stConfig.pcProcessManager != nullptr))
+	{
+		PLINK_INFO pstPendingLink = m_stConfig.pcDataLoader->GetLinkInfo(stMatchLinkInfo.qwLinkID);
+		if ((pstPendingLink != nullptr) && (pstPendingLink->qwOppositeLinkID == qwNextLinkID))
+		{
+			MATCH_LINK_INFO stRematched;
+			CProcessManager& cPM = m_stConfig.pcProcessManager[nThreadId];
+			if (cPM.RematchBeginBiased(stRawLogInfo, qwNextLinkID, &stRematched)
+				&& (stRematched.qwLinkID == qwNextLinkID))
+			{
+				LOGFMTW("[#%02d] begin opposite-link corrected!device=[%s] trip_id=[%s] seq=[%u] "
+					"link=[%llu] -> [%llu] (next_confirmed=[%llu])",
+					nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRawLogInfo.dwSeqNo,
+					static_cast<unsigned long long>(stMatchLinkInfo.qwLinkID),
+					static_cast<unsigned long long>(stRematched.qwLinkID),
+					static_cast<unsigned long long>(qwNextLinkID));
+				stMatchLinkInfo = stRematched;
+			}
+		}
+	}
+
 	// 반대편(짝) 링크 1틱 오매칭 보정 — bReverseSuspect 는 여기서 기준으로 못 씀: 반대편 짝
 	//   링크는 그 방향으로는 "정상 순방향"으로 매칭되므로(TryOppositeLinkCandidate() 가 별도
 	//   재귀 평가로 붙인 후보라 자기 자신 기준 역행이 아님) 최종 선택된 항목의 bReverseSuspect는
@@ -1654,16 +1696,18 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		stSession.dwLastGpsSeq = stRawLogInfo.dwSeqNo;
 		stSession.bLastPointOk = false;			// (2026-07-21 최정우 추가)
 		if (stRawLogInfo.nTripEvent == TRIP_EVENT_END)
-		{
 			*pbTripEnded = true;
-			// GPS 좌표 자체는 있는데 RAW_VLD=false 라 SKIP되는 END 행 — 열려있는 주정차 세션이
-			//   있으면 원본 좌표로 강제 마감(finalize). 그렇지 않으면 이탈 신호가 영영 안 와서
-			//   세션이 메모리에서만 유지되다 트립 종료와 함께 기록 기회를 완전히 잃는다(실측
-			//   확인됨). GPS_LAT/LON 자체가 NULL이면 좌표가 없어 구역 판정이 불가하므로 제외
-			//   (2026-08-19 최정우 추가)
-			if (!stRawLogInfo.bGpsLatNull && !stRawLogInfo.bGpsLonNull)
-				ProcessParkingCharge(nThreadId, stRawLogInfo, &stSession, pvtChargeInserts);
-		}
+
+		// 주정차 판정은 RAW_VLD 와 무관하게 원시 GPS 좌표로 수행한다 (2026-08-22 사용자 확정).
+		//   근거: 차량이 멈추면 GPS 가 측위를 놓쳐 ACCURACY_M 이 급격히 나빠지고 RAW_VLD=false 가
+		//   되는데(실측: DRIVE_STATUS=PARKED 497건의 평균 정확도 64m, ON_ROAD 는 7m), 하필 주정차
+		//   판정이 가장 필요한 순간이 그때다. 이 행들을 버리면 도착 정차가 통째로 누락된다
+		//   (실측: 000376_20260819094414 의 도착 정차 17점·79초가 전부 RAW_VLD=false 였음).
+		//   맵매칭(다른 3종 과금)은 종전대로 SKIP — 좌표를 링크에 붙이는 일은 정확도가 필요하지만,
+		//   "폴리곤 안에 있었나"는 그보다 훨씬 큰 공간 판정이라 성격이 다르다.
+		//   GPS_LAT/LON 자체가 NULL 이면 판정 불가라 제외.
+		if (!stRawLogInfo.bGpsLatNull && !stRawLogInfo.bGpsLonNull)
+			ProcessParkingCharge(nThreadId, stRawLogInfo, &stSession, pvtChargeInserts);
 		// 보정판단용 "다음" 링크 없음(이 행은 raw_vld=false라 신뢰 못함) — 보류 행 계산된 값 그대로 커밋 (2026-08-21 최정우 추가)
 		CommitPendingRow(nThreadId, &stSession, false, 0, pvtUpdates, pvtChargeInserts);
 		return AppendUpdateRow(pvtUpdates, stRawLogInfo, MATCH_STATUS_SKIP);
@@ -1747,10 +1791,6 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 			stSession.bHasPrevAlt = false;
 		}
 	}
-
-	// 주정차 판정 — 맵매칭 "전" raw GPS·raw 속도 기준으로 실행(다른 3종은 매칭 성공 후 매칭 링크
-	//   기준). 맵매칭 성공/실패와 무관하게 항상 평가 (2026-08-13 최정우 추가)
-	ProcessParkingCharge(nThreadId, stRawLogInfo, &stSession, pvtChargeInserts);
 
 	sint16 nFinalStatus = MATCH_STATUS_MATCHED;
 	MATCH_LINK_INFO stMatchLinkInfo;
@@ -1863,6 +1903,17 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 	stSession.dwLastGpsSeq = stRawLogInfo.dwSeqNo;
 	// 다음 포인트의 이상속도 검사 신뢰도 판단용 — 앵커 갱신 여부와 동일 조건 (2026-07-21 최정우 추가)
 	stSession.bLastPointOk = (bMatched && !bUntrustedMatch);
+
+	// 주정차 판정 — 원시 GPS·속도가 기본이지만, 규칙2(매칭 좌표도 폴리곤 내)·규칙4(매칭 좌표가
+	//   폴리곤 밖이면 통과로 보고 해제)를 위해 매칭 결과가 필요해 맵매칭 "이후"로 옮겼다.
+	//   맵매칭 성공/실패와 무관하게 항상 평가하는 성질은 그대로 — 실패 시 bMatchTrusted=false 로
+	//   넘겨 원시 좌표만으로 규칙1 판정한다 (2026-08-22 최정우 수정, 원래는 맵매칭 전 호출)
+	{
+		const bool bParkMatchOk = (bMatched && !bUntrustedMatch);
+		ProcessParkingCharge(nThreadId, stRawLogInfo, &stSession, pvtChargeInserts,
+			bParkMatchOk, bParkMatchOk ? stMatchLinkInfo.dfMatchX : 0.0,
+			bParkMatchOk ? stMatchLinkInfo.dfMatchY : 0.0);
+	}
 
 	// ── 매칭 성공(MATCHED) 시에만 세션 앵커 갱신 — SKIP/ERROR 는 직전 성공 앵커 유지 (2026-07-10 최정우 수정) ──
 	//   · XY·시각: HEADING/SPEED 보정용 (ALTITUDE_M NULL이어도 갱신)
@@ -3232,22 +3283,13 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 			pstSession->dfNodeStepAccumDistM = 0.0;
 			pstSession->dfNodeStepLastX = stMatchLinkInfo.dfMatchX;
 			pstSession->dfNodeStepLastY = stMatchLinkInfo.dfMatchY;
+			pstSession->qwNodeStepLastLinkID = stMatchLinkInfo.qwLinkID;
 
 			LOGFMTI("[#%02d] node step entry!device=[%s] trip_id=[%s] road=[%s]",
 				nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstZone->szRoadID);
 		}
 		return;
 	}
-
-	// 세션 진행 중 — 누적 이동거리 갱신(매칭 위치 기준, dist_m 산출용)
-	POINT stPrev, stCur;
-	stPrev.dfX = pstSession->dfNodeStepLastX;
-	stPrev.dfY = pstSession->dfNodeStepLastY;
-	stCur.dfX = stMatchLinkInfo.dfMatchX;
-	stCur.dfY = stMatchLinkInfo.dfMatchY;
-	pstSession->dfNodeStepAccumDistM += HaversineMeters(stPrev, stCur);
-	pstSession->dfNodeStepLastX = stMatchLinkInfo.dfMatchX;
-	pstSession->dfNodeStepLastY = stMatchLinkInfo.dfMatchY;
 
 	// 경유 링크 중 하나라도 현재 세션 구역과 같으면 "계속 진행 중" (2026-08-20 최정우 추가, 비과금도로와 동일 원리)
 	bool bSameZone = false;
@@ -3260,8 +3302,61 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 	//   (비과금도로·주정차와 동일 논리) — 즉시 강제 마감
 	bool bTripEnding = (stRawLogInfo.nTripEvent == TRIP_EVENT_END);
 
+	// ── 누적 이동거리 갱신 (2026-08-22 최정우 수정) ──
+	//   구역 안에 있을 때만 더한다. 예전에는 구역 판정보다 먼저 무조건 더해서, 이탈한 틱의
+	//   "구역 밖" 매칭점까지 거리에 포함됐다.
+	if (bSameZone)
+	{
+		POINT stPrev, stCur;
+		stPrev.dfX = pstSession->dfNodeStepLastX;
+		stPrev.dfY = pstSession->dfNodeStepLastY;
+		stCur.dfX = stMatchLinkInfo.dfMatchX;
+		stCur.dfY = stMatchLinkInfo.dfMatchY;
+		pstSession->dfNodeStepAccumDistM += HaversineMeters(stPrev, stCur);
+		pstSession->dfNodeStepLastX = stMatchLinkInfo.dfMatchX;
+		pstSession->dfNodeStepLastY = stMatchLinkInfo.dfMatchY;
+		pstSession->qwNodeStepLastLinkID = stMatchLinkInfo.qwLinkID;
+	}
+
 	if (bSameZone && !bTripEnding)
 		return;											// 계속 진행 중
+
+	// ── 이탈 지점 보정 (2026-08-22 최정우 추가) ──
+	//   GPS 표본은 구역 경계에 맞춰 찍히지 않아, 마지막 매칭점에서 끊으면 실제 통행거리보다
+	//   짧게 계산된다. 구역 안에서 마지막으로 달린 링크의 "종료 노드"까지 채워 준다.
+	//     · 구역 마지막 좌표를 지나 나간 경우  → 그 링크의 종료 노드 = 구역 끝 좌표
+	//     · 중간 교차로에서 다른 도로로 빠진 경우 → 그 링크의 종료 노드 = 교차로 노드
+	//   두 경우 모두 "마지막 구역 링크의 종료 노드"로 수렴하므로 한 가지 처리로 충분하다.
+	//   트립 종료·TTL 로 구역 안에서 끝난 경우(bSameZone==true)는 실제로 거기까지만 달린 것이라
+	//   보정하지 않는다.
+	if (!bSameZone && (pstSession->qwNodeStepLastLinkID != 0) && (m_stConfig.pcDataLoader != nullptr))
+	{
+		PLINK_INFO pstLastLink = m_stConfig.pcDataLoader->GetLinkInfo(pstSession->qwNodeStepLastLinkID);
+		if (pstLastLink != nullptr)
+		{
+			POINT stFrom, stNode;
+			stFrom.dfX = pstSession->dfNodeStepLastX;
+			stFrom.dfY = pstSession->dfNodeStepLastY;
+			stNode.dfX = static_cast<double>(pstLastLink->dwEdNodeX) / 360000.0;
+			stNode.dfY = static_cast<double>(pstLastLink->dwEdNodeY) / 360000.0;
+
+			double dfTail = HaversineMeters(stFrom, stNode);
+			// 링크 길이를 넘는 값이면 매칭이 튄 것으로 보고 버린다(오히려 과다 계상 방지)
+			if ((dfTail > 0.0) && (dfTail <= pstLastLink->dfLen + 1.0))
+			{
+				pstSession->dfNodeStepAccumDistM += dfTail;
+				pstSession->dfNodeStepLastX = stNode.dfX;
+				pstSession->dfNodeStepLastY = stNode.dfY;
+
+				LOGFMTI("[#%02d] node step exit clipped to node!device=[%s] trip_id=[%s] road=[%s] "
+					"link=[%llu] tail=[%.1f]m total=[%.1f]m",
+					nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID,
+					pstSession->szNodeStepRoadId,
+					static_cast<unsigned long long>(pstSession->qwNodeStepLastLinkID),
+					dfTail, pstSession->dfNodeStepAccumDistM);
+			}
+		}
+	}
 
 	// 이탈(다른 도로로 나감) 또는 트립 종료 — 항상 Y/0 로 1건 기록(사용자 지시, 2026-08-14 —
 	//   실제 과금 대상이라 비과금도로의 N/4 와 달리 정상 부과)
@@ -3346,6 +3441,7 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 	pstSession->nChargeSeq += 1;
 
 	pstSession->bInNodeStepRoad = false;
+	pstSession->qwNodeStepLastLinkID = 0;
 	pstSession->szNodeStepRoadId[0] = '\0';
 }
 
@@ -3387,10 +3483,15 @@ void CRawLogWorker::BeginParkingZoneSession(const sRawLogInfo& stRawLogInfo, PZO
 	pstSession->dtParkLastConfirmedTime = stRawLogInfo.dtGPS;
 	pstSession->dfParkLastConfirmedX = stRawLogInfo.dfX;
 	pstSession->dfParkLastConfirmedY = stRawLogInfo.dfY;
+	// 정차 조건을 마지막으로 만족한 지점 — 시작 시점은 진입 지점 그 자체 (2026-08-22 최정우 추가)
+	pstSession->dtParkLastInZoneTime = stRawLogInfo.dtGPS;
+	pstSession->dfParkLastInZoneX = stRawLogInfo.dfX;
+	pstSession->dfParkLastInZoneY = stRawLogInfo.dfY;
 }
 
 void CRawLogWorker::ProcessParkingCharge(int nThreadId, const sRawLogInfo& stRawLogInfo,
-		VEHICLE_TRIP_SESSION *pstSession, vector<CHARGE_INSERT_ROW> *pvtChargeInserts)
+		VEHICLE_TRIP_SESSION *pstSession, vector<CHARGE_INSERT_ROW> *pvtChargeInserts,
+		bool bMatchTrusted, double dfMatchX, double dfMatchY)
 {
 	if ((m_stConfig.pcChargeDataLoader == nullptr) || m_stConfig.strChargeInsertSQL.empty())
 		return;
@@ -3403,29 +3504,115 @@ void CRawLogWorker::ProcessParkingCharge(int nThreadId, const sRawLogInfo& stRaw
 	PZONE_INFO pstZone = m_stConfig.pcChargeDataLoader->GetParkingZoneContaining(
 		stRawLogInfo.dfX, stRawLogInfo.dfY, dfBufM);
 
-	// 세션 미진행 — 구역 내 이기만 하면 시작(속도 무관, 진입/이탈만 판단)
+	// ── 판정 규칙 (2026-08-22 최정우 재작성, 사용자 확정안) ───────────────────────────────
+	//   규칙1  원시 좌표가 폴리곤 내 + 맵매칭 실패            → 주정차 (도로 밖에 서 있음)
+	//   규칙2  원시 좌표가 폴리곤 내 + 매칭 성공 + 매칭 좌표도 폴리곤 내 → 주정차
+	//   규칙4  원시 좌표가 폴리곤 내인데 매칭 좌표는 폴리곤 밖 → 통과 중이므로 즉시 해제
+	//   실측 근거(21트립·폴리곤 내 24구간): 통과 차량은 그 도로를 달리므로 매칭 좌표도 폴리곤
+	//   안에 들어와 규칙2 만으로는 정차와 구분되지 않았다(통과 20구간 중 19구간이 규칙 통과).
+	//   실제로 두 집단을 가른 것은 속도로, 정차 구간 최대속도 0~5km/h · 통과 구간 12~40km/h 로
+	//   겹침이 전혀 없었다. 그래서 속도 상한(park_speedmax)과 연속 건수(park_entrycnt)를 함께 건다.
+	if ((pstZone != nullptr) && bMatchTrusted)
+	{
+		PZONE_INFO pstMatchZone = m_stConfig.pcChargeDataLoader->GetParkingZoneContaining(
+			dfMatchX, dfMatchY, 0.0);						// 매칭 좌표는 버퍼 없이 엄격 판정
+		if ((pstMatchZone == nullptr) ||
+			(strcmp(pstMatchZone->szRoadID, pstZone->szRoadID) != 0))
+			pstZone = nullptr;								// 규칙4 — 매칭 좌표가 구역 밖 = 통과 중
+	}
+
+	// 속도 상한 — 주정차는 "안 움직임"이 본질이라 이 조건이 실제 판별력을 갖는다
+	//   park_speedmax=0 이면 속도 조건 자체를 끈다(기본값). 이 엔진은 "구역에 있었다"는 사실만
+	//   등록하고 위반 확정은 과금서버가 하므로, 속도 임계는 엔진이 아니라 과금서버 정책이다
+	//   (2026-08-13 체류시간 임계 게이팅을 걷어낸 것과 같은 이유, 2026-08-22 사용자 확정).
+	//   과금서버는 적재된 dist_m / stay_seconds / speed_kmh(평균속도)로 통과·정차를 구분할 수 있다.
+	//   fSpeed 는 음수면 '속도 없음' — 값이 없으면 속도로 배제하지 않는다.
+	const bool bSpeedGate = (m_stConfig.nParkSpeedMax > 0);
+	const bool bSlowEnough = (!bSpeedGate) || (stRawLogInfo.fSpeed < 0.0f) ||
+		(stRawLogInfo.fSpeed <= static_cast<float>(m_stConfig.nParkSpeedMax));
+	// 재가속으로 인한 이탈은 GPS 노이즈가 아니라 확정적 사실이므로, 아래 재진입 유예를 건너뛴다
+	//   (2026-08-22 최정우 추가)
+	const bool bSpeedExit = (pstZone != nullptr) && !bSlowEnough;
+	if (!bSlowEnough)
+		pstZone = nullptr;
+
+	// 세션 미진행 — 조건을 park_entrycnt 회 "연속" 충족해야 개시 (2026-08-22 최정우 수정)
+	//   1~2점(0~3초)짜리는 체류시간을 낼 수 없고 GPS 튐과 구분되지 않는다. 실측에서 1점 구간 6개·
+	//   2점 구간 2개가 나왔고, 실제 주차 5건은 모두 13점(75초) 이상이라 3으로 잡으면 안전하게 갈린다.
 	if (!pstSession->bInParkingZone)
 	{
-		if (pstZone != nullptr)
+		if (pstZone == nullptr)
 		{
-			BeginParkingZoneSession(stRawLogInfo, pstZone, pstSession);
-
-			LOGFMTI("[#%02d] parking zone entry!device=[%s] trip_id=[%s] road=[%s]",
-				nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstZone->szRoadID);
+			pstSession->nParkEntryTicks = 0;				// 연속 끊김 — 후보 초기화
+			pstSession->szParkEntryCandRoadId[0] = '\0';
+			return;
 		}
+
+		// 후보 구역이 바뀌면 처음부터 다시 센다
+		if (strcmp(pstSession->szParkEntryCandRoadId, pstZone->szRoadID) != 0)
+		{
+			strncpy(pstSession->szParkEntryCandRoadId, pstZone->szRoadID,
+				sizeof(pstSession->szParkEntryCandRoadId) - 1);
+			pstSession->szParkEntryCandRoadId[sizeof(pstSession->szParkEntryCandRoadId) - 1] = '\0';
+			pstSession->nParkEntryTicks = 0;
+		}
+
+		if (pstSession->nParkEntryTicks == 0)
+		{
+			// 연속의 첫 좌표 — 세션이 열리면 이 시각·좌표가 진입 시점이 된다(체류시간 시작점)
+			pstSession->dtParkEntryCandTime = stRawLogInfo.dtGPS;
+			pstSession->dfParkEntryCandX = stRawLogInfo.dfX;
+			pstSession->dfParkEntryCandY = stRawLogInfo.dfY;
+		}
+		pstSession->nParkEntryTicks += 1;
+
+		if (pstSession->nParkEntryTicks < m_stConfig.nParkEntryCnt)
+			return;										// 아직 연속 건수 미달
+
+		BeginParkingZoneSession(stRawLogInfo, pstZone, pstSession);
+
+		// 진입 시각·좌표는 "연속의 첫 좌표"로 되돌린다 — 그래야 체류시간이 실제 정차 시작부터 잡힌다
+		pstSession->dtParkEntryTime = pstSession->dtParkEntryCandTime;
+		pstSession->dfParkEntryX = pstSession->dfParkEntryCandX;
+		pstSession->dfParkEntryY = pstSession->dfParkEntryCandY;
+
+		LOGFMTI("[#%02d] parking zone entry!device=[%s] trip_id=[%s] road=[%s] cnt=[%d] speed=[%d]",
+			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstZone->szRoadID,
+			pstSession->nParkEntryTicks, static_cast<int>(stRawLogInfo.fSpeed));
 		return;
 	}
+
+	pstSession->nParkEntryTicks = 0;						// 세션 진행 중엔 후보 카운터 불필요
 
 	// 세션 진행 중 — 누적 이동거리 갱신(raw GPS 연속 포인트 하버사인 합산, dist_m 산출용). 재진입
 	//   유예 대기 중(무존 상태)에도 그대로 갱신되므로 유예 구간의 이동거리·시간도 자연히 dist_m·
 	//   stay_seconds 에 포함됨(사용자 지시, 2026-08-14)
+	bool bSameZone = (pstZone != nullptr) &&
+		(strcmp(pstSession->szParkingZoneRoadId, pstZone->szRoadID) == 0);
+
+	// 누적 이동거리는 "정차 조건을 만족하는 동안"만 더한다 (2026-08-22 최정우 수정).
+	//   기존엔 조건 충족 여부와 무관하게 매 틱 더해서, 디바운스(park_exitcnt)·재진입 유예
+	//   (park_regrace) 대기 중 차량이 이미 가속해 달려간 거리까지 dist_m 에 들어갔다.
+	//   그 결과 "18초 체류에 216m 이동", "81초 체류에 587m 이동" 같은 모순된 기록이 나왔다.
 	POINT stPrev, stCur;
 	stPrev.dfX = pstSession->dfParkLastX;
 	stPrev.dfY = pstSession->dfParkLastY;
 	stCur.dfX = stRawLogInfo.dfX;
 	stCur.dfY = stRawLogInfo.dfY;
-	pstSession->dfParkAccumDistM += HaversineMeters(stPrev, stCur);
-	pstSession->dfParkLastX = stRawLogInfo.dfX;
+	if (bSameZone)
+	{
+		// DRIVE_STATUS=PARKED(정차) + 속도 0 이면 차량이 움직이지 않은 것이므로 좌표 변화는
+		//   GPS 튐이다. 이때 이동거리를 더하면 정차 중인데 거리가 늘어난다(실측: 정확도 78~346m
+		//   구간에서 68m 증가). 체류시간만 연장한다. (2026-08-22 최정우 추가)
+		const bool bParkedStill = (stRawLogInfo.nDriveStatus == DRIVE_STATUS_PARKED)
+			&& (stRawLogInfo.fSpeed >= 0.0f) && (stRawLogInfo.fSpeed < 1.0f);
+		if (!bParkedStill)
+			pstSession->dfParkAccumDistM += HaversineMeters(stPrev, stCur);
+		pstSession->dtParkLastInZoneTime = stRawLogInfo.dtGPS;
+		pstSession->dfParkLastInZoneX = stRawLogInfo.dfX;
+		pstSession->dfParkLastInZoneY = stRawLogInfo.dfY;
+	}
+	pstSession->dfParkLastX = stRawLogInfo.dfX;			// 하버사인 기준점은 항상 최신 좌표
 	pstSession->dfParkLastY = stRawLogInfo.dfY;
 
 	// 신뢰 가능한(raw_vld=true) 확인 시각·좌표는 별도로 갱신 — 마감(finalize) 시 이 행 자체가
@@ -3438,9 +3625,6 @@ void CRawLogWorker::ProcessParkingCharge(int nThreadId, const sRawLogInfo& stRaw
 		pstSession->dfParkLastConfirmedX = stRawLogInfo.dfX;
 		pstSession->dfParkLastConfirmedY = stRawLogInfo.dfY;
 	}
-
-	bool bSameZone = (pstZone != nullptr) &&
-		(strcmp(pstSession->szParkingZoneRoadId, pstZone->szRoadID) == 0);
 
 	// 트립 종료(TRIP_EVENT=2) — 계속 정차 중이라 "이탈"이 감지될 다음 GPS가 영영 안 옴(예: 시동 끄고
 	//   주차 상태로 트립 종료). 이 경우를 놓치면 위반이 통째로 누락되므로, 트립 종료 시점을 강제
@@ -3464,7 +3648,10 @@ void CRawLogWorker::ProcessParkingCharge(int nThreadId, const sRawLogInfo& stRaw
 		// 디바운스 통과 = 원래 구역을 진짜로 벗어났다고 확정. 이 틱에 이미 "다른" 구역이 확인됐다면
 		//   노이즈가 아니라 실제 경계 전환이므로 유예 없이 곧바로 finalize(아래로 진행) — 재진입 유예는
 		//   "무존"(다음 행선지를 아직 모름) 상태에만 적용(2026-08-14 최정우 추가)
-		if (pstZone == nullptr)
+		//   단, 재가속(park_speedmax 초과)으로 인한 이탈은 유예 없이 즉시 마감한다 — 차량이 다시
+		//   달리기 시작한 것은 "다음 행선지를 모르는 상태"가 아니라 확정적 이탈이기 때문
+		//   (2026-08-22 최정우 추가)
+		if ((pstZone == nullptr) && !bSpeedExit)
 		{
 			if (pstSession->dtParkExitCandidateTime == 0)
 				pstSession->dtParkExitCandidateTime = stRawLogInfo.dtGPS;		// 무존 최초 감지 시각
@@ -3480,20 +3667,17 @@ void CRawLogWorker::ProcessParkingCharge(int nThreadId, const sRawLogInfo& stRaw
 	//   쓴다(기존 동작 그대로). 신뢰 불가(raw_vld=false — 트립종료 강제마감 경로에서만 발생)하면
 	//   그 시각까지 구역 안이었다는 근거가 없으므로, 마지막으로 신뢰 가능했던 확인 시각·좌표를
 	//   대신 사용해 "확인 안 된 시간"을 위반으로 청구하지 않게 한다 (2026-08-19 최정우 추가)
-	time_t dtDwellEnd;
-	double dfParkEndX, dfParkEndY;
-	if (bThisRowTrusted)
-	{
-		dtDwellEnd = stRawLogInfo.dtGPS;
-		dfParkEndX = pstSession->dfParkLastX;
-		dfParkEndY = pstSession->dfParkLastY;
-	}
-	else
-	{
-		dtDwellEnd = pstSession->dtParkLastConfirmedTime;
-		dfParkEndX = pstSession->dfParkLastConfirmedX;
-		dfParkEndY = pstSession->dfParkLastConfirmedY;
-	}
+	//   2026-08-22 수정 — 종료 시점은 "마지막으로 정차 조건을 만족한 지점"으로 고정한다. 이 행은
+	//   이미 구역을 벗어났거나 재가속한 시점이라, 그 시각까지를 체류로 인정하면 디바운스·유예에
+	//   쓴 시간이 위반 시간에 포함된다. raw_vld=false 마감 경로에서는 그보다 앞선 마지막 신뢰
+	//   시점이 있으면 그쪽을 쓴다(둘 중 이른 쪽).
+	//   2026-08-22 수정 — RAW_VLD 로 되돌리던 보정을 제거했다. 예전엔 마감 행이 RAW_VLD=false 면
+	//   체류 종료를 "마지막 RAW_VLD=true 시각"으로 당겼는데, 주정차 판정이 RAW_VLD 와 무관해진
+	//   지금은 그 보정이 도착 정차를 통째로 잘라낸다(실측: 117초에서 끊겨 도착 정차 79초 누락).
+	//   종료 시각은 "마지막으로 구역 안에 있던 시각" 하나로 판단한다.
+	time_t dtDwellEnd = pstSession->dtParkLastInZoneTime;
+	double dfParkEndX = pstSession->dfParkLastInZoneX;
+	double dfParkEndY = pstSession->dfParkLastInZoneY;
 	double dfDwellSec = difftime(dtDwellEnd, pstSession->dtParkEntryTime);
 
 	// 체류시간 임계값(위반 여부) 판단은 MapMatchSvr(검증서버) 책임이 아니라 과금서버 책임 —
@@ -3594,12 +3778,31 @@ void CRawLogWorker::ProcessParkingCharge(int nThreadId, const sRawLogInfo& stRaw
 	// 경계 전환 병합 — 이 틱에 이미 "다른" 주정차구역 위라면(디바운스 통과 시점에 pstZone이 확인된
 	//   경우) 다음 틱까지 기다리지 않고 곧바로 그 구역으로 새 세션 시작(경계 부근 거리/시간 귀속
 	//   공백 방지, 2026-08-14 최정우 추가)
+	//   2026-08-22 수정 — 이 경로도 park_entrycnt 를 거치게 한다. 예전엔 곧바로
+	//   BeginParkingZoneSession() 을 불러 연속 건수 검사를 우회했고, 그러면 1점짜리 스침만으로도
+	//   새 세션이 열려 체류시간 산출 불가능한 기록이 생긴다. 구역이 인접 배치될 때 드러나는 구멍.
 	if (!bTripEnding && (pstZone != nullptr))
 	{
-		BeginParkingZoneSession(stRawLogInfo, pstZone, pstSession);
+		strncpy(pstSession->szParkEntryCandRoadId, pstZone->szRoadID,
+			sizeof(pstSession->szParkEntryCandRoadId) - 1);
+		pstSession->szParkEntryCandRoadId[sizeof(pstSession->szParkEntryCandRoadId) - 1] = '\0';
+		pstSession->nParkEntryTicks = 1;
+		pstSession->dtParkEntryCandTime = stRawLogInfo.dtGPS;
+		pstSession->dfParkEntryCandX = stRawLogInfo.dfX;
+		pstSession->dfParkEntryCandY = stRawLogInfo.dfY;
 
-		LOGFMTI("[#%02d] parking zone entry(boundary merge)!device=[%s] trip_id=[%s] road=[%s]",
-			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstZone->szRoadID);
+		if (pstSession->nParkEntryTicks >= m_stConfig.nParkEntryCnt)
+		{
+			BeginParkingZoneSession(stRawLogInfo, pstZone, pstSession);
+			LOGFMTI("[#%02d] parking zone entry(boundary merge)!device=[%s] trip_id=[%s] road=[%s]",
+				nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstZone->szRoadID);
+		}
+		else
+		{
+			LOGFMTI("[#%02d] parking boundary candidate!device=[%s] trip_id=[%s] road=[%s] cnt=[1/%d]",
+				nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstZone->szRoadID,
+				m_stConfig.nParkEntryCnt);
+		}
 	}
 }
 

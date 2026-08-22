@@ -43,6 +43,9 @@ public:
 
 	inline const bool IsLoad() const { return m_bLoad; }
 	inline const sint16 GetSearchStep() const { return m_nMaxStep; }
+	// depth 1단계당 가산 비용(m) — config [mapmatch] hoppenalty. 0=비활성 (2026-08-22 최정우 추가)
+	inline const double GetHopPenalty() const { return m_dfHopPenalty; }
+	inline void SetHopPenalty(const double dfVal) { m_dfHopPenalty = dfVal; }
 
 private:
 	void SetDataInit();
@@ -51,6 +54,7 @@ private:
 	bool							m_bLoad;							// 데이터 로딩 여부 플래그
 	string							m_strDataFile;						// 데이터 바이너리 파일명 및 경로
 	sint16							m_nMaxStep;							// 연속 맵매칭 최대 검색 단계
+	double							m_dfHopPenalty;						// depth 1단계당 가산 비용(m) (2026-08-22 최정우 추가)
 	uint32							m_dwGridInfoSize;					// 그리드별 세그먼트 범위 byte 크기
 	uint32							m_dwGridSgmtInfoSize;				// 그리드별 세그먼트 정보 byte 크기
 	uint32							m_dwLinkSgmtInfoSize;				// 링크별 세그먼트 정보 byte 크기

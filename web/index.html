@@ -516,15 +516,21 @@ async function loadTripRoads(tripId) {
     const pl = L.polyline(latlngs, {
       color: colorFor(link), weight: weightFor(link), opacity: 0.85
     }).addTo(linkLayer);
-    // 주행방향 화살표 — 속이 빈 7px 선 화살표는 굵은 링크 위에서 잘 안 보여, 속을 채운
-    //   12px 삼각형으로 키우고 진한 남색으로 바꿨다. 간격도 90px→70px 로 좁혀 짧은 링크에도
-    //   최소 한 개는 찍히게 한다 (2026-08-22 최정우 수정)
+    // 주행방향 화살표 — 속을 채운 12px 삼각형, 간격 70px 로 짧은 링크에도 최소 한 개는 찍힌다.
+    //   색은 틸(#00796b) + 짙은 테두리 (2026-08-23 최정우 수정).
+    //   지도에 이미 쓰인 16색과 CIE76 ΔE 로 골랐다 — 최소 ΔE 33.6(가장 가까운 게 매칭점 청록
+    //   #00bcd4 이지만 명도가 45 대 71 로 크게 갈린다), 링크 파랑(#1e88e5)과도 충분히 분리된다.
+    //   밝기 조정 이력: 라임 #c6ff00(L93, ΔE43.2) → 너무 밝음 → 연두 #64dd17(L79, ΔE47.2)
+    //   → 더 어둡게 요청 → 틸 #00796b(L45, ΔE33.6).
+    //   초록 계열을 그대로 어�둡히면 개방형(#00a152)·출발마커(#2e7d32)와 겹친다(ΔE 0~12).
+    //   그래서 색상을 청록 쪽으로 틀어 명도를 낮추면서도 분리도를 유지했다.
     L.polylineDecorator(pl, {
       patterns: [{
         offset: '12%', repeat: '70px',
         symbol: L.Symbol.arrowHead({
           pixelSize: 12, headAngle: 55, polygon: true,
-          pathOptions: { stroke: false, fill: true, fillColor: '#0d1b4b', fillOpacity: 0.95 }
+          pathOptions: { stroke: true, color: '#e0f2f1', weight: 1.2, opacity: 0.9,
+                         fill: true, fillColor: '#00796b', fillOpacity: 1 }
         })
       }]
     }).addTo(linkLayer);

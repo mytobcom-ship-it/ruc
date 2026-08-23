@@ -326,6 +326,14 @@ const DATA = JSON.parse(document.getElementById('geumto-data').textContent);
 
 // canvas 렌더러 — 좌표 점이 많을 때 SVG 대비 확대/축소가 훨씬 가벼움 (2026-08-19 최정우 추가)
 const map = L.map('map', { zoomControl: true, renderer: L.canvas() }).setView(DATA.center, 16);
+
+// 출발·도착 마커 전용 계층 — 확대하면 G/M 순번 라벨에 가려지던 문제 해결 (2026-08-23 최정우 추가).
+//   Leaflet 기본 z-index 는 overlayPane 400 < markerPane 600 < tooltipPane 650 < popupPane 700 이다.
+//   출발·도착은 L.marker(divIcon) 라 markerPane(600) 에 들어가는데, GPS/매칭점의 순번 라벨은
+//   permanent 툴팁이라 tooltipPane(650) 에 들어가 항상 그 위에 그려진다. 확대할수록 화면에 보이는
+//   라벨이 많아져 출발·도착 마커가 통째로 가려졌다. 툴팁보다 위, 팝업보다 아래에 전용 계층을 둔다.
+map.createPane('sePane');       map.getPane('sePane').style.zIndex = 660;
+map.createPane('seLabelPane');  map.getPane('seLabelPane').style.zIndex = 670;
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 20,
   attribution: '&copy; OpenStreetMap contributors'
@@ -821,18 +829,19 @@ function updateStartEndMarkers(t) {
   const lastSeg = matchedSegments[matchedSegments.length - 1];
   if (firstSeg.length === 0 || lastSeg.length === 0) return;
   if (!startMarker) {
-    startMarker = L.marker(firstSeg[0], { icon: seIcon('se-start'), zIndexOffset: 900 })
+    startMarker = L.marker(firstSeg[0], { icon: seIcon('se-start'), zIndexOffset: 900, pane: 'sePane' })
       .bindTooltip('① 출발 (' + fmtTime(t.gps_dt_min) + ')',
-        { permanent: true, direction: 'right', offset: [14, 0], className: 'se-label s' })
+        { permanent: true, direction: 'right', offset: [14, 0], className: 'se-label s', pane: 'seLabelPane' })
       .addTo(liveMatchedLayer);
   }
   const last = lastSeg[lastSeg.length - 1];
   const endCls = t.complete ? 'se-end' : 'se-live';
   const endTooltip = '② ' + (t.complete ? '도착' : '진행중') + ' (' + fmtTime(t.gps_dt_max) + ')';
   if (!endMarker) {
-    endMarker = L.marker(last, { icon: seIcon(endCls), zIndexOffset: 1000 })
+    endMarker = L.marker(last, { icon: seIcon(endCls), zIndexOffset: 1000, pane: 'sePane' })
       .bindTooltip(endTooltip,
-        { permanent: true, direction: 'right', offset: [14, 0], className: 'se-label ' + (t.complete ? 'e' : 'l') })
+        { permanent: true, direction: 'right', offset: [14, 0],
+          className: 'se-label ' + (t.complete ? 'e' : 'l'), pane: 'seLabelPane' })
       .addTo(liveMatchedLayer);
     endMarkerCls = endCls;
   } else {

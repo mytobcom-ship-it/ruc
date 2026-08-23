@@ -71,6 +71,7 @@ typedef struct sConfig
 	int								nRadiusMax;							// radius_max
 	int								nRadiusSkip;						// radius_skip
 	int								nMaxStep;							// maxstep
+	double							dfHopLenRatio;						// [mapmatch] hoppenalty_lenratio — hop 벌점 링크길이 비례 상한, 0=비활성 (2026-08-23 최정우 추가)
 	double							dfHopPenalty;						// [mapmatch] hoppenalty — depth 1단계당 가산 비용(m), 0=비활성 (2026-08-22 최정우 추가)
 	int								nDistance;							// distance
 	int								nMatchTimeout;						// timeout

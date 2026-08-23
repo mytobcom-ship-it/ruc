@@ -46,6 +46,15 @@ public:
 	// depth 1단계당 가산 비용(m) — config [mapmatch] hoppenalty. 0=비활성 (2026-08-22 최정우 추가)
 	inline const double GetHopPenalty() const { return m_dfHopPenalty; }
 	inline void SetHopPenalty(const double dfVal) { m_dfHopPenalty = dfVal; }
+	// hop 벌점의 링크길이 비례 상한 — config [mapmatch] hoppenalty_lenratio. 0=비활성(현행)
+	//   hoppenalty 는 우회 매칭을 막으려고 넣었는데(2026-08-22), 짧은 지선을 정상적으로
+	//   지나가는 경우까지 같은 벌점을 물린다. 7m 링크에 8m 벌점이 붙으면 링크보다 벌점이 커서
+	//   차가 그 위에 있어도 직전 링크가 이긴다 — 합성 실측에서 지선 진입 7건 중 3건(42.9%)이
+	//   그렇게 누락됐다. 이 값을 주면 벌점을 min(hoppenalty, 링크길이 x ratio) 로 깎는다.
+	//   긴 링크로 우회하는 건 종전대로 막으면서 짧은 조각은 통과시키는 것이 목적
+	//   (2026-08-23 최정우 추가)
+	inline const double GetHopLenRatio() const { return m_dfHopLenRatio; }
+	inline void SetHopLenRatio(const double dfVal) { m_dfHopLenRatio = dfVal; }
 
 private:
 	void SetDataInit();
@@ -55,6 +64,7 @@ private:
 	string							m_strDataFile;						// 데이터 바이너리 파일명 및 경로
 	sint16							m_nMaxStep;							// 연속 맵매칭 최대 검색 단계
 	double							m_dfHopPenalty;						// depth 1단계당 가산 비용(m) (2026-08-22 최정우 추가)
+	double							m_dfHopLenRatio;					// hop 벌점 링크길이 비례 상한 배율, 0=비활성 (2026-08-23 최정우 추가)
 	uint32							m_dwGridInfoSize;					// 그리드별 세그먼트 범위 byte 크기
 	uint32							m_dwGridSgmtInfoSize;				// 그리드별 세그먼트 정보 byte 크기
 	uint32							m_dwLinkSgmtInfoSize;				// 링크별 세그먼트 정보 byte 크기

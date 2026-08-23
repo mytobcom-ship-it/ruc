@@ -191,6 +191,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	m_nRadius = static_cast<sint16>(stConfig.nRadius);
 	m_nMaxStep = static_cast<uint16>(stConfig.nMaxStep);
 	m_dfHopPenalty = stConfig.dfHopPenalty;					// (2026-08-22 최정우 추가)
+	m_dfHopLenRatio = stConfig.dfHopLenRatio;				// (2026-08-23 최정우 추가)
 	m_dwMaxDistance = static_cast<uint32>(stConfig.nDistance);
 	m_nMatchTimeout = stConfig.nMatchTimeout;
 	m_dfRadiusScale = stConfig.dfRadiusScale;
@@ -415,6 +416,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 
 	// 맵매칭 바이너리 데이터 로더 경로·maxstep 설정 (2026-07-08 최정우 주석 추가)
 	m_pcDataLoader->SetHopPenalty(m_dfHopPenalty);				// (2026-08-22 최정우 추가)
+	m_pcDataLoader->SetHopLenRatio(m_dfHopLenRatio);			// (2026-08-23 최정우 추가)
 	m_pcDataLoader->Initialize(m_strDataFile, m_nMaxStep);
 	// link.psf 등 기반 데이터 메모리 적재 (2026-07-08 최정우 주석 추가)
 	if (!m_pcDataLoader->SetDataUpdate())

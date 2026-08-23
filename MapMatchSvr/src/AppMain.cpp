@@ -357,6 +357,8 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	// [mapmatch] hoppenalty — 후보가 직전 링크에서 depth(hop) 를 건너뛴 만큼 가산할 비용(m).
 	//   0=비활성. 값이 클수록 "가깝지만 멀리 돌아가야 하는" 후보가 배제된다 (2026-08-22 최정우 추가)
 	cIniReader.GetProfileDouble("mapmatch", "hoppenalty", MM_HOP_PENALTY, pstConfig->dfHopPenalty);
+	// [mapmatch] hoppenalty_lenratio — 짧은 링크에서 벌점을 깎는 비율, 0=비활성 (2026-08-23 최정우 추가)
+	cIniReader.GetProfileDouble("mapmatch", "hoppenalty_lenratio", MM_HOP_LEN_RATIO, pstConfig->dfHopLenRatio);
 	if (pstConfig->dfHopPenalty < 0.0)
 		pstConfig->dfHopPenalty = 0.0;
 	if (pstConfig->nMaxStep <= 0)

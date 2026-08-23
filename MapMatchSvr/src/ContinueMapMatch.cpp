@@ -151,13 +151,25 @@ bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPU
 			//     이격 차이가 0.06~2.4m 수준이고 방위각도 갈리지 않아 그 시점 정보만으로는
 			//     못 가른다 — 다음 점을 봐야 한다는 위 설계의 근거가 된다.
 			//   표본 3건으로 임계값을 정하면 과적합이라 실차 데이터가 쌓인 뒤 착수한다 (2026-08-22 판단).
+			//   [2026-08-23 추가] hoppenalty_lenratio>0 이면 벌점을 링크 길이에 맞춰 깎는다.
+			//     7m 지선에 8m 벌점이 붙으면 링크보다 벌점이 커서, 차가 그 위에 있어도 직전
+			//     링크가 이긴다(합성 실측: 짧은 지선 진입 7건 중 3건 누락, 전부 직전 링크에 잔류).
+			//     긴 링크로 우회하는 것은 종전대로 막고 짧은 조각만 통과시키는 게 목적이라
+			//     후보별 링크 길이(dfLen)를 쓴다. 0 이면 종전 동작 그대로.
 			if (i > 0)
 			{
-				const double dfHopCost = static_cast<double>(i) * m_pcDataLoader->GetHopPenalty();
+				const double dfHopBase = m_pcDataLoader->GetHopPenalty();
+				const double dfLenRatio = m_pcDataLoader->GetHopLenRatio();
 				for (list<MATCH_ENTRY>::iterator it = listMatchEntryList.begin();
 					it != listMatchEntryList.end(); ++it)
 				{
-					it->dfCost += dfHopCost;
+					double dfUnit = dfHopBase;
+					if ((dfLenRatio > 0.0) && (it->dfLen > 0.0))
+					{
+						const double dfCap = it->dfLen * dfLenRatio;
+						if (dfCap < dfUnit) dfUnit = dfCap;
+					}
+					it->dfCost += static_cast<double>(i) * dfUnit;
 				}
 			}
 			listAllEntryList.insert(listAllEntryList.end(),

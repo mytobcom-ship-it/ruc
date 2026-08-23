@@ -143,6 +143,7 @@ private:
 	uint8							m_nCoordinateType;					// GPS 좌표 측지계
 	sint16							m_nRadius;							// 맵 매칭 유효 거리
 	uint16							m_nMaxStep;							// 연속 맵매칭시 연결 링크 확인 최대 개수
+	double							m_dfHopLenRatio;					// hoppenalty_lenratio (2026-08-23 최정우 추가)
 	double							m_dfHopPenalty;						// hoppenalty — depth 1단계당 가산 비용(m) (2026-08-22 최정우 추가)
 	int								m_nParkSpeedMax;					// park_speedmax — 주정차 판정 속도 상한(km/h) (2026-08-22 최정우 추가)
 	int								m_nParkEntryCnt;					// park_entrycnt — 세션 개시 연속 GPS 건수 (2026-08-22 최정우 추가)

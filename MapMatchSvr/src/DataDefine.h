@@ -239,6 +239,7 @@ typedef struct sAltitudeScoreConfig
 //   hop 1개당 이 값(m)만큼 가산해, 멀리 돌아가는 후보는 그만큼 더 가까워야 이기도록 한다.
 //   교차로 분할 링크가 9~12m 인 점을 감안해 8m 로 잡았다 — 정상적인 1 hop 전진은 거의 영향이
 //   없고, 3 hop 우회는 24m 를 더 물어 사실상 배제된다.
+#define MM_HOP_LEN_RATIO			0.0									// hop 벌점의 링크길이 비례 상한 배율. 0=비활성(현행) (2026-08-23 최정우 추가)
 #define MM_HOP_PENALTY				8.0								// (단위: m) depth 1단계당 가산 비용
 
 /**

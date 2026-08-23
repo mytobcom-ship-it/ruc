@@ -580,12 +580,15 @@ document.querySelectorAll('.charge-check input[type="checkbox"]').forEach(functi
 });
 
 const nodeLayer = L.layerGroup().addTo(map);
+// 노드 마커 반경 — 4 -> 6 으로 키우고 테두리도 함께 굵혔다. 링크선(weight 5~13) 위에서
+//   4px 는 눈에 잘 안 띄었다 (2026-08-23 최정우 수정)
+const NODE_R = 6;
 DATA.nodes.forEach(function (node) {
   const m = L.circleMarker([node.lat, node.lon], {
-    radius: 4, color: '#1b5e20', weight: 1.5, fillColor: '#43a047', fillOpacity: 0.9
+    radius: NODE_R, color: '#1b5e20', weight: 2, fillColor: '#43a047', fillOpacity: 0.9
   }).addTo(nodeLayer);
   m.bindTooltip(node.node_id + ' (연결 ' + node.conn + ')', {
-    className: 'node-label', direction: 'top', offset: [0, -4]
+    className: 'node-label', direction: 'top', offset: [0, -NODE_R]
   });
 });
 
@@ -706,23 +709,10 @@ let endMarkerCls = null;                                  // 현재 도착 마�
 // 출발·도착 마커 마우스오버 — 기본 라벨(①출발 (시각))에 M순번과 좌표를 덧붙인다.
 //   어느 매칭점이 출발/도착인지 라벨만으론 알 수 없어 추가 (2026-08-23 최정우 추가).
 //   G/M 마커의 bindSeqLabel 과 같은 방식이다 — 오버 시 상세, 아웃 시 원래 라벨로 복귀.
-//   Leaflet 은 'mouseover.se' 같은 네임스페이스를 지원하지 않으므로 핸들러는 마커 생성 시
-//   딱 한 번만 걸고, 표시할 내용은 marker._seInfo 에 갱신해 둔다(폴링마다 재바인딩하면
-//   핸들러가 누적된다).
-function attachSeHover(marker) {
-  marker.on('mouseover', function () {
-    const i = marker._seInfo || {};
-    marker.setTooltipContent(
-      '<b>' + (i.base || '') + (i.seq !== null && i.seq !== undefined ? ' · M' + i.seq : '') + '</b>' +
-      (i.ll ? '<br/>' + i.ll[1].toFixed(6) + ', ' + i.ll[0].toFixed(6) : ''));
-  });
-  marker.on('mouseout', function () {
-    marker.setTooltipContent((marker._seInfo || {}).base || '');
-  });
-}
-function setSeInfo(marker, baseText, seq, latlng) {
-  if (!marker) return;
-  marker._seInfo = { base: baseText, seq: seq, ll: latlng };
+//   M순번은 마우스오버가 아니라 상시 라벨에 함께 표시한다 — 어느 매칭점이 출발/도착인지
+//   오버하지 않아도 바로 보여야 한다 (2026-08-23 최정우 수정)
+function seLabelText(baseText, seq) {
+  return baseText + (seq !== null && seq !== undefined ? ' · M' + seq : '');
 }
 
 // 출발·도착 전용 마커 아이콘 — box-shadow 로 다중 테두리를 만든다 (2026-08-22 최정우 추가)
@@ -852,24 +842,25 @@ function updateStartEndMarkers(t) {
   const firstSeg = matchedSegments[0];
   const lastSeg = matchedSegments[matchedSegments.length - 1];
   if (firstSeg.length === 0 || lastSeg.length === 0) return;
+  const startTooltip = seLabelText('① 출발 (' + fmtTime(t.gps_dt_min) + ')', firstMatchedSeq);
   if (!startMarker) {
     startMarker = L.marker(firstSeg[0], { icon: seIcon('se-start'), zIndexOffset: 900, pane: 'sePane' })
-      .bindTooltip('① 출발 (' + fmtTime(t.gps_dt_min) + ')',
+      .bindTooltip(startTooltip,
         { permanent: true, direction: 'right', offset: [14, 0], className: 'se-label s', pane: 'seLabelPane' })
       .addTo(liveMatchedLayer);
-    attachSeHover(startMarker);
+  } else {
+    startMarker.setTooltipContent(startTooltip);
   }
-  setSeInfo(startMarker, '① 출발 (' + fmtTime(t.gps_dt_min) + ')', firstMatchedSeq, firstSeg[0]);
   const last = lastSeg[lastSeg.length - 1];
   const endCls = t.complete ? 'se-end' : 'se-live';
-  const endTooltip = '② ' + (t.complete ? '도착' : '진행중') + ' (' + fmtTime(t.gps_dt_max) + ')';
+  const endTooltip = seLabelText('② ' + (t.complete ? '도착' : '진행중') + ' (' + fmtTime(t.gps_dt_max) + ')',
+                                 lastMatchedSeq);
   if (!endMarker) {
     endMarker = L.marker(last, { icon: seIcon(endCls), zIndexOffset: 1000, pane: 'sePane' })
       .bindTooltip(endTooltip,
         { permanent: true, direction: 'right', offset: [14, 0],
           className: 'se-label ' + (t.complete ? 'e' : 'l'), pane: 'seLabelPane' })
       .addTo(liveMatchedLayer);
-    attachSeHover(endMarker);
     endMarkerCls = endCls;
   } else {
     endMarker.setLatLng(last);
@@ -879,7 +870,6 @@ function updateStartEndMarkers(t) {
     }
     endMarker.setTooltipContent(endTooltip);
   }
-  setSeInfo(endMarker, endTooltip, lastMatchedSeq, last);
 }
 
 // 좌표 테이블 행 1개 갱신/추가 — tbody 전체를 innerHTML 로 교체하지 않아 스크롤 위치가

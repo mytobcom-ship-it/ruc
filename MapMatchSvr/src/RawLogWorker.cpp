@@ -1628,15 +1628,29 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		//   먼저 기록해둔다(2026-08-20 최정우 추가, 사용자 지시 — 이슈②·③이 공유하던 근본원인 해결).
 		//   snapshot-후-increment 패턴은 ExpireTtlSessions()와 동일 이유(한 tick에 폐쇄형·구간단속이
 		//   동시에 열려있을 수 있어 trip_seq PK 충돌 방지)
+		//   마감 후에는 진행 플래그를 내린다. 두 Append 함수는 세션을 const 참조로 받아 스스로
+		//   플래그를 못 내리는데, 한 트립에 TRIP_EVENT=END 행이 둘 이상 오면(실측
+		//   000376_20260819140856 의 seq19·seq23 — seq19 는 시각이 뒤로 간 도착 이벤트 행이다)
+		//   같은 진입이 두 번 마감돼 AUDIT 행이 중복 적재된다. 실측에서 구간단속 RL-Z00003 이
+		//   진입시각 20260819140940 으로 2건(체류 9초·21초) 쌓였다. 둘 다 charge_yn=N 이라
+		//   요금이 이중으로 나가지는 않았지만, 출구를 봤다면 이중 과금이 될 수 있는 구조다.
+		//   트립 종료 시 세션은 어차피 배치 끝에 삭제되므로 여기서 미리 내려도 안전하다
+		//   (2026-08-23 최정우 수정)
 		bool bWasClosedRoad = stSession.bInClosedRoad;
 		AppendExpiredClosedRoadCharge(nThreadId, stRawLogInfo.szDeviceKey, stSession, stRawLogInfo.dtGPS, pvtChargeInserts);
 		if (bWasClosedRoad)
+		{
 			stSession.nChargeSeq += 1;
+			stSession.bInClosedRoad = false;
+		}
 
 		bool bWasSpeedZone = stSession.bInSpeedZone;
 		AppendExpiredSpeedZoneCharge(nThreadId, stRawLogInfo.szDeviceKey, stSession, stRawLogInfo.dtGPS, pvtChargeInserts);
 		if (bWasSpeedZone)
+		{
 			stSession.nChargeSeq += 1;
+			stSession.bInSpeedZone = false;
+		}
 	}
 
 	// ── GPS_SEQ 역전 행 — 세션 앵커를 유지한 채 이 행만 SKIP (2026-08-23 최정우 추가) ──

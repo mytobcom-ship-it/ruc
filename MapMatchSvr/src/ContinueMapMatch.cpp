@@ -398,6 +398,11 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
 
 					if (bDefiniteNoise)
 					{
+						// 보정 전 값을 남겨둔다 — 결과가 말이 안 되면 되돌린다 (2026-08-23 최정우 추가)
+						const double dfKeepX = stMatchEntry.dfMatchX;
+						const double dfKeepY = stMatchEntry.dfMatchY;
+						const double dfKeepSgmtLen = stMatchEntry.dfSgmtMatchLen;
+
 						double dfNewPos = stSgmtMatchInput.dfPrevLinkPos + MM_NOISE_FORWARD_NUDGE_M;
 						if (dfNewPos >= stMatchEntry.dfLen)
 						{
@@ -419,6 +424,25 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
 							stMatchEntry.dfMatchY = stSgmtMatchInput.dfPrevMatchY
 								+ MM_NOISE_FORWARD_NUDGE_M * cos(RAD(static_cast<double>(stSgmtInfo.nDirAng)));
 							stMatchEntry.dfSgmtMatchLen = dfNewPos - static_cast<double>(stMatchEntry.wLenFromLink);
+						}
+
+						// 온전성 검사 — 보정은 "마지막 신뢰 좌표에서 1m 전진"이라 결과가 현재 GPS
+						//   근처여야 한다. 멀면 기준점(dfPrevMatchX/Y)이 유효하지 않았다는 뜻이므로
+						//   보정을 포기한다. 자세한 근거는 DataDefine.h MM_NOISE_FIX_SANITY_M 주석.
+						//   정상 보정은 결과가 GPS 에서 수 m 이내라 여기 걸릴 수 없다 (2026-08-23 최정우 추가)
+						const double dfSanity = MM_NOISE_FIX_SANITY_M * MM_COORD_UNITS_PER_M;
+						const double dfGapX = stMatchEntry.dfMatchX - stSgmtMatchInput.stPoint.dfX;
+						const double dfGapY = stMatchEntry.dfMatchY - stSgmtMatchInput.stPoint.dfY;
+						if ((dfGapX * dfGapX + dfGapY * dfGapY) > (dfSanity * dfSanity))
+						{
+							LOGFMTW("noise fix rejected! corrected=[%.6f,%.6f] gps=[%.6f,%.6f] link=[%llu]",
+								stMatchEntry.dfMatchX / 360000.0, stMatchEntry.dfMatchY / 360000.0,
+								stSgmtMatchInput.stPoint.dfX / 360000.0,
+								stSgmtMatchInput.stPoint.dfY / 360000.0,
+								static_cast<unsigned long long>(stMatchEntry.qwLinkID));
+							stMatchEntry.dfMatchX = dfKeepX;
+							stMatchEntry.dfMatchY = dfKeepY;
+							stMatchEntry.dfSgmtMatchLen = dfKeepSgmtLen;
 						}
 					}
 					else

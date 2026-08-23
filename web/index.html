@@ -696,11 +696,34 @@ const accumPoints = new Map();
 //   도로와 무관한 선이 그려지는 문제가 있었음 (2026-08-19 최정우 수정)
 let matchedSegments = [];              // [[[lat,lon],...], [[lat,lon],...], ...] 구간별 좌표
 let lastMatchedSeq = null;             // 마지막으로 추가한 매칭점의 gps_seq — 연속 여부 판정용
+let firstMatchedSeq = null;            // 첫 매칭점의 gps_seq — 출발 마커 M순번 표시용 (2026-08-23 최정우 추가)
 let matchedRouteLine = null;           // 지속 폴리라인(멀티라인) — setLatLngs 로 연장(재생성 안 함)
 let matchedRouteCasing = null;         // 경로선 테두리(아래에 깔리는 짙은 선) (2026-08-22 최정우 추가)
 let startMarker = null;
 let endMarker = null;
 let endMarkerCls = null;                                  // 현재 도착 마커 클래스(불필요한 재생성 방지)
+
+// 출발·도착 마커 마우스오버 — 기본 라벨(①출발 (시각))에 M순번과 좌표를 덧붙인다.
+//   어느 매칭점이 출발/도착인지 라벨만으론 알 수 없어 추가 (2026-08-23 최정우 추가).
+//   G/M 마커의 bindSeqLabel 과 같은 방식이다 — 오버 시 상세, 아웃 시 원래 라벨로 복귀.
+//   Leaflet 은 'mouseover.se' 같은 네임스페이스를 지원하지 않으므로 핸들러는 마커 생성 시
+//   딱 한 번만 걸고, 표시할 내용은 marker._seInfo 에 갱신해 둔다(폴링마다 재바인딩하면
+//   핸들러가 누적된다).
+function attachSeHover(marker) {
+  marker.on('mouseover', function () {
+    const i = marker._seInfo || {};
+    marker.setTooltipContent(
+      '<b>' + (i.base || '') + (i.seq !== null && i.seq !== undefined ? ' · M' + i.seq : '') + '</b>' +
+      (i.ll ? '<br/>' + i.ll[1].toFixed(6) + ', ' + i.ll[0].toFixed(6) : ''));
+  });
+  marker.on('mouseout', function () {
+    marker.setTooltipContent((marker._seInfo || {}).base || '');
+  });
+}
+function setSeInfo(marker, baseText, seq, latlng) {
+  if (!marker) return;
+  marker._seInfo = { base: baseText, seq: seq, ll: latlng };
+}
 
 // 출발·도착 전용 마커 아이콘 — box-shadow 로 다중 테두리를 만든다 (2026-08-22 최정우 추가)
 function seIcon(cls) {
@@ -788,6 +811,7 @@ map.on('moveend', renderVisiblePoints);
 function resetTripState() {
   accumPoints.clear();
   matchedSegments = [];
+  firstMatchedSeq = null;                    // (2026-08-23 최정우 추가)
   lastMatchedSeq = null;
   matchedRouteLine = null;
   matchedRouteCasing = null;
@@ -833,7 +857,9 @@ function updateStartEndMarkers(t) {
       .bindTooltip('① 출발 (' + fmtTime(t.gps_dt_min) + ')',
         { permanent: true, direction: 'right', offset: [14, 0], className: 'se-label s', pane: 'seLabelPane' })
       .addTo(liveMatchedLayer);
+    attachSeHover(startMarker);
   }
+  setSeInfo(startMarker, '① 출발 (' + fmtTime(t.gps_dt_min) + ')', firstMatchedSeq, firstSeg[0]);
   const last = lastSeg[lastSeg.length - 1];
   const endCls = t.complete ? 'se-end' : 'se-live';
   const endTooltip = '② ' + (t.complete ? '도착' : '진행중') + ' (' + fmtTime(t.gps_dt_max) + ')';
@@ -843,6 +869,7 @@ function updateStartEndMarkers(t) {
         { permanent: true, direction: 'right', offset: [14, 0],
           className: 'se-label ' + (t.complete ? 'e' : 'l'), pane: 'seLabelPane' })
       .addTo(liveMatchedLayer);
+    attachSeHover(endMarker);
     endMarkerCls = endCls;
   } else {
     endMarker.setLatLng(last);
@@ -852,6 +879,7 @@ function updateStartEndMarkers(t) {
     }
     endMarker.setTooltipContent(endTooltip);
   }
+  setSeInfo(endMarker, endTooltip, lastMatchedSeq, last);
 }
 
 // 좌표 테이블 행 1개 갱신/추가 — tbody 전체를 innerHTML 로 교체하지 않아 스크롤 위치가
@@ -937,6 +965,7 @@ function applyIncrementalUpdate(points, t) {
       } else {
         matchedSegments.push([[p.match_lat, p.match_lon]]);
       }
+      if (firstMatchedSeq === null) firstMatchedSeq = p.gps_seq;   // (2026-08-23 최정우 추가)
       lastMatchedSeq = p.gps_seq;
       if (p.gps_lat != null && p.gps_lon != null && bounds.contains([p.match_lat, p.match_lon])) {
         addMatchMarker(p);

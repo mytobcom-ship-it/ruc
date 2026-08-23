@@ -113,6 +113,7 @@ CServer::CServer() :
 	m_dtLastGateReload(0),
 	m_nParkBuf(CFG_DEF_PARK_BUF),
 	m_nParkAccMax(CFG_DEF_PARK_ACCMAX),
+	m_nIgnoreRawVld(CFG_DEF_IGNORE_RAWVLD),
 	m_nParkExitCnt(CFG_DEF_PARK_EXITCNT),
 	m_nParkRegraceSec(CFG_DEF_PARK_REGRACE),
 	m_nParkTtlSec(CFG_DEF_PARK_TTL),
@@ -215,6 +216,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	m_nGateReloadSec = stConfig.nGateReloadSec;					// (2026-08-12 최정우 추가)
 	m_nParkBuf = stConfig.nParkBuf;								// (2026-08-13 최정우 추가)
 	m_nParkAccMax = stConfig.nParkAccMax;						// (2026-08-23 최정우 추가)
+	m_nIgnoreRawVld = stConfig.nIgnoreRawVld;					// (2026-08-23 최정우 추가)
 	m_nParkExitCnt = stConfig.nParkExitCnt;						// (2026-08-13 최정우 추가)
 	m_nParkSpeedMax = stConfig.nParkSpeedMax;					// (2026-08-22 최정우 추가)
 	m_nParkEntryCnt = stConfig.nParkEntryCnt;					// (2026-08-22 최정우 추가)
@@ -517,6 +519,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	stWorkerConfig.nHeadingMaxDist = static_cast<int>(m_dwMaxDistance);	// [mapmatch] distance → live heading 거리 상한 (2026-07-15 최정우 추가)
 	stWorkerConfig.nParkBuf = m_nParkBuf;						// (2026-08-13 최정우 추가)
 	stWorkerConfig.nParkAccMax = m_nParkAccMax;					// (2026-08-23 최정우 추가)
+	stWorkerConfig.nIgnoreRawVld = m_nIgnoreRawVld;				// (2026-08-23 최정우 추가)
 	stWorkerConfig.nParkExitCnt = m_nParkExitCnt;				// (2026-08-13 최정우 추가)
 	stWorkerConfig.nParkSpeedMax = m_nParkSpeedMax;				// (2026-08-22 최정우 추가)
 	stWorkerConfig.nParkEntryCnt = m_nParkEntryCnt;				// (2026-08-22 최정우 추가)

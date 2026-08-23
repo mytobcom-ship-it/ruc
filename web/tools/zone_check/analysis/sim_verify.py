@@ -36,6 +36,50 @@ if not rows:
 
 print('합성 표본 %d건 (트립 %d개)\n' % (len(rows), len({x[0] for x in rows})))
 
+# ── 0) 측위 실패 모드 정합성 ───────────────────────────────────────────────
+#   실주행에서 뽑은 에피소드 구조(2026-08-23)와 대조한다. 이게 안 맞으면 아래 결론이
+#   전부 낙관 편향을 갖는다 — 종전 모델에는 이 모드가 아예 없었다.
+print('── 0. 측위 실패 모드 정합성 (accuracy_m>50 연속 구간) ──')
+byrun = {}
+for x in rows:
+    byrun.setdefault(x[0], []).append(x)
+eps = []
+for tid, pts in byrun.items():
+    pts.sort(key=lambda y: y[1])
+    i = 0
+    while i < len(pts):
+        if (pts[i][4] or 0) <= 50:
+            i += 1; continue
+        j = i
+        while j < len(pts) and (pts[j][4] or 0) > 50:
+            j += 1
+        seg = pts[i:j]
+        dev = [float(x[3]) for x in seg]
+        eps.append((len(seg), max(dev), 'START' if i == 0 else ('END' if j >= len(pts) else 'MID')))
+        i = j
+nfail = sum(e[0] for e in eps)
+REAL_EP = {'ratio': 13.5, 'len_med': 14, 'len_max': 42, 'dev_med': 37, 'dev_p75': 185,
+           'dev_max': 518, 'acc_med': 200}
+print('%-24s %10s %10s' % ('항목', '합성', '실주행'))
+print('%-24s %9.1f%% %9.1f%%' % ('실패 좌표 비율', 100.0 * nfail / len(rows), REAL_EP['ratio']))
+if eps:
+    L = sorted(e[0] for e in eps); D = sorted(e[1] for e in eps)
+    print('%-24s %10d %10d' % ('에피소드 수', len(eps), 12))
+    print('%-24s %10d %10d' % ('길이 중앙', L[len(L) // 2], REAL_EP['len_med']))
+    print('%-24s %10d %10d' % ('길이 최대', L[-1], REAL_EP['len_max']))
+    print('%-24s %9.0fm %9.0fm' % ('최대이탈 중앙', D[len(D) // 2], REAL_EP['dev_med']))
+    print('%-24s %9.0fm %9.0fm' % ('최대이탈 75분위', q(D, 0.75), REAL_EP['dev_p75']))
+    print('%-24s %9.0fm %9.0fm' % ('최대이탈 최대', D[-1], REAL_EP['dev_max']))
+    fa = sorted(int(x[4]) for x in rows if x[4] and int(x[4]) > 50)
+    if fa:
+        print('%-24s %10d %10d' % ('실패 중 accuracy 중앙', fa[len(fa) // 2], REAL_EP['acc_med']))
+    c2 = collections.Counter(e[2] for e in eps)
+    print('%-24s %10s %10s' % ('위치(시작/끝/중간)',
+          '%d/%d/%d' % (c2['START'], c2['END'], c2['MID']), '5/4/3'))
+else:
+    print('  실패 에피소드 없음 — [gpsfail] 설정 확인 필요')
+print()
+
 # ── 1) 분포 대조 ───────────────────────────────────────────────────────────
 print('── 1. 실주행 대비 분포 대조 ──')
 sim_on = [float(x[3]) for x in rows if x[6] == 0]                # ON_ROAD 진짜 오차

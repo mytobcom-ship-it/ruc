@@ -216,6 +216,7 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 	stSgmtMatchInput.bHasPrevLinkPos = stMapMatchInput.bHasPrevLinkPos;
 	// 같은 링크 노이즈 보정 기준점(직전 신뢰 매칭 좌표, WGS84) — StartMapMatch 내부에서
 	//   내부 스케일(*360000)로 변환됨 (2026-07-22 최정우 추가)
+	stSgmtMatchInput.bHasPrevMatchPos = stMapMatchInput.bHasPrevMatchPos;	// (2026-08-23 최정우 추가)
 	stSgmtMatchInput.dfPrevMatchX = stMapMatchInput.dfPrevMatchX;
 	stSgmtMatchInput.dfPrevMatchY = stMapMatchInput.dfPrevMatchY;
 

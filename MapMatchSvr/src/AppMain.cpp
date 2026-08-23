@@ -191,6 +191,8 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileInt("charge", "park_buf", CFG_DEF_PARK_BUF, pstConfig->nParkBuf);
 	// [charge] park_accmax (단위: m) — 주정차 판정 좌표 정확도 상한, 0=비활성 (2026-08-23 최정우 추가)
 	cIniReader.GetProfileInt("charge", "park_accmax", CFG_DEF_PARK_ACCMAX, pstConfig->nParkAccMax);
+	// [mapmatch] ignore_rawvld — RAW_VLD 무시 전량 매칭(검증용, 기본 0) (2026-08-23 최정우 추가)
+	cIniReader.GetProfileInt("mapmatch", "ignore_rawvld", CFG_DEF_IGNORE_RAWVLD, pstConfig->nIgnoreRawVld);
 	if (pstConfig->nParkBuf < 0)
 		pstConfig->nParkBuf = CFG_DEF_PARK_BUF;
 	// [charge] park_exitcnt — 구역 이탈 확정 연속 GPS 건수(디바운스) (2026-08-13 최정우 추가)

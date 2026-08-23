@@ -951,7 +951,7 @@ bool CRawLogWorker::ValidateRawLog(int nThreadId, const sRawLogInfo& stRawLogInf
  *   - GPS_LAT 또는 GPS_LON 이 NULL
  *   - RAW_VLD 가 FALSE 또는 NULL
 */
-bool CRawLogWorker::ShouldSkipGpsInput(int nThreadId, const sRawLogInfo& stRawLogInfo)
+bool CRawLogWorker::ShouldSkipGpsInput(int nThreadId, const sRawLogInfo& stRawLogInfo, bool bIgnoreRawVld)
 {
 	if ((stRawLogInfo.bGpsLatNull) || (stRawLogInfo.bGpsLonNull))
 	{
@@ -967,7 +967,8 @@ bool CRawLogWorker::ShouldSkipGpsInput(int nThreadId, const sRawLogInfo& stRawLo
 	//   라 "폴리곤 안에 있었다"는 사실 자체를 신뢰할 수 없다. 그 결과 실제 정차 2건(178초·75초)이
 	//   기록되지 않지만, 이건 이 검사가 도입된 시점부터의 동작이고 규칙 변경과 무관하다.
 	//   완화하려면 폴리곤 크기 대비 ACCURACY_M 임계값을 구역별로 둬야 해서 관리비용이 크다고 판단.
-	if ((!stRawLogInfo.bRawVldKnown) || (!stRawLogInfo.bRawVld))
+	//   ignore_rawvld=1 이면 이 검사를 건너뛴다 — 운영 데이터 전량 매칭 검증용 (2026-08-23 최정우 추가)
+	if (!bIgnoreRawVld && ((!stRawLogInfo.bRawVldKnown) || (!stRawLogInfo.bRawVld)))
 	{
 		LOGFMTW("[#%02d] reject invalid raw_vld!device=[%s] trip_id=[%s] seq=[%u] known=[%d] raw_vld=[%d]",
 			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRawLogInfo.dwSeqNo,
@@ -1659,7 +1660,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 	}
 
 	// GPS 좌표·RAW_VLD 유효성 검사 — SKIP(3). 세션·DB 좌표 미저장 (2026-07-10 최정우 수정)
-	if (ShouldSkipGpsInput(nThreadId, stRawLogInfo))
+	if (ShouldSkipGpsInput(nThreadId, stRawLogInfo, m_stConfig.nIgnoreRawVld != 0))
 	{
 		stSession.dwLastGpsSeq = stRawLogInfo.dwSeqNo;
 		stSession.bLastPointOk = false;			// (2026-07-21 최정우 추가)
@@ -2093,8 +2094,15 @@ bool CRawLogWorker::RunMapMatch(int nThreadId, const sRawLogInfo& stRawLogInfo,
 		stAltCtx.bHasPrevLinkPos = true;
 		// 같은 링크 노이즈 보정(1m 전진) 시, 이번 후보 자신의 계산값이 아니라 마지막으로
 		//   신뢰했던 실제 매칭 좌표를 기준점으로 삼기 위해 함께 전달 (2026-07-22 최정우 추가)
-		stAltCtx.dfPrevMatchX = pstSession->dfLastMatchX;
-		stAltCtx.dfPrevMatchY = pstSession->dfLastMatchY;
+		//   단 "신뢰 가능한 매칭"이 한 번이라도 있었을 때만이다. bHasPrevLinkPos 는 매칭 성공이면
+		//   무조건 서지만 dfLastMatchX/Y 는 신뢰 매칭에서만 갱신되므로, 트립 앞부분이 전부
+		//   SKIP 이면 0 인 채로 넘어가 보정 좌표가 (0,0) 이 된다 (2026-08-23 최정우 수정)
+		stAltCtx.bHasPrevMatchPos = pstSession->bHasLastMatch;
+		if (pstSession->bHasLastMatch)
+		{
+			stAltCtx.dfPrevMatchX = pstSession->dfLastMatchX;
+			stAltCtx.dfPrevMatchY = pstSession->dfLastMatchY;
+		}
 	}
 
 	// 연속 맵매칭 링크는 "맵매칭 성공(반경 내 MATCHED)" 시에만 세션에 반영한다.

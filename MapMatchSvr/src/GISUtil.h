@@ -51,6 +51,7 @@ typedef struct sSgmtMatchInput
 	uint64							qwPrevLinkID;						// 직전 매칭 성공 링크 ID (0=없음)
 	double							dfPrevLinkPos;						// 직전 매칭 위치 — 링크 시작점부터 거리(m)
 	bool							bHasPrevLinkPos;					// dfPrevLinkPos 유효 여부
+	bool							bHasPrevMatchPos;					// dfPrevMatchX/Y 유효 여부 (2026-08-23 최정우 추가)
 	// 직전 링크의 종료 노드 ID — 링크가 바뀌는 후보의 진입/진출 방향 판정용.
 	//   ContinueMapMatch::StartMapMatch 가 세팅 (2026-07-21 최정우 추가 — 진입링크 역행 감지)
 	uint64							qwPrevEdNodeID;						// 직전 링크 종료 노드 ID (0=없음)
@@ -77,6 +78,7 @@ typedef struct sSgmtMatchInput
 		qwPrevLinkID(0),
 		dfPrevLinkPos(0.0),
 		bHasPrevLinkPos(false),
+		bHasPrevMatchPos(false),
 		qwPrevEdNodeID(0),
 		dfPrevLinkLen(0.0),
 		dfPrevMatchX(0.0),

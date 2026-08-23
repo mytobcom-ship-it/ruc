@@ -103,6 +103,11 @@ typedef struct sAltMatchCtx
 	double							dfHorizMove;						// 직전 매칭점→현재 GPS 수평거리(m)
 	double							dfPrevLinkPos;						// 직전 매칭 위치 — 링크 시작점부터 거리(m), 역행 페널티용 (2026-07-20 최정우 추가)
 	bool							bHasPrevLinkPos;					// dfPrevLinkPos 보유 여부 (2026-07-20 최정우 추가)
+	// dfPrevMatchX/Y 는 "신뢰 가능한" 매칭에서만 갱신되는데(bHasLastMatch), bHasPrevLinkPos 는
+	//   매칭 성공이면 무조건 갱신된다. 두 조건이 어긋나 dfPrevMatchX 가 0 인 채로 노이즈 보정
+	//   기준점으로 쓰이면 매칭 좌표가 (0,0) 근처로 찍힌다 — 실측 확인(000370_20260819093236
+	//   seq26~ , 13,200km 오매칭). 그래서 보유 여부를 따로 들고 다닌다 (2026-08-23 최정우 추가)
+	bool							bHasPrevMatchPos;					// dfPrevMatchX/Y 유효 여부
 	double							dfPrevMatchX;						// 직전(신뢰 가능) 매칭 성공 X(경도, WGS84) — 같은 링크 노이즈 보정 기준점 (2026-07-22 최정우 추가)
 	double							dfPrevMatchY;						// 직전(신뢰 가능) 매칭 성공 Y(위도, WGS84) (2026-07-22 최정우 추가)
 
@@ -113,6 +118,7 @@ typedef struct sAltMatchCtx
 		dfHorizMove(0.0),
 		dfPrevLinkPos(0.0),
 		bHasPrevLinkPos(false),
+		bHasPrevMatchPos(false),
 		dfPrevMatchX(0.0),
 		dfPrevMatchY(0.0)
 	{}
@@ -142,6 +148,11 @@ typedef struct sMapMatchInput
 	uint64							qwBiasLinkID;						// 연속실패 Begin 재검색용: 직전 성공 링크(연결성 편향, 0=미적용) (2026-07-15 최정우 추가)
 	double							dfPrevLinkPos;						// 직전 매칭 위치 — 링크 시작점부터 거리(m), 역행 페널티용 (2026-07-20 최정우 추가)
 	bool							bHasPrevLinkPos;					// dfPrevLinkPos 보유 여부 (2026-07-20 최정우 추가)
+	// dfPrevMatchX/Y 는 "신뢰 가능한" 매칭에서만 갱신되는데(bHasLastMatch), bHasPrevLinkPos 는
+	//   매칭 성공이면 무조건 갱신된다. 두 조건이 어긋나 dfPrevMatchX 가 0 인 채로 노이즈 보정
+	//   기준점으로 쓰이면 매칭 좌표가 (0,0) 근처로 찍힌다 — 실측 확인(000370_20260819093236
+	//   seq26~ , 13,200km 오매칭). 그래서 보유 여부를 따로 들고 다닌다 (2026-08-23 최정우 추가)
+	bool							bHasPrevMatchPos;					// dfPrevMatchX/Y 유효 여부
 	double							dfPrevMatchX;						// 직전(신뢰 가능) 매칭 성공 X(경도, WGS84) — 같은 링크 노이즈 보정 기준점 (2026-07-22 최정우 추가)
 	double							dfPrevMatchY;						// 직전(신뢰 가능) 매칭 성공 Y(위도, WGS84) (2026-07-22 최정우 추가)
 
@@ -164,6 +175,7 @@ typedef struct sMapMatchInput
 		qwBiasLinkID(0),
 		dfPrevLinkPos(0.0),
 		bHasPrevLinkPos(false),
+		bHasPrevMatchPos(false),
 		dfPrevMatchX(0.0),
 		dfPrevMatchY(0.0)
 	{}

@@ -95,6 +95,11 @@ typedef struct sConfig
 	//   16~50 구간은 오차 중앙 8.6m·폴리곤 오판정 0건이라 살린다 — RAW_VLD=false 도 주정차
 	//   판정은 수행한다는 2026-08-22 확정은 그대로 유지된다 (2026-08-23 최정우 추가)
 	int								nParkAccMax;
+	// [mapmatch] ignore_rawvld — 1이면 RAW_VLD 검사를 건너뛰고 모든 좌표에 맵매칭을 시도한다.
+	//   운영 데이터 전량 검증용 스위치다(기본 0=현행). 켜면 RAW_VLD=false 좌표(실주행의 15.5%)도
+	//   매칭 대상이 되고, 그 좌표가 실제로 쓸 만한지는 엔진의 보완 로직(역행 확정·이상속도·
+	//   클램프 저신뢰·hop 페널티)이 걸러내는지로 판별한다 (2026-08-23 최정우 추가)
+	int								nIgnoreRawVld;
 	int								nParkExitCnt;						// [charge] park_exitcnt — 구역 이탈 확정 연속 GPS 건수(디바운스) (2026-08-13 최정우 추가)
 	int								nParkSpeedMax;						// [charge] park_speedmax (단위: km/h) — 이 속도 이하에서만 주정차로 판정 (2026-08-22 최정우 추가)
 	int								nParkEntryCnt;						// [charge] park_entrycnt — 세션 개시에 필요한 연속 충족 GPS 건수 (2026-08-22 최정우 추가)

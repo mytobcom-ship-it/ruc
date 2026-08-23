@@ -265,10 +265,12 @@
 
         <div class="issue-card" style="border-left-color:#fdd835;">
           <div class="issue-title" style="color:#f57f17;">주정차단속 <span style="font-weight:400;font-size:11px;color:var(--muted);">CHARGE_TYPE=4</span></div>
-          <div class="issue-row"><b class="label-issue">이슈(미해결)</b> park_regrace(60초) 재진입 유예가 통과 구간과 실제 정차를 한 건으로 병합함. 실측에서 39km/h 로 폴리곤에 진입한 뒤 도착 정차까지 199초·525m 가 1건으로 묶였음</div>
-          <div class="issue-row"><b class="label-fix">대응</b> 유예를 10~15초로 줄이면 분리되나, 짧게 잡으면 GPS 튐에 세션이 끊김 — 실차 데이터로 임계 결정 필요</div>
+          <div class="issue-row"><b class="label-issue">이슈(미해결)</b> 통과 주행과 도착 정차가 한 건으로 병합됨. 실측 000376_20260819094414 — 폴리곤 밖 3연속(seq103~105, 22~28km/h)으로 이탈 디바운스가 발동했으나 약 15초 만에 복귀해 park_regrace(60초) 유예 안에서 병합, 최대 39km/h 주행부터 도착 정차까지 199초·525m 가 1건이 됨</div>
+          <div class="issue-row"><b class="label-fix">대응</b> <b>유예 축소는 근거로 부정됨</b>(2026-08-23 실측) — 이탈·복귀 16건 중 공백 3~18초가 10건이고 전부 GPS 흔들림이라 10~15초로 줄이면 이들이 모두 쪼개짐. 60초는 그 10건을 흡수하고, 60초 초과 6건 중 5건은 실제 600~1,100m 주행이라 정확히 갈림. <b>유예 시간으로는 구분 불가</b>(GPS 흔들림도 15초, 잠깐 벗어난 주행도 15초) — 이동거리·속도로 갈라야 하며, dist_m(525m)·speed_kmh(평균 9)가 이미 기록되므로 통과·정차 판정은 과금서버 몫</div>
+          <div class="issue-row"><b class="label-issue">이슈(미해결)</b> 정차 중 측위가 장시간 실패하면 한 번의 주차가 두 건으로 쪼개짐. 실측 000376_20260821095603 — 좌표 37개(정확도 101~300)가 연속 실패해 69초 + 422초 2건으로 분리. 차는 한 발짝도 안 움직였음(이동 0m·속도 0)</div>
+          <div class="issue-row"><b class="label-fix">대응</b> park_regrace(유예)·park_accmax(좌표 신뢰) 둘 다 <b>세션이 닫힌 뒤에는 무력</b> — 이 건은 정확한 좌표로 이탈이 확정된 뒤에 실패 구간이 시작됨. park_ttl(600초) 계열로 "마지막 신뢰 좌표 이후 마감 보류" 쪽 검토 필요. 표본 1건이라 실차 데이터 확보 후 착수</div>
           <div class="issue-row"><b class="label-issue">이슈(미해결)</b> park_buf(15m) 상한이 추정치. ACCURACY_M 이 그보다 크면 15m 로 캡되는데, 정차 시 정확도가 78~346m 까지 나빠져 실효성 미검증</div>
-          <div class="issue-row"><b class="label-fix">대응</b> 폴리곤 크기 대비 버퍼 비율로 재검토 — RL-Z00001 은 대각선 약 110m, RL-Z00014 는 약 750m 구간</div>
+          <div class="issue-row"><b class="label-fix">대응</b> 폴리곤 크기 대비 버퍼 비율로 재검토 — RL-Z00001 은 대각선 약 110m, RL-Z00014 는 약 750m 구간. 2026-08-23 park_accmax(50m) 도입으로 부정확 좌표는 애초에 판정에서 빠져 이 값의 역할이 줄었으므로 우선순위는 낮음</div>
         </div>
 
       </div>

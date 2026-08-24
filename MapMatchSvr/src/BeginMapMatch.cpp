@@ -99,7 +99,35 @@ void CBeginMapMatch::FixOppositePairByHeading(const SGMT_MATCH_INPUT& stSgmtMatc
 	}
 }
 
-bool CBeginMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& stSgmtMatchInput, 
+/**
+ * @brief 짝 링크(qwOppositeLinkID)가 있는 링크가 heading 과 거의 정반대로 채택됐는지 판정
+ * @param[in] qwLinkID 판정 대상 링크 ID
+ * @param[in] nHeading GPS 방위각
+ * @param[in] nSpeed GPS 속도(km/h)
+ * @return true(짝 링크가 있는데 이번 채택이 heading 역방향 — 신뢰 불가)
+ * @remark
+ * \tMapMatch.cpp 의 Continue→Begin 병행폴백 대체 직전 거부권으로 쓴다. FixOppositePairByHeading 과
+ * \t같은 임계값(MM_OPP_FIX_REV_DEG)을 재사용 — 그쪽은 "짝 링크가 후보 목록에 있으면 앞으로 당기고",
+ * \t이쪽은 "그래도 여전히(짝을 못 찾아) 역방향 링크가 채택돼 있으면 아예 대체를 무효화"하는 역할이라
+ * \t상호 보완 관계다(실측 000376_20260819094414 M79 — 2040423603 이 짝 2040423501 의 역방향으로
+ * \t채택됐는데, 실제 정답 링크는 2040423503 이라 짝 교정만으론 못 잡음). (2026-08-24 최정우 추가)
+*/
+bool CBeginMapMatch::IsAntiHeadingOpposite(uint64 qwLinkID, sint16 nHeading, sint16 nSpeed)
+{
+	if ((nHeading == NO_ANGLE) || (nSpeed == NO_SPEED) || (nSpeed < MM_OPP_FIX_MIN_SPEED))
+		return false;
+	if (m_pcDataLoader == nullptr)
+		return false;
+
+	PLINK_INFO pstLink = m_pcDataLoader->GetLinkInfo(qwLinkID);
+	if ((pstLink == nullptr) || (pstLink->qwOppositeLinkID == 0))
+		return false;
+
+	sint16 nAz = GetLinkAzimuth(pstLink);
+	return (abs(m_cGISUtil.GetAngleDiff(nAz, nHeading)) >= MM_OPP_FIX_REV_DEG);
+}
+
+bool CBeginMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& stSgmtMatchInput,
 		uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry, PMATCH_TRACE_CTX pstTraceCtx,
 		uint64 qwBiasLinkID)
 {

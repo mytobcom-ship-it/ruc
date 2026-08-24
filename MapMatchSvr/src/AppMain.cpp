@@ -171,6 +171,8 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileStr("sql", "gate_select", "", pstConfig->strGateSelectSession);
 	// [sql] zone_select (선택, 비어 있으면 CChargeDataLoader 구역 캐시 비활성) (2026-08-12 최정우 추가)
 	cIniReader.GetProfileStr("sql", "zone_select", "", pstConfig->strZoneSelectSession);
+	// [sql] parkfine_select (선택, 비어 있으면 주정차 체류시간 임계 비활성) (2026-08-24 최정우 추가)
+	cIniReader.GetProfileStr("sql", "parkfine_select", "", pstConfig->strParkFineSelectSession);
 	// [sql] trip_end (선택, 비어 있으면 trip_end_dt UPDATE 비활성) (2026-08-12 최정우 추가)
 	cIniReader.GetProfileStr("sql", "trip_end", "", pstConfig->strTripEndUpdateSession);
 	// [sql] trip_abend (선택, 비어 있으면 비활성) (2026-08-13 최정우 추가, 2026-08-21 최정우 수정 — key명 abnormal_trip_end→trip_abend)
@@ -197,6 +199,12 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 		pstConfig->nParkBuf = CFG_DEF_PARK_BUF;
 	// [charge] park_exitcnt — 구역 이탈 확정 연속 GPS 건수(디바운스) (2026-08-13 최정우 추가)
 	cIniReader.GetProfileInt("charge", "park_exitcnt", CFG_DEF_PARK_EXITCNT, pstConfig->nParkExitCnt);
+
+	// [charge] node_exitcnt — 일반도로(NODE_STEP) 이탈 확정 연속 GPS 건수(디바운스). 순간
+	//   오매칭 1틱으로 세션이 쪼개지는 것 방지 (2026-08-24 최정우 추가)
+	cIniReader.GetProfileInt("charge", "node_exitcnt", CFG_DEF_NODE_EXITCNT, pstConfig->nNodeExitCnt);
+	if (pstConfig->nNodeExitCnt < 1)
+		pstConfig->nNodeExitCnt = CFG_DEF_NODE_EXITCNT;
 
 	// [charge] park_speedmax (단위: km/h) — 이 속도 이하일 때만 주정차 판정. 실측(21트립) 결과
 	//   정차 구간 최대속도 0~5km/h, 통과 구간 12~40km/h 로 완전히 분리됨 (2026-08-22 최정우 추가)
@@ -338,6 +346,13 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileInt("mapmatch", "reverse_confirm", CFG_DEF_REVERSE_CONFIRM, pstConfig->nReverseConfirm);
 	if (pstConfig->nReverseConfirm <= 0)
 		pstConfig->nReverseConfirm = CFG_DEF_REVERSE_CONFIRM;
+
+	// [mapmatch] opp_streakmax — 왕복분리 반대편 링크 연속 오매칭 허용 틱 수(저속 구간 방위각 미반영
+	//   + 반대편 링크 근접이 겹칠 때 대비). 이 안에 원래 링크로 복귀하면 그동안의 틱을 SKIP 재기록
+	//   (2026-08-24 최정우 추가)
+	cIniReader.GetProfileInt("mapmatch", "opp_streakmax", CFG_DEF_OPP_STREAKMAX, pstConfig->nOppStreakMax);
+	if (pstConfig->nOppStreakMax <= 0)
+		pstConfig->nOppStreakMax = CFG_DEF_OPP_STREAKMAX;
 
 	// [mapmatch] speed_factor/margin — 이동거리 환산속도와 SPEED_KMH 정합성 SKIP 판정 (2026-07-20 최정우 추가)
 	cIniReader.GetProfileDouble("mapmatch", "speed_factor", CFG_DEF_SPEED_FACTOR, pstConfig->dfSpeedFactor);

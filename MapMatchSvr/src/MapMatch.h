@@ -40,8 +40,11 @@ public:
 		PMATCH_LINK_INFO pstMatchLinkInfo, PMATCH_TRACE_CTX pstTraceCtx = nullptr);
 	// 반경 무시 기하 최근접 Begin (진단반경 초과 SKIP 참고용) (2026-07-10 최정우 수정)
 	bool BeginGeomNearest(MAP_MATCH_INPUT stMapMatchInput, PMATCH_LINK_INFO pstMatchLinkInfo);
-	bool ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput, 
+	bool ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 		PMATCH_LINK_INFO pstMatchLinkInfo, PMATCH_TRACE_CTX pstTraceCtx = nullptr);
+	// 짝 링크(qwOppositeLinkID)가 있는 링크가 heading 과 거의 정반대로 채택됐는지 판정 —
+	//   ProcessManager 의 Continue 완전실패→Begin 재검색 폴백 거부권 용도 (2026-08-24 최정우 추가)
+	bool IsAntiHeadingOpposite(uint64 qwLinkID, sint16 nHeading, sint16 nSpeed);
 
 private:
 	bool IsValidCommonRequestValue(enum eCoordinateType& eCoordType, 

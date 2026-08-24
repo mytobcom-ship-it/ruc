@@ -457,6 +457,19 @@ _ZONE_GEOM_SQL = """
 
 
 def _query_trip_charges(conn, trip_id, line_buf_m):
+    """trip_id 의 과금 이력(prim_chargehand) + GPS 순번 범위 — PostGIS 있으면 정식 쿼리,
+    없으면(원격 실서비스 DB — extension 목록에 postgis 자체가 없어 설치 권한도 없음, 2026-08-24
+    확인) 형상 없이 계산하는 폴백 쿼리로 자동 전환한다. 원격 /api/remote/trip/.../charges 라우트가
+    이 함수를 그대로 재사용하면서 처음 드러남 — 로컬은 항상 PostGIS 경로만 탄다. (2026-08-24 최정우 추가)
+    """
+    try:
+        return _query_trip_charges_postgis(conn, trip_id, line_buf_m)
+    except psycopg2.errors.UndefinedFunction:
+        conn.rollback()
+        return _query_trip_charges_no_postgis(conn, trip_id)
+
+
+def _query_trip_charges_postgis(conn, trip_id, line_buf_m):
     """trip_id 의 과금 이력(prim_chargehand) + GPS 순번 범위
 
     prim_chargehand 에는 GPS 순번 컬럼이 없어 prim_rawgps 와 조인해 역산한다.
@@ -467,6 +480,9 @@ def _query_trip_charges(conn, trip_id, line_buf_m):
     같은 구역을 여러 번 지나면 gps_seq 연속 구간(run)으로 나눠, 구역별 등장 순서대로
     해당 구역의 과금 이력(trip_seq 순)에 하나씩 대응시킨다.
     주정차(POLY)는 link_ids 가 비어 있어 M 순번이 나오지 않는다. (2026-08-22 최정우 추가)
+    G·M 범위 모두 엔진이 확정한 시간창(occur_dt~occur_dt+stay_seconds, t_rng CTE)을 우선
+    적용하며, run 기반 g_rng/m_rng 는 t_rng 가 없을 때만 쓰는 폴백이다 — 구간 내부 맵매칭
+    끊김으로 run 이 둘로 갈려도 대응이 어긋나지 않는다. (2026-08-24 최정우 추가)
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -532,22 +548,50 @@ def _query_trip_charges(conn, trip_id, line_buf_m):
                        ROW_NUMBER() OVER (PARTITION BY c.zone_id ORDER BY c.trip_seq) AS zone_rn
                 FROM ruc.prim_chargehand c WHERE c.trip_id = %(tid)s
             ),
-            -- POLY(주정차) 구역의 G 범위는 기하 run 순번으로 짝지으면 어긋난다. 폴리곤을 스쳐
-            --   지나간 run 이 여러 개인데 실제 기록은 1건뿐일 수 있어, ROW_NUMBER 대응이 엉뚱한
-            --   run 을 붙였다(실측: 통과 구간 G57 이 주정차 기록으로 표시됨). 엔진이 남긴
-            --   occur_dt(=진입 시각, RawLogWorker.cpp: strOccurDt = dtParkEntryTime)와 stay_seconds 로
---   체류 시각창 [occur_dt, occur_dt+stay_seconds] 를 복원해 그 안의 gps_seq
-            --   를 쓴다 — 기하로 역산하지 않으므로 어긋날 여지가 없다. (2026-08-22 최정우 추가)
+            -- G/M 범위를 연속구간(run) 순번 대응으로 구하면, 그 구간 "안에서" 맵매칭이 한 틱이라도
+            --   끊기면(SKIP) 실제로는 하나인 과금기록이 run 두 개로 쪼개져 순번 대응이 어긋난다
+            --   (실측 000376_20260819094414 RL-Z00003 trip_seq=5 — G82~93 이 하나의 과금인데
+            --   G84~85 맵매칭 실패로 run 이 [82,83]/[86~93] 둘로 갈려 뒤 run 이 통째로 누락됐었음).
+            --   원래 POLY(주정차)에만 적용하던 "engine 이 이미 확정한 시간창으로 gps_seq 를 복원"하는
+            --   방식을 LINE 구역까지 전부 적용 — 웹뷰어가 재추정하지 않고 엔진이 이미 판정한 구간을
+            --   그대로 신뢰하면 중간에 맵매칭이 몇 틱을 건너뛰어도 항상 정확하다.
+            --   주의: occur_dt 의미가 과금유형마다 다르다(RawLogWorker.cpp 실측) — PARKING(4)·
+            --   CLOSED_ROAD(2)·SPEED_ZONE(3)·OPEN_ROAD(1)은 "진입"(또는 순간통과) 시각이라 창이
+            --   [occur_dt, occur_dt+stay] 이지만, NODE_STEP(0)·EXEMPT(5)는 "진출" 시각으로 기록돼
+            --   창이 거꾸로 [occur_dt-stay, occur_dt] 다 — 방향을 안 가리면 진입시각형은 stay_seconds
+            --   만큼 미래로 밀려 실제 구간을 완전히 벗어난다(실측 000376_20260819140532 RL-Z00002
+            --   trip_seq=1 — 실제 존재 구간 M24~39인데 진입형 창 적용 시 M39~54로 밀려 M24~31이
+            --   통째로 누락돼 보였음). t_rng 가 못 찾으면(예외 상황) 기존 run 기반 g_rng/m_rng 로
+            --   폴백한다 (2026-08-22 최정우 추가, 2026-08-24 최정우 수정 — POLY 전용에서 전체 확장
+            --   + 과금유형별 진입/진출 방향 반영)
+            t_win AS (
+                SELECT ch.trip_seq,
+                       CASE WHEN ch.charge_type IN (0, 5)
+                            THEN to_timestamp(ch.occur_dt, 'YYYYMMDDHH24MISS')
+                                 - (COALESCE(ch.stay_seconds, 0) || ' seconds')::interval
+                            ELSE to_timestamp(ch.occur_dt, 'YYYYMMDDHH24MISS')
+                       END AS dt_from,
+                       CASE WHEN ch.charge_type IN (0, 5)
+                            THEN to_timestamp(ch.occur_dt, 'YYYYMMDDHH24MISS')
+                            ELSE to_timestamp(ch.occur_dt, 'YYYYMMDDHH24MISS')
+                                 + (COALESCE(ch.stay_seconds, 0) || ' seconds')::interval
+                       END AS dt_to
+                -- CLOSED_ROAD(2)·SPEED_ZONE(3)는 출구 게이트를 못 만나고 트립종료/TTL로 강제
+                --   마감되면(AppendExpired*Charge, exit_tollgate_id NULL) stay_seconds 가 "입구~강제
+                --   마감 시각"이라 실제 구역 이탈 이후 시간까지 포함해버린다 — 그 창을 그대로 믿으면
+                --   실제로는 구역을 떠난 뒤의 GPS 까지 범위에 끌려 들어온다(실측
+                --   000370_20260824103155 RL-Z00003 — 실제 매칭은 G42~53 인데 stay_seconds=90 이
+                --   트립종료 시각까지 포함해 G73 까지로 표출됨). 이 경우엔 t_rng 를 만들지 않고
+                --   기존 run 기반 g_rng/m_rng(실제 매칭 링크 소속 여부)로 폴백한다. 정상 종료(출구
+                --   게이트 확인, exit_tollgate_id 있음)는 그대로 t_rng 를 신뢰한다 (2026-08-24 최정우 추가)
+                FROM ch WHERE ch.occur_dt IS NOT NULL
+                  AND NOT (ch.charge_type IN (2, 3) AND ch.exit_tollgate_id IS NULL)
+            ),
             t_rng AS (
-                SELECT ch.trip_seq, MIN(p.gps_seq) AS s, MAX(p.gps_seq) AS e
-                FROM ch
-                JOIN zone z ON z.road_id = ch.zone_id AND z.geom_type = 'POLY'
-                JOIN gps p ON p.gps_dt >= ch.occur_dt
-                    AND p.gps_dt <= to_char(
-                        to_timestamp(ch.occur_dt, 'YYYYMMDDHH24MISS')
-                        + (COALESCE(ch.stay_seconds, 0) || ' seconds')::interval,
-                        'YYYYMMDDHH24MISS')
-                GROUP BY ch.trip_seq
+                SELECT w.trip_seq, MIN(p.gps_seq) AS s, MAX(p.gps_seq) AS e
+                FROM t_win w
+                JOIN gps p ON to_timestamp(p.gps_dt, 'YYYYMMDDHH24MISS') BETWEEN w.dt_from AND w.dt_to
+                GROUP BY w.trip_seq
             )
             SELECT ch.trip_seq, ch.charge_type, ch.zone_id, ch.zone_name,
                    ch.tollgate_id, ch.entry_tollgate_id, ch.exit_tollgate_id,
@@ -555,7 +599,8 @@ def _query_trip_charges(conn, trip_id, line_buf_m):
                    ch.occur_dt, ch.charge_yn,
                    COALESCE(t_rng.s, g_rng.s) AS g_from,
                    COALESCE(t_rng.e, g_rng.e) AS g_to,
-                   m_rng.s AS m_from, m_rng.e AS m_to
+                   COALESCE(t_rng.s, m_rng.s) AS m_from,
+                   COALESCE(t_rng.e, m_rng.e) AS m_to
             FROM ch
             LEFT JOIN t_rng ON t_rng.trip_seq = ch.trip_seq
             LEFT JOIN g_rng ON g_rng.road_id = ch.zone_id AND g_rng.rn = ch.zone_rn
@@ -565,6 +610,98 @@ def _query_trip_charges(conn, trip_id, line_buf_m):
             ORDER BY COALESCE(t_rng.s, g_rng.s) ASC NULLS LAST, ch.trip_seq
             """,
             {"tid": trip_id, "buf": line_buf_m},
+        )
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+
+def _query_trip_charges_no_postgis(conn, trip_id):
+    """PostGIS 없는 DB(원격 실서비스 — postgis extension 자체가 미설치)용 폴백.
+
+    POLY(주정차) 구역의 ST_Contains 형상판정을 뺀 버전 — LINE 구역은 원래도 형상이 필요없었고
+    (link_ids 소속 여부만 보면 됨), POLY 는 g_from/g_to 를 t_rng(엔진이 확정한 시간창)에만
+    의존한다 — PARKING 의 occur_dt 는 진입 시각이라 t_rng 가 원래도 정확한 값을 준다. 정식
+    쿼리와 달리 g_rng/m_rng 가 없어 t_rng 를 못 구하는 예외 상황(occur_dt NULL 등)에서는
+    POLY 행의 g_from/g_to 가 비게 되는 게 유일한 차이 — 실측상 흔치 않다.
+    (2026-08-24 최정우 추가)
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            WITH gps AS (
+                SELECT gps_seq, gps_lat, gps_lon, match_lat, match_lon, match_link_id, gps_dt
+                FROM ruc.prim_rawgps WHERE trip_id = %(tid)s
+            ),
+            zone AS (
+                SELECT b.road_id, b.geom_type, b.link_ids
+                FROM ruc.base_roadlink b WHERE b.use_yn = 'Y'
+            ),
+            -- LINE 구역만 대상 — 매칭 링크가 구역 link_ids 에 속하는 구간. G·M 둘 다 이 결과를 쓴다
+            --   (POLY 는 형상판정이 필요해 여기선 못 구하고 t_rng 에만 의존)
+            m_hit AS (
+                SELECT z.road_id, p.gps_seq
+                FROM gps p JOIN zone z
+                  ON z.link_ids IS NOT NULL
+                 AND p.match_link_id IN (SELECT jsonb_array_elements_text(z.link_ids))
+            ),
+            m_run AS (
+                SELECT road_id, gps_seq,
+                       gps_seq - ROW_NUMBER() OVER (PARTITION BY road_id ORDER BY gps_seq) AS grp
+                FROM m_hit
+            ),
+            m_rng AS (
+                SELECT road_id, MIN(gps_seq) AS s, MAX(gps_seq) AS e,
+                       ROW_NUMBER() OVER (PARTITION BY road_id ORDER BY MIN(gps_seq)) AS rn
+                FROM m_run GROUP BY road_id, grp
+            ),
+            ch AS (
+                SELECT c.*,
+                       ROW_NUMBER() OVER (PARTITION BY c.zone_id ORDER BY c.trip_seq) AS zone_rn
+                FROM ruc.prim_chargehand c WHERE c.trip_id = %(tid)s
+            ),
+            t_win AS (
+                SELECT ch.trip_seq,
+                       CASE WHEN ch.charge_type IN (0, 5)
+                            THEN to_timestamp(ch.occur_dt, 'YYYYMMDDHH24MISS')
+                                 - (COALESCE(ch.stay_seconds, 0) || ' seconds')::interval
+                            ELSE to_timestamp(ch.occur_dt, 'YYYYMMDDHH24MISS')
+                       END AS dt_from,
+                       CASE WHEN ch.charge_type IN (0, 5)
+                            THEN to_timestamp(ch.occur_dt, 'YYYYMMDDHH24MISS')
+                            ELSE to_timestamp(ch.occur_dt, 'YYYYMMDDHH24MISS')
+                                 + (COALESCE(ch.stay_seconds, 0) || ' seconds')::interval
+                       END AS dt_to
+                -- CLOSED_ROAD(2)·SPEED_ZONE(3)는 출구 게이트를 못 만나고 트립종료/TTL로 강제
+                --   마감되면(AppendExpired*Charge, exit_tollgate_id NULL) stay_seconds 가 "입구~강제
+                --   마감 시각"이라 실제 구역 이탈 이후 시간까지 포함해버린다 — 그 창을 그대로 믿으면
+                --   실제로는 구역을 떠난 뒤의 GPS 까지 범위에 끌려 들어온다(실측
+                --   000370_20260824103155 RL-Z00003 — 실제 매칭은 G42~53 인데 stay_seconds=90 이
+                --   트립종료 시각까지 포함해 G73 까지로 표출됨). 이 경우엔 t_rng 를 만들지 않고
+                --   기존 run 기반 g_rng/m_rng(실제 매칭 링크 소속 여부)로 폴백한다. 정상 종료(출구
+                --   게이트 확인, exit_tollgate_id 있음)는 그대로 t_rng 를 신뢰한다 (2026-08-24 최정우 추가)
+                FROM ch WHERE ch.occur_dt IS NOT NULL
+                  AND NOT (ch.charge_type IN (2, 3) AND ch.exit_tollgate_id IS NULL)
+            ),
+            t_rng AS (
+                SELECT w.trip_seq, MIN(p.gps_seq) AS s, MAX(p.gps_seq) AS e
+                FROM t_win w
+                JOIN gps p ON to_timestamp(p.gps_dt, 'YYYYMMDDHH24MISS') BETWEEN w.dt_from AND w.dt_to
+                GROUP BY w.trip_seq
+            )
+            SELECT ch.trip_seq, ch.charge_type, ch.zone_id, ch.zone_name,
+                   ch.tollgate_id, ch.entry_tollgate_id, ch.exit_tollgate_id,
+                   ch.dist_m, ch.speed_kmh, ch.speed_limit_kmh, ch.stay_seconds,
+                   ch.occur_dt, ch.charge_yn,
+                   COALESCE(t_rng.s, m_rng.s) AS g_from,
+                   COALESCE(t_rng.e, m_rng.e) AS g_to,
+                   COALESCE(t_rng.s, m_rng.s) AS m_from,
+                   COALESCE(t_rng.e, m_rng.e) AS m_to
+            FROM ch
+            LEFT JOIN t_rng ON t_rng.trip_seq = ch.trip_seq
+            LEFT JOIN m_rng ON m_rng.road_id = ch.zone_id AND m_rng.rn = ch.zone_rn
+            ORDER BY COALESCE(t_rng.s, m_rng.s) ASC NULLS LAST, ch.trip_seq
+            """,
+            {"tid": trip_id},
         )
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, r)) for r in cur.fetchall()]
@@ -643,52 +780,34 @@ def api_remote_trip_points(trip_id):
     return jsonify(rows)
 
 
+@app.route("/api/remote/trip/<path:trip_id>/charges")
+def api_remote_trip_charges(trip_id):
+    """원격 ruc DB 과금 이력 — 프런트(apiBase())는 이미 원격 모드에서 이 경로를 호출하고
+    있었는데 라우트가 없어 404 였다(2026-08-24 최정우 추가 — 원격 선택 시 지도 아래
+    과금 이력이 로컬 DB 내용으로 표시되던 버그 수정)"""
+    conn = get_conn_remote()
+    if conn is None:
+        return jsonify({"error": "remote_database 설정 없음 (config.ini [remote_database])"}), 404
+    buf = load_config()["zone_line_buf_m"]
+    with conn:
+        rows = _query_trip_charges(conn, trip_id, buf)
+    return jsonify(rows)
+
+
 @app.route("/api/remote/zones")
 def api_remote_zones():
-    """원격 ruc DB 의 과금구역(base_roadlink) + 게이트(base_tollgate) 조회 전용 — 읽기전용
-    세션. nodelink-geumto.html 이 하드코딩해둔 것과 같은 정보를 실제 DB에서 그대로 가져와
-    지도에 링크(구역) 표출용으로 쓴다 (2026-08-18 최정우 추가)"""
+    """원격 ruc DB 의 과금구역(base_roadlink) + 게이트(base_tollgate) 조회 — 읽기전용 세션.
+    원래는 로컬(_query_zones)과 별개로 손으로 짠 쿼리였는데, 2026-08-22 로컬 쪽만 "구역별로
+    게이트를 중첩한 배열" 구조로 고치면서(RL-Z00002 이름 불일치·구역 누락 등도 그때 같이 수정)
+    원격은 그대로 남아 {"zones":[...],"gates":[...]} 평평한 구조를 계속 반환했다 — 프런트
+    renderZones() 는 로컬 구조(구역 배열, 각 구역에 z.gates 중첩)만 기대해서 원격 선택 시
+    zones.forEach 가 조용히 실패해(catch 로 콘솔 경고만) 과금구역 레이어가 통째로 안 그려졌다.
+    로컬과 완전히 같은 함수로 통일해 구조·버그수정 내용이 항상 같이 간다 (2026-08-24 최정우 수정)"""
     conn = get_conn_remote()
     if conn is None:
         return jsonify({"error": "remote_database 설정 없음 (config.ini [remote_database])"}), 404
     with conn:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT road_id, road_kind, road_nm, geom_type, coords, speed_limit_kmh
-                FROM ruc.base_roadlink
-                ORDER BY road_id
-                """
-            )
-            zones = [
-                {
-                    "road_id": r["road_id"],
-                    "road_kind": r["road_kind"],
-                    "road_nm": r["road_nm"],
-                    "geom_type": r["geom_type"],
-                    "coords": r["coords"],
-                    "speed_limit_kmh": float(r["speed_limit_kmh"]) if r["speed_limit_kmh"] is not None else None,
-                }
-                for r in cur.fetchall()
-            ]
-            cur.execute(
-                """
-                SELECT tollgate_id, road_id, gate_div, lon, lat
-                FROM ruc.base_tollgate
-                ORDER BY road_id, tollgate_id
-                """
-            )
-            gates = [
-                {
-                    "tollgate_id": r["tollgate_id"],
-                    "road_id": r["road_id"],
-                    "gate_div": r["gate_div"],
-                    "lon": float(r["lon"]) if r["lon"] is not None else None,
-                    "lat": float(r["lat"]) if r["lat"] is not None else None,
-                }
-                for r in cur.fetchall()
-            ]
-    return jsonify({"zones": zones, "gates": gates})
+        return jsonify(_query_zones(conn))
 
 
 @app.route("/api/trips/points")

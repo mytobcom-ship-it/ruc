@@ -109,6 +109,11 @@ bool CMapMatch::BeginMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 	return SetResponseValue(wErrorCode, stMatchEntry, pstMatchLinkInfo);
 }
 
+bool CMapMatch::IsAntiHeadingOpposite(uint64 qwLinkID, sint16 nHeading, sint16 nSpeed)
+{
+	return m_cBeginMapMatch.IsAntiHeadingOpposite(qwLinkID, nHeading, nSpeed);
+}
+
 /**
  * @brief 반경 무시 기하 최근접 Begin — 진단반경 초과 SKIP 참고용 (2026-07-10 최정우 수정)
  * @remark MATCHED 아님. MATCH_LAT/LON·INTERSECT_LEN(GPS↔세그먼트 교차점 거리)만 확보.
@@ -259,10 +264,21 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 		stBeginSgmtMatchInput.nDirAng = nAngle;
 		stBeginSgmtMatchInput.nSpeed = stMapMatchInput.nSpeed;
 
+		// Begin 은 bIgnoreHeading 으로 순수 거리만 보므로, 짝 링크(qwOppositeLinkID)가 있는 링크를
+		//   heading 역방향으로 채택했을 수 있다 — FixOppositePairByHeading 이 후보 목록에서 짝 링크를
+		//   찾아 앞으로 당겨주지만, 짝 링크가 반경 밖(구간이 이미 끝난 지점 등)이라 목록에 없으면
+		//   교정이 안 먹고 역방향 링크가 그대로 채택된 채 여기로 온다. 이 경우 Continue 결과를
+		//   대체하지 않는다 — Continue 쪽엔 이미 동일한 반대편 역방향 차단(ContinueMapMatch.cpp)이
+		//   있는데, Begin 이 병행폴백으로 그걸 우회해 덮어써버리는 구멍이었다(실측
+		//   000376_20260819094414 M79 — 2040423501→2040423603[반대편, heading 역방향]→2040423503 순
+		//   주행인데 Continue 각도비용 상한으로 Begin 폴백이 발동, 짝 링크 2040423501 은 이미 그
+		//   구간을 지나 반경 밖이라 FixOppositePairByHeading 도 못 잡고 2040423603 이 그대로 채택돼
+		//   개방형 톨게이트 오과금까지 발생) (2026-08-24 최정우 추가)
 		if (m_cBeginMapMatch.StartMapMatch(m_pcDataLoader, stBeginSgmtMatchInput, &wBeginErrorCode,
 				&stBeginMatchEntry, pstTraceCtx, 0)
 			&& (stBeginMatchEntry.dfCost < stMatchEntry.dfCost)
-			&& (setContinueSearchHistory.find(stBeginMatchEntry.qwLinkID) != setContinueSearchHistory.end()))
+			&& (setContinueSearchHistory.find(stBeginMatchEntry.qwLinkID) != setContinueSearchHistory.end())
+			&& !m_cBeginMapMatch.IsAntiHeadingOpposite(stBeginMatchEntry.qwLinkID, nAngle, stMapMatchInput.nSpeed))
 		{
 			stMatchEntry = stBeginMatchEntry;
 			bUsedContinuePath = false;		// Begin 채택 — Continue 경유 경로는 무효 (2026-08-20 최정우 추가)
@@ -275,12 +291,36 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 
 	// SetResponseValue가 채운 기본 경로(최종 링크 1개)를, Continue가 실제 경유한 전체 경로로 교체
 	//   (2026-08-20 최정우 추가) — 배열 크기(MATCH_LINK_INFO_MAX_PATH) 초과분은 자름
+	//   교체 전 "그럴듯함" 검증 — 경로 링크 길이 합이 실제 이동거리(dfHorizMove) 대비 비정상적으로
+	//   크면(MM_PATH_PLAUSIBLE_* 참고) 신뢰하지 않고 기본값(최종 링크 1개)을 그대로 둔다. 그래프
+	//   탐색은 두 확정 링크를 잇는 "어떤" 경로만 찾을 뿐 실제 주행 여부는 검증하지 않아, 복잡한
+	//   교차로에서 실제로 가지 않은 갈림길이 경유 링크로 잘못 포함될 수 있다 — 그 갈림길이 우연히
+	//   과금구역 링크면 오등록으로 이어진다(2026-08-24 최정우 추가)
 	if (bUsedContinuePath && !vtContinuePath.empty())
 	{
-		uint8 nCount = static_cast<uint8>(vtContinuePath.size() < MATCH_LINK_INFO_MAX_PATH ? vtContinuePath.size() : MATCH_LINK_INFO_MAX_PATH);
-		for (uint8 i = 0; i < nCount; i++)
-			pstMatchLinkInfo->aqwPathLinkIDs[i] = vtContinuePath[i];
-		pstMatchLinkInfo->nPathLinkCount = nCount;
+		double dfPathLenSum = 0.0;
+		for (size_t i = 0; i < vtContinuePath.size(); ++i)
+		{
+			PLINK_INFO pstPathLink = m_pcDataLoader->GetLinkInfo(vtContinuePath[i]);
+			if (pstPathLink != nullptr)
+				dfPathLenSum += pstPathLink->dfLen;
+		}
+		double dfPlausibleMax = stMapMatchInput.dfHorizMove * MM_PATH_PLAUSIBLE_SCALE;
+		if (dfPlausibleMax < MM_PATH_PLAUSIBLE_FLOOR_M)
+			dfPlausibleMax = MM_PATH_PLAUSIBLE_FLOOR_M;
+
+		if (dfPathLenSum <= dfPlausibleMax)
+		{
+			uint8 nCount = static_cast<uint8>(vtContinuePath.size() < MATCH_LINK_INFO_MAX_PATH ? vtContinuePath.size() : MATCH_LINK_INFO_MAX_PATH);
+			for (uint8 i = 0; i < nCount; i++)
+				pstMatchLinkInfo->aqwPathLinkIDs[i] = vtContinuePath[i];
+			pstMatchLinkInfo->nPathLinkCount = nCount;
+		}
+		else
+		{
+			LOGFMTW("implausible reconstructed path discarded!pathLen=[%.1f]m horizMove=[%.1f]m plausibleMax=[%.1f]m hops=[%zu]",
+				dfPathLenSum, stMapMatchInput.dfHorizMove, dfPlausibleMax, vtContinuePath.size());
+		}
 	}
 
 	return true;

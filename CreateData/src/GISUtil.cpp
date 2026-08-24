@@ -179,8 +179,13 @@ bool CGISUtil::ClipSgmtToGridRect(const POINT& stPoint1, const POINT& stPoint2,
 */
 const uint16 CGISUtil::GetSgmtLength(const POINT& stPoint1, const POINT& stPoint2)
 {
-	uint16 wLenSgmt = 0;
-	wLenSgmt = static_cast<uint16>(round(sqrt(pow((stPoint1.dfX - stPoint2.dfX) * 360000, 2.0) + pow((stPoint1.dfY - stPoint2.dfY) * 360000, 2.0))));
+	// 기존 구현은 경위도 차이에 360000(내부 좌표 스케일)만 곱하고 실제 미터 환산(1도≈111,320m,
+	//   경도는 cos(위도) 보정 필요)을 하지 않아 위도 37°대에서 약 3.2~4.1배 부풀려진 값을
+	//   돌려주고 있었다 — GetDistanceGEO2()(동일 입력 단위: 순수 WGS84 도)로 위임해 실제
+	//   지리 거리(m)를 구하도록 수정 (실측 링크 2040423801 재현으로 발견, 2026-08-24 최정우 수정)
+	POINT stP1 = stPoint1;
+	POINT stP2 = stPoint2;
+	uint16 wLenSgmt = static_cast<uint16>(round(GetDistanceGEO2(stP1, stP2)));
 	if (wLenSgmt <= 0) wLenSgmt = 1;
 
 	return wLenSgmt;
@@ -685,6 +690,10 @@ const double CGISUtil::GetDistanceGEO2(POINT& stPoint, POINT& stIntersect)
 	double dfLon = stIntersect.dfX - stPoint.dfX;
 	double dfLat = stIntersect.dfY - stPoint.dfY;
 
-	double dfValue = pow(sin(RAD(dfLat) / 2.0), 2.0) + cos(RAD(stPoint.dfY / 360000.0)) * cos(RAD(stIntersect.dfY / 360000.0)) * pow(sin(RAD(dfLon) / 2.0), 2.0);
+	// GetDistanceGEO1()(입력 단위: 도×360000)을 그대로 복사해오면서 cos(위도) 항의 "/360000.0"을
+	//   못 지워, 이 함수(입력 단위: 순수 도)에서는 cos(위도/360000)≈cos(0)≈1 로 사실상 무력화돼
+	//   있었다 — 위도 37°대 기준 cos(37°)=0.794 대신 1을 써서 거리가 약 1.2~1.26배 부풀려짐
+	//   (실측 링크 2040423801 재현으로 발견, 2026-08-24 최정우 수정)
+	double dfValue = pow(sin(RAD(dfLat) / 2.0), 2.0) + cos(RAD(stPoint.dfY)) * cos(RAD(stIntersect.dfY)) * pow(sin(RAD(dfLon) / 2.0), 2.0);
 	return 2.0 * atan(sqrt(dfValue) / sqrt(1 - dfValue)) * 6378137;
 }

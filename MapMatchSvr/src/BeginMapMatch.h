@@ -36,6 +36,9 @@ public:
 	sint16 GetLinkAzimuth(PLINK_INFO pstLinkInfo);
 	void FixOppositePairByHeading(const SGMT_MATCH_INPUT& stSgmtMatchInput,
 			list<MATCH_ENTRY>& listMatchEntryList);
+	// 짝 링크(qwOppositeLinkID)가 있는 링크가 heading 과 거의 정반대로 채택됐는지 판정 —
+	//   Begin 이 Continue 결과를 병행폴백으로 대체하기 직전 거부권 용도 (2026-08-24 최정우 추가)
+	bool IsAntiHeadingOpposite(uint64 qwLinkID, sint16 nHeading, sint16 nSpeed);
 	bool StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& stSgmtMatchInput, 
 		uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry, PMATCH_TRACE_CTX pstTraceCtx = nullptr,
 		uint64 qwBiasLinkID = 0);

@@ -380,6 +380,9 @@ bool CProcessManager::AttemptMatch(const sRawLogInfo& stRawLogInfo, MAP_MATCH_IN
 		const ALT_MATCH_CTX *pstAltCtx)
 {
 	MATCH_TRACE_CTX stTraceCtx;
+	// Continue 완전실패 후 Begin 재검색에도 실제 heading 을 넘기기 위해 지워지기 전에 보존
+	//   (2026-08-24 최정우 추가 — 아래 IsAntiHeadingOpposite 거부권 판정용)
+	const sint16 nOrigAngle = stMapMatchInput.nAngle;
 
 	if (qwInOutLinkID != 0)
 	{
@@ -403,8 +406,21 @@ bool CProcessManager::AttemptMatch(const sRawLogInfo& stRawLogInfo, MAP_MATCH_IN
 	// 연속 실패·초기 세션 — GRID 기반 Begin 맵매칭 (2026-07-08 최정우 주석 추가)
 	// 직전 성공 링크가 있으면 연결성 편향 전달 → 나란한 도로 오매칭 억제 (2026-07-15 최정우 추가)
 	stMapMatchInput.qwBiasLinkID = qwPrevLinkId;
+	// heading 은 위에서 지워졌지만(Begin 자체 후보 정렬은 원래 heading 무시), CBeginMapMatch 내부
+	//   FixOppositePairByHeading(왕복분리 짝 링크 heading 교정)은 이 값을 필요로 한다 — 지워진 채
+	//   넘기면 그 교정 자체가 통째로 비활성화된다. 지우기 전에 저장해둔 nOrigAngle 로 되살려 넘긴다
+	//   (2026-08-24 최정우 추가 — 실측 000376_20260819094414 M79: Continue 그래프탐색이 반경 안에서
+	//   후보를 못 찾아 완전실패 → 여기 Begin 폴백으로 떨어졌는데, heading 이 지워진 채 호출되는
+	//   바람에 짝 링크(2040423603↔2040423501) heading 역방향 교정이 아예 시도조차 안 되고 순수
+	//   거리(9m)만으로 반대편이 채택돼 개방형 톨게이트 오과금까지 발생)
+	stMapMatchInput.nAngle = nOrigAngle;
 	FillMatchTraceCtx(stTraceCtx, m_nThreadId, stRawLogInfo, stMapMatchInput, qwPrevLinkId, false, pstAltCtx);
-	if (m_pcMapMatch->BeginMapMatch(stMapMatchInput, pstMatchLinkInfo, &stTraceCtx))
+	if (m_pcMapMatch->BeginMapMatch(stMapMatchInput, pstMatchLinkInfo, &stTraceCtx)
+		// FixOppositePairByHeading 은 짝 링크가 반경 안 후보 목록에 있을 때만 교정한다 — 짝 링크가
+		//   반경 밖(구간이 이미 끝난 지점 등)이라 목록에 없으면 교정이 안 먹고 역방향 링크가 그대로
+		//   채택된다. 이 잔여 케이스는 아예 매칭 실패로 처리해 SKIP·widen-retry 로 넘긴다 —
+		//   "확신 없는 매칭보다 SKIP" 원칙 (2026-08-24 최정우 추가)
+		&& !m_pcMapMatch->IsAntiHeadingOpposite(pstMatchLinkInfo->qwLinkID, nOrigAngle, stMapMatchInput.nSpeed))
 	{
 		qwInOutLinkID = pstMatchLinkInfo->qwLinkID;
 		LOGFMTD("[#%02d] begin map match ok!device=[%s] link=[%llu]",

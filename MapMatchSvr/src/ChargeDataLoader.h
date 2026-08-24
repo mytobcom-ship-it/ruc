@@ -140,10 +140,13 @@ public:
 	virtual ~CChargeDataLoader();
 
 	bool Initialize(CPostgrePool *pcPostgrePool, const string& strGateSelectSQL,
-		const string& strZoneSelectSQL);
+		const string& strZoneSelectSQL, const string& strParkFineSelectSQL = "");
 	void Uninitialize();
 	bool LoadGates();
 	bool LoadZones();
+	// base_parking_fine 최소 from_min(분)을 초로 환산해 캐시 — 주정차 체류시간(STAY_SECONDS)이
+	//   이 값 미만이면 BuildParkRow() 가 등록 대상에서 제외시킬 때 씀 (사용자 지시, 2026-08-24 최정우 추가)
+	bool LoadParkingFine();
 
 	PGATE_INFO GetGateByLinkId(const uint64 qwLinkID, const char cGateDiv = 0);
 	// GetGateByLinkId 는 첫 매치 1개만 반환 — 같은 link_id 에 같은 gate_div 게이트가 2개 이상
@@ -171,6 +174,12 @@ public:
 	void GetParkingZonesContaining(const double dfLon, const double dfLat, const double dfBufM,
 		vector<PZONE_INFO> *pvtOut);
 
+	// 폴리곤 기하 유틸 — 원래 .cpp 파일 내부 static 함수였으나, 주정차 경계 통과 시각 보간
+	//   (CRawLogWorker::InterpolateZoneCrossingTime)에서도 같은 판정을 써야 해서 공개 static
+	//   메서드로 승격 (2026-08-24 최정우 추가). 순수 함수 — 인스턴스 상태 없음
+	static bool IsPointInPolygon(double dfLon, double dfLat, const vector<POINT>& vtPoly);
+	static double DistanceToPolygonBoundaryMeters(double dfLon, double dfLat, const vector<POINT>& vtPoly);
+
 	inline const bool IsLoad() const { return m_bLoad; }
 	size_t GetGateCount() const;
 	inline const size_t GetZoneCount() const
@@ -178,11 +187,18 @@ public:
 		lock_guard<CMutex> cLock(m_cZoneCacheMutex);
 		return m_mapZoneInfo.size();
 	}
+	// 0=임계 비활성(테이블 비어있거나 미로드 — 항상 등록) (2026-08-24 최정우 추가)
+	inline int GetParkFineMinSec() const
+	{
+		lock_guard<CMutex> cLock(m_cParkFineMutex);
+		return m_nParkFineMinSec;
+	}
 
 private:
 	CPostgrePool					*m_pcPostgrePool;						// 커넥션 풀(비소유 — Server 가 생성한 것 공유)
 	string							m_strGateSelectSQL;						// base_tollgate 전량 조회 SQL(query.sql 세션 로드 결과)
 	string							m_strZoneSelectSQL;						// base_roadlink 전량 조회 SQL (2026-08-12 최정우 추가)
+	string							m_strParkFineSelectSQL;					// base_parking_fine 최소 from_min 조회 SQL, 비어 있으면 임계 비활성 (2026-08-24 최정우 추가)
 	mapGateInfo						m_mapGateInfo;							// link_id → 게이트 정보
 	mapZoneInfo						m_mapZoneInfo;							// road_id → 구역 정보 (2026-08-12 최정우 추가)
 	// 재조회로 교체된 이전 세대 — 댕글링 포인터 방지용 최근 N세대 보관(2026-08-14 최정우 추가).
@@ -205,6 +221,8 @@ private:
 	mutable CMutex					m_cZoneCacheMutex;						// m_mapZoneInfo+m_mapNodeStepLinkToRoadId+m_mapExemptLinkToRoadId
 																			//   재조회(swap)/조회 동시접근 보호 — 셋 다 LoadZones() 에서 항상 같이
 																			//   swap 되므로 락도 하나로 공유(항상 일관된 스냅샷 보장) (2026-08-14 최정우 추가)
+	int								m_nParkFineMinSec;						// base_parking_fine 최소 from_min(분)*60 — 0=임계 비활성 (2026-08-24 최정우 추가)
+	mutable CMutex					m_cParkFineMutex;						// m_nParkFineMinSec 재조회/조회 동시접근 보호 (2026-08-24 최정우 추가)
 };
 
 #endif //__CHARGEDATALOADER_H__

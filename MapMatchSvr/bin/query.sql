@@ -216,6 +216,13 @@ FROM RUC.BASE_ROADLINK
 WHERE USE_YN = 'Y'
 ORDER BY ROAD_ID ASC;
 
+-- ── 4-1. 주정차 과태료 최저 기준시간 조회 ─────────────────────────────────
+-- [parkfine_select] BASE_PARKING_FINE 최소 FROM_MIN(분) — CChargeDataLoader::LoadParkingFine() 가 실행.
+--   주정차 체류시간(STAY_SECONDS)이 이 값(초로 환산) 미만이면 PRIM_CHARGEHAND 에 등록하지 않음
+--   (사용자 지시, 2026-08-24 최정우 추가). 테이블이 비어 있으면 NULL → 임계 비활성(항상 등록).
+[parkfine_select]
+SELECT MIN(FROM_MIN) FROM RUC.BASE_PARKING_FINE;
+
 -- ── 5. 과금 판정 결과 bulk INSERT ─────────────────────────────────────
 -- [charge_insert] PRIM_CHARGEHAND — CRawLogWorker::BulkInsertCharges() 가 실행 (2026-08-12 최정우 추가)
 -- 개방형·폐쇄형·구간단속·주정차 4유형 공용 — 폐쇄형은 DIST_M/ENTRY_TOLLGATE_ID/EXIT_TOLLGATE_ID 도 채움,

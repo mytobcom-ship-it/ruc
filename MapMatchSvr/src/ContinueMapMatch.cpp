@@ -331,6 +331,18 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
 		PLINK_INFO pstLinkInfo = m_pcDataLoader->GetLinkInfo(stSgmtInfo.qwLinkID);
 		if (!pstLinkInfo) continue;
 
+		// 왕복분리 전용 반대편 링크(qwOppositeLinkID)가 있는데 이번 후보가 "역방향 적합"으로
+		//   채택됐으면 버린다 — 전용 반대편 링크가 있다는 건 그 방향으로는 반대편 링크를 타야
+		//   정상이라는 뜻이라, 이 링크 자체를 거꾸로 인정하면 안 된다. SgmtMatch()의 역방향 허용은
+		//   원래 "링크 하나로 양방향을 표현하는 진짜 양방향 단일 링크"를 위한 것인데, 반대편이
+		//   따로 있는 링크에도 똑같이 적용되고 있었다(실측 000376_20260819094414 M45 — 왕복분리
+		//   반대편 2040424401 을 역방향으로 오매칭, heading 84°가 그 링크 정방향(약 264°)과는
+		//   정반대인데 역방향 허용으로 통과함. 그 결과 RL-Z00002 NODE_STEP 세션이 그 한 틱 때문에
+		//   쪼개지는 후속 결함까지 발생). 반대편 없는(진짜 양방향 단일링크) 도로는 기존대로 역방향
+		//   허용 유지 (2026-08-24 최정우 추가)
+		if (stSgmtMatchRes.bReverseFit && (pstLinkInfo->qwOppositeLinkID != 0))
+			continue;
+
 		MATCH_ENTRY stMatchEntry;
 
 		stMatchEntry.dfMatchX = stSgmtMatchRes.stMatchPoint.dfX;

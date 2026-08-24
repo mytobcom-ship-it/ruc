@@ -84,7 +84,7 @@ static void ParseLinkIdsJson(const string& strJson, vector<uint64> *pvtOut)
  * @param[in] vtPoly 폴리곤 정점 목록(닫힌 도형 가정 — 첫/끝 정점 별도 처리 불필요)
  * @return true=내부(경계 포함 판정은 버퍼 거리 검사가 별도로 처리)
 */
-static bool IsPointInPolygon(double dfLon, double dfLat, const vector<POINT>& vtPoly)
+bool CChargeDataLoader::IsPointInPolygon(double dfLon, double dfLat, const vector<POINT>& vtPoly)
 {
 	if (vtPoly.size() < 3) return false;
 
@@ -108,7 +108,7 @@ static bool IsPointInPolygon(double dfLon, double dfLat, const vector<POINT>& vt
  * @remark 버퍼 거리가 수 m~십수 m 수준으로 짧아 P 주변 국소 평면(경위도→m 환산)으로 근사해도
  *   오차가 무시할만함 — 하버사인을 변마다 반복 호출할 필요 없음
 */
-static double DistanceToPolygonBoundaryMeters(double dfLon, double dfLat, const vector<POINT>& vtPoly)
+double CChargeDataLoader::DistanceToPolygonBoundaryMeters(double dfLon, double dfLat, const vector<POINT>& vtPoly)
 {
 	if (vtPoly.size() < 2) return 1e18;
 
@@ -142,7 +142,8 @@ static double DistanceToPolygonBoundaryMeters(double dfLon, double dfLat, const 
 */
 CChargeDataLoader::CChargeDataLoader() :
 	m_pcPostgrePool(nullptr),
-	m_bLoad(false)
+	m_bLoad(false),
+	m_nParkFineMinSec(0)
 {
 }
 
@@ -163,7 +164,7 @@ CChargeDataLoader::~CChargeDataLoader()
  * @return true(성공), false(실패)
 */
 bool CChargeDataLoader::Initialize(CPostgrePool *pcPostgrePool, const string& strGateSelectSQL,
-	const string& strZoneSelectSQL)
+	const string& strZoneSelectSQL, const string& strParkFineSelectSQL)
 {
 	if (pcPostgrePool == nullptr)
 	{
@@ -179,6 +180,7 @@ bool CChargeDataLoader::Initialize(CPostgrePool *pcPostgrePool, const string& st
 	m_pcPostgrePool = pcPostgrePool;
 	m_strGateSelectSQL = strGateSelectSQL;
 	m_strZoneSelectSQL = strZoneSelectSQL;
+	m_strParkFineSelectSQL = strParkFineSelectSQL;
 	return true;
 }
 
@@ -190,6 +192,7 @@ void CChargeDataLoader::Uninitialize()
 {
 	m_mapGateInfo.clear();
 	m_mapZoneInfo.clear();
+	m_nParkFineMinSec = 0;
 	m_bLoad = false;
 }
 
@@ -562,6 +565,56 @@ bool CChargeDataLoader::LoadZones()
 	m_bLoad = true;
 
 	LOGFMTI("zone cache loaded!count=[%zu]", GetZoneCount());
+	return true;
+}
+
+/**
+ * @brief base_parking_fine 최소 from_min(분)을 초로 환산해 (재)로드 — 기동 시 1회, 또는 게이트·구역과
+ *        같은 주기 재조회 스레드에서 반복 호출. 세션 미설정·SQL 없음은 실패가 아니라 "임계 비활성"
+ *        (사용자 지시, 2026-08-24 최정우 추가)
+ * @return true(조회 성공, 테이블이 비어 있어도 true — 그 경우 임계 0으로 비활성), false(조회 자체 실패)
+*/
+bool CChargeDataLoader::LoadParkingFine()
+{
+	if (m_strParkFineSelectSQL.empty())
+		return true;								// 세션 미설정 — 애초에 비활성, 실패 아님
+
+	if (m_pcPostgrePool == nullptr)
+	{
+		LOGFMTE("postgre pool not initialized!");
+		return false;
+	}
+
+	PGconn *pcConn = m_pcPostgrePool->getConnection();
+	if (pcConn == nullptr)
+	{
+		LOGFMTE("get connection failed!");
+		return false;
+	}
+
+	PGresult *pcResult = PQexec(pcConn, m_strParkFineSelectSQL.c_str());
+	if (PQresultStatus(pcResult) != PGRES_TUPLES_OK)
+	{
+		LOGFMTE("park fine select failed!error=[%s]", PQerrorMessage(pcConn));
+		PQclear(pcResult);
+		m_pcPostgrePool->releaseConnection(pcConn);
+		return false;
+	}
+
+	// MIN(from_min) — 테이블이 비어 있으면 NULL(임계 비활성, 0) (2026-08-24 최정우 추가)
+	int nMinSec = 0;
+	if ((PQntuples(pcResult) > 0) && !PQgetisnull(pcResult, 0, 0))
+		nMinSec = atoi(PQgetvalue(pcResult, 0, 0)) * 60;
+
+	PQclear(pcResult);
+	m_pcPostgrePool->releaseConnection(pcConn);
+
+	{
+		lock_guard<CMutex> cLock(m_cParkFineMutex);
+		m_nParkFineMinSec = nMinSec;
+	}
+
+	LOGFMTI("park fine minimum loaded!min_sec=[%d]", nMinSec);
 	return true;
 }
 

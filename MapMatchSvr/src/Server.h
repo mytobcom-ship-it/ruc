@@ -112,12 +112,14 @@ private:
 	string							m_strAbnormalTripEndSQL;			// TTL 만료(비정상 종료) 시 개방형 미확정 레코드 마감 UPDATE SQL (2026-08-13 최정우 추가)
 	string							m_strGateSelectSQL;				// 과금 게이트 전량 조회 SQL (2026-08-12 최정우 추가)
 	string							m_strZoneSelectSQL;				// 과금 구역 전량 조회 SQL (2026-08-12 최정우 추가)
+	string							m_strParkFineSelectSQL;				// 주정차 과태료 최소 FROM_MIN 조회 SQL, 비어 있으면 체류시간 임계 비활성 (2026-08-24 최정우 추가)
 	int								m_nGateReloadSec;					// [charge] gate_reload — 게이트·구역 캐시 재조회 주기(sec, 0=재조회 없음) (2026-08-12 최정우 추가)
 	time_t							m_dtLastGateReload;					// 마지막 게이트 캐시 재조회 시각 (2026-08-12 최정우 추가)
 	int								m_nParkBuf;							// [charge] park_buf — 구역판정 버퍼 상한(m) (2026-08-13 최정우 추가)
 	int								m_nIgnoreRawVld;					// [mapmatch] ignore_rawvld — RAW_VLD 무시 전량 매칭(검증용) (2026-08-23 최정우 추가)
 	int								m_nParkAccMax;						// [charge] park_accmax — 주정차 판정 좌표 정확도 상한(m), 0=비활성 (2026-08-23 최정우 추가)
 	int								m_nParkExitCnt;						// [charge] park_exitcnt — 구역 이탈 확정 연속 GPS 건수(디바운스) (2026-08-13 최정우 추가)
+	int								m_nNodeExitCnt;						// [charge] node_exitcnt — 일반도로(NODE_STEP) 이탈 확정 연속 GPS 건수(디바운스) (2026-08-24 최정우 추가)
 	int								m_nParkRegraceSec;					// [charge] park_regrace — 재진입 유예시간(초) (2026-08-14 최정우 추가)
 	int								m_nParkTtlSec;						// [charge] park_ttl — 마지막 신뢰 확인 후 강제 마감까지의 시간(초) (2026-08-19 최정우 추가)
 	int								m_nExemptRegraceSec;				// [charge] exempt_regrace — 재진입 유예시간(초) (2026-08-14 최정우 추가)
@@ -158,6 +160,7 @@ private:
 	double							m_dfAltWeight;						// config alt_weight — 차이 초과 시 고도차 가중. 0=비활성
 	double							m_dfAltSlope;						// config alt_slope
 	int								m_nReverseConfirm;					// config reverse_confirm — 연속 역행 확정 포인트 수 (2026-07-21 최정우 추가)
+	int								m_nOppStreakMax;					// config opp_streakmax — 왕복분리 반대편 링크 연속 오매칭 허용 틱 수 (2026-08-24 최정우 추가)
 	double							m_dfSpeedFactor;				// config speed_factor (2026-07-20 최정우 추가)
 	int								m_nSpeedMargin;					// config speed_margin (km/h) (2026-07-20 최정우 추가)
 

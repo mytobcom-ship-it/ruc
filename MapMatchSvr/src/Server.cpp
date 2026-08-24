@@ -115,6 +115,7 @@ CServer::CServer() :
 	m_nParkAccMax(CFG_DEF_PARK_ACCMAX),
 	m_nIgnoreRawVld(CFG_DEF_IGNORE_RAWVLD),
 	m_nParkExitCnt(CFG_DEF_PARK_EXITCNT),
+	m_nNodeExitCnt(CFG_DEF_NODE_EXITCNT),
 	m_nParkRegraceSec(CFG_DEF_PARK_REGRACE),
 	m_nParkTtlSec(CFG_DEF_PARK_TTL),
 	m_nExemptRegraceSec(CFG_DEF_EXEMPT_REGRACE),
@@ -148,6 +149,7 @@ CServer::CServer() :
 	m_dfAltWeight(CFG_DEF_ALT_WEIGHT),
 	m_dfAltSlope(CFG_DEF_ALT_SLOPE),
 	m_nReverseConfirm(CFG_DEF_REVERSE_CONFIRM),
+	m_nOppStreakMax(CFG_DEF_OPP_STREAKMAX),
 	m_dfSpeedFactor(CFG_DEF_SPEED_FACTOR),
 	m_nSpeedMargin(CFG_DEF_SPEED_MARGIN),
 	m_dtLastMonitorLog(0),
@@ -203,6 +205,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	m_dfAltWeight = stConfig.dfAltWeight;
 	m_dfAltSlope = stConfig.dfAltSlope;
 	m_nReverseConfirm = stConfig.nReverseConfirm;
+	m_nOppStreakMax = stConfig.nOppStreakMax;
 	m_dfSpeedFactor = stConfig.dfSpeedFactor;
 	m_nSpeedMargin = stConfig.nSpeedMargin;
 	m_nFetchLimit = stConfig.nFetchLimit;
@@ -219,6 +222,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	m_nParkAccMax = stConfig.nParkAccMax;						// (2026-08-23 최정우 추가)
 	m_nIgnoreRawVld = stConfig.nIgnoreRawVld;					// (2026-08-23 최정우 추가)
 	m_nParkExitCnt = stConfig.nParkExitCnt;						// (2026-08-13 최정우 추가)
+	m_nNodeExitCnt = stConfig.nNodeExitCnt;						// (2026-08-24 최정우 추가)
 	m_nParkSpeedMax = stConfig.nParkSpeedMax;					// (2026-08-22 최정우 추가)
 	m_nParkEntryCnt = stConfig.nParkEntryCnt;					// (2026-08-22 최정우 추가)
 	m_nParkRegraceSec = stConfig.nParkRegraceSec;					// (2026-08-14 최정우 추가)
@@ -376,6 +380,19 @@ bool CServer::Initialize(const CONFIG& stConfig)
 		LOGFMTW("zone_select session not configured — zone cache disabled");
 	}
 
+	// 주정차 과태료 최소 FROM_MIN 조회 SQL (세션 미지정·SQL 없으면 체류시간 임계 비활성) (2026-08-24 최정우 추가)
+	if (!stConfig.strParkFineSelectSession.empty())
+	{
+		m_strParkFineSelectSQL = m_pcSQLAccessor->GetSQL(stConfig.strParkFineSelectSession);
+		if (m_strParkFineSelectSQL.empty())
+			LOGFMTW("park_fine_select session=[%s] sql is empty — park fine minimum disabled",
+				stConfig.strParkFineSelectSession.c_str());
+	}
+	else
+	{
+		LOGFMTW("park_fine_select session not configured — park fine minimum disabled");
+	}
+
 	LOGFMTI("sql accessor initialize success!");
 
 	if (m_pcSQLAccessor != nullptr)
@@ -439,7 +456,8 @@ bool CServer::Initialize(const CONFIG& stConfig)
 			return false;
 		}
 
-		if (!m_pcChargeDataLoader->Initialize(m_pcPostgrePool, m_strGateSelectSQL, m_strZoneSelectSQL))
+		if (!m_pcChargeDataLoader->Initialize(m_pcPostgrePool, m_strGateSelectSQL, m_strZoneSelectSQL,
+				m_strParkFineSelectSQL))
 		{
 			LOGFMTE("charge data loader initialize failed!");
 			Uninitialize();
@@ -457,6 +475,14 @@ bool CServer::Initialize(const CONFIG& stConfig)
 			LOGFMTW("initial zone cache load failed — zone name lookup disabled until next reload");
 		else
 			LOGFMTI("zone cache initial load success!count=[%zu]", m_pcChargeDataLoader->GetZoneCount());
+
+		// 기동 시 1회 주정차 과태료 최소 FROM_MIN 로드 — 실패해도 서버 기동은 계속(체류시간 임계만 비활성)
+		//   (2026-08-24 최정우 추가)
+		if (!m_pcChargeDataLoader->LoadParkingFine())
+			LOGFMTW("initial park fine minimum load failed — stay-time threshold disabled until next reload");
+		else
+			LOGFMTI("park fine minimum initial load success!min_sec=[%d]",
+				m_pcChargeDataLoader->GetParkFineMinSec());
 
 		m_dtLastGateReload = time(nullptr);
 	}
@@ -518,11 +544,13 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	stWorkerConfig.nSpeedMargin = m_nSpeedMargin;				// (2026-07-20 최정우 추가)
 	// 연속 역행 스트릭 판정 (2026-07-21 최정우 수정 — dip 판정 대체)
 	stWorkerConfig.nReverseConfirm = m_nReverseConfirm;
+	stWorkerConfig.nOppStreakMax = m_nOppStreakMax;
 	stWorkerConfig.nHeadingMaxDist = static_cast<int>(m_dwMaxDistance);	// [mapmatch] distance → live heading 거리 상한 (2026-07-15 최정우 추가)
 	stWorkerConfig.nParkBuf = m_nParkBuf;						// (2026-08-13 최정우 추가)
 	stWorkerConfig.nParkAccMax = m_nParkAccMax;					// (2026-08-23 최정우 추가)
 	stWorkerConfig.nIgnoreRawVld = m_nIgnoreRawVld;				// (2026-08-23 최정우 추가)
 	stWorkerConfig.nParkExitCnt = m_nParkExitCnt;				// (2026-08-13 최정우 추가)
+	stWorkerConfig.nNodeExitCnt = m_nNodeExitCnt;				// (2026-08-24 최정우 추가)
 	stWorkerConfig.nParkSpeedMax = m_nParkSpeedMax;				// (2026-08-22 최정우 추가)
 	stWorkerConfig.nParkEntryCnt = m_nParkEntryCnt;				// (2026-08-22 최정우 추가)
 	stWorkerConfig.nParkRegraceSec = m_nParkRegraceSec;			// (2026-08-14 최정우 추가)
@@ -944,6 +972,13 @@ void CServer::ProcessPeriodSec(time_t dtNow)
 			LOGFMTW("zone cache reload failed — keeping previous cache");
 		else
 			LOGFMTI("zone cache reload success!count=[%zu]", m_pcChargeDataLoader->GetZoneCount());
+
+		// 주정차 과태료 최소 FROM_MIN 도 게이트·구역과 같은 주기로 재조회 (2026-08-24 최정우 추가)
+		if (!m_pcChargeDataLoader->LoadParkingFine())
+			LOGFMTW("park fine minimum reload failed — keeping previous threshold");
+		else
+			LOGFMTI("park fine minimum reload success!min_sec=[%d]",
+				m_pcChargeDataLoader->GetParkFineMinSec());
 
 		m_dtLastGateReload = dtNow;
 	}

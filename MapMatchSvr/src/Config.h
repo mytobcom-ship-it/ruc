@@ -41,6 +41,7 @@ typedef struct sConfig
 	string							strChargeInsertSession;				// 과금 INSERT SQL (개방형 게이트 통과, 비어 있으면 비활성)
 	string							strGateSelectSession;				// 과금 게이트(BASE_TOLLGATE) 전량 조회 SQL, 비어 있으면 CChargeDataLoader 게이트 캐시 비활성 (2026-08-12 최정우 추가)
 	string							strZoneSelectSession;				// 과금 구역(BASE_ROADLINK) 전량 조회 SQL, 비어 있으면 CChargeDataLoader 구역 캐시 비활성 (2026-08-12 최정우 추가)
+	string							strParkFineSelectSession;			// 주정차 과태료(BASE_PARKING_FINE) 최소 FROM_MIN 조회 SQL, 비어 있으면 체류시간 임계 비활성 (2026-08-24 최정우 추가)
 	string							strTripEndUpdateSession;			// 트립 종료 시 trip_end_dt UPDATE SQL, 비어 있으면 비활성 (2026-08-12 최정우 추가)
 	string							strAbnormalTripEndSession;			// TTL 만료(비정상 종료) 시 개방형 미확정 레코드 마감 UPDATE SQL, 비어 있으면 비활성 (2026-08-13 최정우 추가)
 	string							strServerStatusSession;				// 서버 상태(CPU/메모리) 하트비트 UPDATE SQL, 비어 있으면 비활성 (2026-08-20 최정우 추가)
@@ -81,6 +82,7 @@ typedef struct sConfig
 	double							dfAltWeight;						// alt_weight
 	double							dfAltSlope;							// alt_slope
 	int								nReverseConfirm;					// reverse_confirm — 연속 역행 확정 포인트 수 (2026-07-21 최정우 추가)
+	int								nOppStreakMax;						// opp_streakmax — 왕복분리 반대편 링크 연속 오매칭 허용 틱 수 (2026-08-24 최정우 추가)
 	double							dfSpeedFactor;					// speed_factor (2026-07-20 최정우 추가)
 	int								nSpeedMargin;					// speed_margin (km/h) (2026-07-20 최정우 추가)
 
@@ -102,6 +104,7 @@ typedef struct sConfig
 	//   클램프 저신뢰·hop 페널티)이 걸러내는지로 판별한다 (2026-08-23 최정우 추가)
 	int								nIgnoreRawVld;
 	int								nParkExitCnt;						// [charge] park_exitcnt — 구역 이탈 확정 연속 GPS 건수(디바운스) (2026-08-13 최정우 추가)
+	int								nNodeExitCnt;						// [charge] node_exitcnt — 일반도로(NODE_STEP) 이탈 확정 연속 GPS 건수(디바운스) (2026-08-24 최정우 추가)
 	int								nParkSpeedMax;						// [charge] park_speedmax (단위: km/h) — 이 속도 이하에서만 주정차로 판정 (2026-08-22 최정우 추가)
 	int								nParkEntryCnt;						// [charge] park_entrycnt — 세션 개시에 필요한 연속 충족 GPS 건수 (2026-08-22 최정우 추가)
 	int								nParkRegraceSec;					// [charge] park_regrace (단위: sec) — 재진입 유예시간 (2026-08-14 최정우 추가)

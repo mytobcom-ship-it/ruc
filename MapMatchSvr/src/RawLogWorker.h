@@ -35,11 +35,24 @@ typedef struct sZoneRunSession
 	double							dfLastX;							// 직전 매칭 위치 경도 — to_lon
 	double							dfLastY;							// 직전 매칭 위치 위도 — to_lat
 	uint64							qwLastLinkID;						// 구역 안에서 마지막으로 매칭된 링크 — 이탈 보정용
+	time_t							dtLastInZoneTime;					// 구역 안에서 마지막으로 확정매칭됐던 GPS 시각(dfLastX/Y 와
+																		//   같은 시점) — 일반도로(NODE_STEP)만 사용. node_exitcnt
+																		//   디바운스로 이탈 확정이 몇 틱 늦게 일어나도, occur_dt·
+																		//   stay_seconds 는 이 시각 기준으로 계산해 디바운스 대기
+																		//   시간(=이미 다른 구역에 들어간 뒤 시간)이 섞이지 않게 한다
+																		//   (실측 000376_20260819094414 RL-Z00002 — 실제 마지막 재
+																		//   구역내 확정은 seq38 인데 디바운스 대기 중 seq42~44 가 이미
+																		//   RL-Z00003(구간단속)로 넘어가 있어, 이탈 확정 시각(dtGPS)을
+																		//   그대로 쓰면 두 구역 범위가 겹쳐 보임) (2026-08-24 최정우 추가)
 	time_t							dtExitCandidateTime;				// "무존" 최초 감지 시각 — 재진입 유예용(면제도로만 사용)
+	int								nExitTicks;							// 이탈 연속 감지 횟수(디바운스) — 일반도로(NODE_STEP)만 사용
+																		//   (2026-08-24 최정우 추가 — 순간 오매칭 1틱으로 세션이
+																		//   쪼개지는 결함 방지, PARKING park_exitcnt 와 동일 원리)
 
 	sZoneRunSession() :
 		dtEntryTime(0), dfEntryX(0.0), dfEntryY(0.0), dfAccumDistM(0.0),
-		dfLastX(0.0), dfLastY(0.0), qwLastLinkID(0), dtExitCandidateTime(0)
+		dfLastX(0.0), dfLastY(0.0), qwLastLinkID(0), dtLastInZoneTime(0),
+		dtExitCandidateTime(0), nExitTicks(0)
 	{
 		szRoadID[0] = '\0';
 	}
@@ -64,11 +77,21 @@ typedef struct sParkRunSession
 	time_t							dtLastConfirmedTime;				// 마지막 raw_vld=true 확인 시각 — park_ttl 기준
 	double							dfLastConfirmedX;
 	double							dfLastConfirmedY;
+	// 이탈 디바운스(park_exitcnt)·재진입 유예(park_regrace) 판정에 쓰인 시간을 체류시간에서
+	//   빼기 위해 dtLastInZoneTime을 종료 시각으로 쓰던 기존 방식은, 실제 경계 통과가 그 이후
+	//   ~ 첫 이탈 확인 틱 사이 어딘가라는 사실은 반영 못 해 항상 짧게(under-count) 잡혔다.
+	//   nExitTicks 가 0→1 로 바뀌는 첫 이탈 틱(디바운스·유예 시작 전, "밖"으로 처음 찍힌 원시좌표)을
+	//   따로 잡아뒀다가, InterpolateZoneCrossingTime() 으로 dtLastInZoneTime(안)과의 사이에서
+	//   실제 경계 통과 시각을 선형보간한다 (사용자 지시, 2026-08-24 최정우 추가)
+	double							dfFirstOutX;
+	double							dfFirstOutY;
+	time_t							dtFirstOut;
 
 	sParkRunSession() :
 		dtEntryTime(0), dfEntryX(0.0), dfEntryY(0.0), dfAccumDistM(0.0), dfLastX(0.0), dfLastY(0.0),
 		nExitTicks(0), dtExitCandidateTime(0), dtLastInZoneTime(0), dfLastInZoneX(0.0),
-		dfLastInZoneY(0.0), dtLastConfirmedTime(0), dfLastConfirmedX(0.0), dfLastConfirmedY(0.0)
+		dfLastInZoneY(0.0), dtLastConfirmedTime(0), dfLastConfirmedX(0.0), dfLastConfirmedY(0.0),
+		dfFirstOutX(0.0), dfFirstOutY(0.0), dtFirstOut(0)
 	{ szRoadID[0] = '\0'; }
 } PARK_RUN_SESSION;
 
@@ -144,6 +167,15 @@ typedef struct sVehicleTripSession
 	// 주정차 — 구역별 세션·후보 목록 (2026-08-23 최정우 수정)
 	vector<PARK_RUN_SESSION>		vtParkRuns;
 	vector<PARK_CANDIDATE>			vtParkCands;
+	// 주정차 경계 통과 시각 보간용 "직전 GPS 원시 좌표/시각" — 다른 3종과 달리 매칭 링크가 아니라
+	//   raw GPS 기준이라 dfLastMatchX/Y 를 못 쓴다. ProcessParkingCharge() 진입 시 매 틱 갱신 —
+	//   새 구역 후보(PARK_CANDIDATE)가 열리는 순간 "그 직전엔 밖이었던 좌표"로 쓰인다. 트립의
+	//   첫 틱은 bHasLastRawTick=false 라 보간을 건너뛰고 원시 GPS 시각을 그대로 쓴다
+	//   (사용자 지시, 2026-08-24 최정우 추가)
+	double							dfLastRawTickX;
+	double							dfLastRawTickY;
+	time_t							dtLastRawTick;
+	bool							bHasLastRawTick;
 
 	// 비과금도로 트랙(ROAD_KIND=5) — 게이트가 없어 매칭 링크→구역 역인덱스로 진입/이탈 판정.
 	//   정상 진행/정상 이탈 시에는 아무것도 INSERT 안 함(어차피 비과금이라 기록할 요금이 없음) —
@@ -177,6 +209,25 @@ typedef struct sVehicleTripSession
 	int								nPendingIntersectLen;					// 보류 행 INTERSECT_LEN
 	bool							bPendingHasCoords;						// 보류 행 MATCH_LAT/LON 저장 여부
 	uint64							qwLastConfirmedLinkID;					// 마지막으로 "신뢰 가능(과금 반영)"하게 커밋된 링크 ID(0=없음) — 보정판단 기준
+	time_t							dtLastConfirmedLinkTime;				// qwLastConfirmedLinkID 가 확정됐던 GPS 시각 — 폐쇄형/구간단속
+																			//   직전링크 이탈 출구판정(bExitOnPrevLink) 시 "실제로 그 링크에 마지막으로
+																			//   있던 시각"으로 stay_seconds 를 계산하기 위함(현재 틱 시각을 쓰면 이미
+																			//   다음 링크로 넘어온 뒤라 그만큼 과다계상됨) (2026-08-24 최정우 추가)
+	// 왕복분리 반대편 링크 N틱 연속 오매칭 보정용 (2026-08-24 최정우 추가, opp_streakmax 설정).
+	//   스트릭이 시작될 때의 "진짜" 확정 링크를 앵커로 고정해두고(qwLastConfirmedLinkID 는 매 틱
+	//   갱신되므로 별도 보관 필요), 스트릭 동안 pvtUpdates 에 커밋한 인덱스를 쌓아뒀다가 앵커로
+	//   복귀가 확인되면 한꺼번에 SKIP 재기록한다(CommitPendingRow 참고).
+	uint64							qwOppStreakAnchorLinkID;
+	vector<size_t>					vtOppStreakUpdateIdx;
+	// 트립 시작(또는 장시간 SKIP 후) 첫 매칭이 왕복분리 어느 쪽인지 불확실한 구간의 "경쟁 후보"
+	//   추적용 (2026-08-24 최정우 추가, 실측 21트립 중 3건꼴로 재현 확인). qwLastConfirmedLinkID·
+	//   qwOppStreakAnchorLinkID 가 둘 다 0(진짜 앵커도, 확정된 스트릭도 없음)일 때만 쓰인다 —
+	//   위 반대편 스트릭 로직과 서로 배타적. A/B 중 더 오래 버틴 쪽이 승리하면 진 쪽만 DB 기록을
+	//   SKIP 으로 재기록한다(CommitPendingRow 참고).
+	uint64							qwStartCandLinkA;
+	uint64							qwStartCandLinkB;
+	vector<size_t>					vtStartCandIdxA;
+	vector<size_t>					vtStartCandIdxB;
 	// 보류 행 처리 시점의 과금용 "직전 매칭 위치·시각" 스냅샷 — dfLastMatchX/Y 등은 RunMapMatch 가
 	//   매 행마다 실시간으로 최신값으로 전진시키므로, 보류 행을 나중에 commit할 때는 그 당시(보류
 	//   시점) 값을 써야 이동거리·속도가 정확함(그렇지 않으면 이미 몇 틱 지난 최신 위치를 "직전
@@ -214,10 +265,18 @@ typedef struct sVehicleTripSession
 		nPendingIntersectLen(-1),								// (2026-08-21 최정우 추가)
 		bPendingHasCoords(false),								// (2026-08-21 최정우 추가)
 		qwLastConfirmedLinkID(0),								// (2026-08-21 최정우 추가)
+		dtLastConfirmedLinkTime(0),								// (2026-08-24 최정우 추가)
+		qwOppStreakAnchorLinkID(0),								// (2026-08-24 최정우 추가)
+		qwStartCandLinkA(0),									// (2026-08-24 최정우 추가)
+		qwStartCandLinkB(0),									// (2026-08-24 최정우 추가)
 		dfPendingPrevMatchX(0.0),								// (2026-08-21 최정우 추가)
 		dfPendingPrevMatchY(0.0),								// (2026-08-21 최정우 추가)
 		dtPendingPrevMatchGps(0),								// (2026-08-21 최정우 추가)
-		bPendingHadLastMatch(false)								// (2026-08-21 최정우 추가)
+		bPendingHadLastMatch(false),								// (2026-08-21 최정우 추가)
+		dfLastRawTickX(0.0),									// (2026-08-24 최정우 추가)
+		dfLastRawTickY(0.0),									// (2026-08-24 최정우 추가)
+		dtLastRawTick(0),									// (2026-08-24 최정우 추가)
+		bHasLastRawTick(false)									// (2026-08-24 최정우 추가)
 	{
 		szTripId[0] = '\0';									// (2026-07-08 최정우 추가)
 		// vtActiveGateIds 는 vector 라 기본 생성자가 이미 빈 상태로 초기화함 (2026-08-13 최정우 수정)
@@ -332,10 +391,12 @@ typedef struct sRawLogWorkerConfig
 	double							dfSpeedFactor;					// config speed_factor — 이동거리 환산속도/SPEED_KMH 배율 상한. 0=비활성 (2026-07-20 최정우 추가)
 	int								nSpeedMargin;					// config speed_margin (km/h) — 노이즈 허용 여유분 (2026-07-20 최정우 추가)
 	int								nReverseConfirm;					// config reverse_confirm — 연속 역행 확정 포인트 수 (2026-07-21 최정우 추가)
+	int								nOppStreakMax;						// config opp_streakmax — 왕복분리 반대편 링크 연속 오매칭 허용 틱 수 (2026-08-24 최정우 추가)
 	int								nParkBuf;							// config park_buf — 구역판정 버퍼 상한(m) (2026-08-13 최정우 추가)
 	int								nIgnoreRawVld;						// config ignore_rawvld — RAW_VLD 무시 전량 매칭(검증용) (2026-08-23 최정우 추가)
 	int								nParkAccMax;						// config park_accmax — 주정차 판정 좌표 정확도 상한(m), 0=비활성 (2026-08-23 최정우 추가)
 	int								nParkExitCnt;						// config park_exitcnt — 구역 이탈 확정 연속 GPS 건수(디바운스) (2026-08-13 최정우 추가)
+	int								nNodeExitCnt;						// config node_exitcnt — 일반도로(NODE_STEP) 이탈 확정 연속 GPS 건수(디바운스) (2026-08-24 최정우 추가)
 	int								nParkSpeedMax;						// config park_speedmax — 주정차 판정 속도 상한(km/h) (2026-08-22 최정우 추가)
 	int								nParkEntryCnt;						// config park_entrycnt — 세션 개시 연속 GPS 건수 (2026-08-22 최정우 추가)
 	int								nParkRegraceSec;					// config park_regrace — 재진입 유예시간(초) (2026-08-14 최정우 추가)
@@ -392,6 +453,15 @@ private:
 	void ProcessSpeedZoneCharge(int nThreadId, const sRawLogInfo& stRawLogInfo,
 		const MATCH_LINK_INFO& stMatchLinkInfo, VEHICLE_TRIP_SESSION *pstSession,
 		vector<CHARGE_INSERT_ROW> *pvtChargeInserts);
+	// SKIP 틱(맵매칭 실패) 전용 출구 판정 — 확정매칭 전이로도 못 잡는 잔여 케이스 보완. 확정매칭
+	//   직전 링크 이탈로도 출구를 못 잡고(예: 그 뒤로 계속 SKIP만 나옴) 세션이 계속 열려 있을 때,
+	//   raw GPS 좌표 자체가 구역 시작점 기준 출구 게이트보다 MM_RAWGPS_EXIT_MARGIN_M 이상 더
+	//   멀어졌으면(=이미 게이트를 지나쳐 나갔다고 볼 수 있으면) 확정 링크 없이도 출구로 확정한다
+	//   (2026-08-24 최정우 추가, 사용자 지시)
+	void CheckClosedRoadExitByRawGps(int nThreadId, const sRawLogInfo& stRawLogInfo,
+		VEHICLE_TRIP_SESSION *pstSession, vector<CHARGE_INSERT_ROW> *pvtChargeInserts);
+	void CheckSpeedZoneExitByRawGps(int nThreadId, const sRawLogInfo& stRawLogInfo,
+		VEHICLE_TRIP_SESSION *pstSession, vector<CHARGE_INSERT_ROW> *pvtChargeInserts);
 	// 주정차 세션 시작(최초 진입 및 재진입 유예 초과 후 동틱 재진입 공용) — 필드 설정만 분리
 	//   (2026-08-14 최정우 추가, 재진입 유예 도입과 함께 중복 제거용으로 분리)
 	// 주정차(POLY) 판정 — 맵매칭 전 raw GPS·raw 속도 기준(다른 3종과 달리 매칭 결과 안 씀).
@@ -410,9 +480,20 @@ private:
 	// 적재 — trip END를 놓쳤든 단말이 전송을 멈췄든 서버는 원인을 구분 못하므로 "계속 정차 중"으로
 	// 간주(사용자 지시, 2026-08-13 추가)
 	// 주정차 과금 1행 생성 — 정상 마감·TTL·강제마감 공용 (2026-08-23 최정우 추가)
-	void BuildParkRow(const PARK_RUN_SESSION& stRun, const string& strTripId,
+	// 반환값: STAY_SECONDS 가 base_parking_fine 최소 from_min(초 환산) 이상이면 true(등록 대상),
+	//   미만이면 false(호출측은 pvtOut 에 push_back 하지 않음) — pstRow 자체는 반환값과 무관하게
+	//   항상 채움(호출측 로그가 STAY_SECONDS 를 그대로 쓸 수 있게) (사용자 지시, 2026-08-24 최정우 추가)
+	bool BuildParkRow(const PARK_RUN_SESSION& stRun, const string& strTripId,
 		const string& strDeviceKey, int nChargeSeq, time_t dtEnd, double dfEndX, double dfEndY,
 		const char *pszChargeYn, const char *pszChargeStatus, CHARGE_INSERT_ROW *pstRow);
+	// 주정차 구역 경계 통과 시각 보간 — dfInX/Y(폴리곤 내부로 판정된 점)와 dfOutX/Y(외부로 판정된 점)
+	//   사이를, 각 점의 경계까지 거리 비율로 나눠 실제 경계 통과 시각을 추정한다(등속 직선 이동 가정).
+	//   dfInX/Y 가 실제로 폴리곤 내부가 아니거나(버퍼만으로 판정됐거나) dfOutX/Y 가 이미 내부이면
+	//   보간 근거가 없어 dtIn 을 그대로 반환한다(무보정). dtOut 이 dtIn 보다 이전/이후 어느 쪽이든
+	//   무관 — 진입(현재=In, 직전틱=Out, dtOut<dtIn)과 이탈(마지막 재실=In, 첫 이탈틱=Out, dtOut>dtIn)
+	//   양쪽에 동일하게 쓴다 (사용자 지시, 2026-08-24 최정우 추가)
+	time_t InterpolateZoneCrossingTime(PZONE_INFO pstZone,
+		double dfInX, double dfInY, time_t dtIn, double dfOutX, double dfOutY, time_t dtOut);
 	void AppendExpiredParkingCharge(int nThreadId, const string& strDeviceKey,
 		const VEHICLE_TRIP_SESSION& stSession, vector<CHARGE_INSERT_ROW> *pvtOut);
 	// park_ttl — 세션(디바이스)은 살아있는데 주정차 세션만 마지막 신뢰 확인 후 오래 방치된 경우

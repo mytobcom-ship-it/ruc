@@ -451,12 +451,12 @@ typedef struct sRawLogWorkerConfig
 {
 	CPostgrePool					*pcPostgrePool;
 	CProcessManager					*pcProcessManager;
-	CChargeDataLoader				*pcChargeDataLoader;					// 게이트·구역 캐시 — 개방형 과금 판정용(nullptr=과금 비활성) (2026-08-12 최정우 추가)
-	CDataLoader						*pcDataLoader;							// 형상정보(LINK_INFO.qwOppositeLinkID 조회) — 반대편 짝 링크 1틱 오매칭 보정용 (2026-08-21 최정우 추가)
+	CChargeDataLoader				*pcChargeDataLoader;				// 게이트·구역 캐시 — 개방형 과금 판정용(nullptr=과금 비활성) (2026-08-12 최정우 추가)
+	CDataLoader						*pcDataLoader;						// 형상정보(LINK_INFO.qwOppositeLinkID 조회) — 반대편 짝 링크 1틱 오매칭 보정용 (2026-08-21 최정우 추가)
 	string							strUpdateSQL;						// [rawgps_update] 완료(1/3/4) 및 release(0) 공용
-	string							strChargeInsertSQL;						// [charge_insert] 개방형 게이트 통과 bulk INSERT (비어있으면 비활성) (2026-08-12 최정우 수정)
-	string							strTripEndUpdateSQL;						// [trip_end] 트립 종료 시 trip_end_dt UPDATE (비어있으면 비활성) (2026-08-12 최정우 추가)
-	string							strAbnormalTripEndSQL;						// [trip_abend] TTL 만료 시 미확정 레코드 마감 UPDATE, 4유형 공용 (비어있으면 비활성) (2026-08-13 최정우 추가, 2026-08-13 수정 — 개방형 한정 해제)
+	string							strChargeInsertSQL;					// [charge_insert] 개방형 게이트 통과 bulk INSERT (비어있으면 비활성) (2026-08-12 최정우 수정)
+	string							strTripEndUpdateSQL;				// [trip_end] 트립 종료 시 trip_end_dt UPDATE (비어있으면 비활성) (2026-08-12 최정우 추가)
+	string							strAbnormalTripEndSQL;				// [trip_abend] TTL 만료 시 미확정 레코드 마감 UPDATE, 4유형 공용 (비어있으면 비활성) (2026-08-13 최정우 추가, 2026-08-13 수정 — 개방형 한정 해제)
 	int								nWorkerThreads;
 	int								nTtlSec;							// trip_id 세션 유지 시간 (초, 0=비활성)
 	int								nMatchTimeoutMs;					// 1 GPS 맵매칭 처리 임계 (ms, 초과 시 ERROR 격리, 0=비활성)
@@ -465,8 +465,8 @@ typedef struct sRawLogWorkerConfig
 	int								nConnRetryWait;						// [database] retrywait — 재시도 사이 대기 (ms, 2026-07-10 최정우 추가)
 	int								nRadiusSkip;						// config radius_skip — ACCURACY_M 초과 시 SKIP (m). 0=비활성 (2026-07-08 최정우)
 	int								nHeadingMaxDist;					// (단위: m) 연속매칭 heading 계산 이동거리 상한. 초과 시 heading 미사용, 0=비활성 ([mapmatch] distance) (2026-07-15 최정우 추가)
-	double							dfSpeedFactor;					// config speed_factor — 이동거리 환산속도/SPEED_KMH 배율 상한. 0=비활성 (2026-07-20 최정우 추가)
-	int								nSpeedMargin;					// config speed_margin (km/h) — 노이즈 허용 여유분 (2026-07-20 최정우 추가)
+	double							dfSpeedFactor;						// config speed_factor — 이동거리 환산속도/SPEED_KMH 배율 상한. 0=비활성 (2026-07-20 최정우 추가)
+	int								nSpeedMargin;						// config speed_margin (km/h) — 노이즈 허용 여유분 (2026-07-20 최정우 추가)
 	int								nReverseConfirm;					// config reverse_confirm — 연속 역행 확정 포인트 수 (2026-07-21 최정우 추가)
 	int								nOppStreakMax;						// config opp_streakmax — 왕복분리 반대편 링크 연속 오매칭 허용 틱 수 (2026-08-24 최정우 추가)
 	int								nParkBuf;							// config park_buf — 구역판정 버퍼 상한(m) (2026-08-13 최정우 추가)

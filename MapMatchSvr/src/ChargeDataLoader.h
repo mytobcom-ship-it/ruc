@@ -94,9 +94,12 @@ typedef struct sZoneInfo
 	double							dfLastLat;								// coords 마지막 정점 — 구간단속 to_lat
 	vector<POINT>					vtCoords;								// coords 파싱 결과 — GEOM_TYPE='POLY'(주정차)에서만 채움,
 																			//   PointInPolygon 판정용. LINE 은 LENGTH_M/FIRST/LAST 로 충분해 미파싱 (2026-08-13 최정우 추가)
-	vector<uint64>					vtLinkIds;								// link_ids 파싱 결과 — ROAD_KIND='5'(비과금도로)에서만 채움,
-																			//   게이트가 없어 매칭 링크→구역 역인덱스 구성용. 다른 LINE 유형은
-																			//   게이트 기반이라 미파싱(2026-08-13 최정우 추가)
+	vector<uint64>					vtLinkIds;								// link_ids 파싱 결과 — ROAD_KIND='0'(일반도로)·'1'(개방형)·'5'(면제
+																			//   도로)는 매칭 링크→구역 역인덱스 구성용(게이트가 없거나 진입/이탈
+																			//   판정 자체를 이걸로 함, 2026-08-13/25 최정우 추가). '2'(폐쇄형)·
+																			//   '3'(구간단속)도 파싱은 되지만 진입/이탈은 여전히 게이트 기반 —
+																			//   게이트를 못 찾고 이 링크들을 벗어났는지("확정 이탈")만 보조로
+																			//   확인하는 용도(2026-08-25 최정우 추가)
 
 	sZoneInfo() :
 		dfSpeedLimitKmh(0.0),
@@ -170,6 +173,9 @@ public:
 	//   출력 charge_type만 0으로 바뀌고 판정 방식은 원래의 zone 기반으로 복귀)
 	PZONE_INFO GetExemptZoneByLinkId(const uint64 qwLinkID);
 	void GetExemptZonesByLinkId(const uint64 qwLinkID, vector<PZONE_INFO> *pvtOut);
+	// 개방형(ROAD_KIND=1) — 주행거리·주행시간 산출용 구역진입 판정에 사용(게이트는 여전히
+	//   과금 유효성(charge_yn/status) 판정에만 씀). 매칭 링크 ID로 역인덱스 조회 (2026-08-25 최정우 추가)
+	void GetOpenZonesByLinkId(const uint64 qwLinkID, vector<PZONE_INFO> *pvtOut);
 	// 폴리곤이 겹쳐 설정될 수 있어 포함하는 구역을 전부 돌려준다 (2026-08-23 최정우 추가)
 	void GetParkingZonesContaining(const double dfLon, const double dfLat, const double dfBufM,
 		vector<PZONE_INFO> *pvtOut);
@@ -216,9 +222,11 @@ private:
 																			//   LoadZones() 가 link_ids 파싱 후 구성 (2026-08-14 최정우 추가)
 	unordered_map<uint64, vector<string> >	m_mapExemptLinkToRoadId;		// 면제도로(ROAD_KIND=5) link_id → road_id 역인덱스,
 																			//   LoadZones() 가 link_ids 파싱 후 구성 (2026-08-14 최정우 부활)
+	unordered_map<uint64, vector<string> >	m_mapOpenLinkToRoadId;			// 개방형(ROAD_KIND=1) link_id → road_id 역인덱스,
+																			//   LoadZones() 가 link_ids 파싱 후 구성 (2026-08-25 최정우 추가)
 	bool							m_bLoad;
 	mutable CMutex					m_cGateCacheMutex;						// m_mapGateInfo 재조회(swap)/조회 동시접근 보호 (2026-08-14 최정우 추가)
-	mutable CMutex					m_cZoneCacheMutex;						// m_mapZoneInfo+m_mapNodeStepLinkToRoadId+m_mapExemptLinkToRoadId
+	mutable CMutex					m_cZoneCacheMutex;						// m_mapZoneInfo+m_mapNodeStepLinkToRoadId+m_mapExemptLinkToRoadId+m_mapOpenLinkToRoadId
 																			//   재조회(swap)/조회 동시접근 보호 — 셋 다 LoadZones() 에서 항상 같이
 																			//   swap 되므로 락도 하나로 공유(항상 일관된 스냅샷 보장) (2026-08-14 최정우 추가)
 	int								m_nParkFineMinSec;						// base_parking_fine 최소 from_min(분)*60 — 0=임계 비활성 (2026-08-24 최정우 추가)

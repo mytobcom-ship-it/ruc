@@ -701,8 +701,19 @@ let endMarkerCls = null;                                  // 현재 도착 마�
 //   G/M 마커의 bindSeqLabel 과 같은 방식이다 — 오버 시 상세, 아웃 시 원래 라벨로 복귀.
 //   M순번은 마우스오버가 아니라 상시 라벨에 함께 표시한다 — 어느 매칭점이 출발/도착인지
 //   오버하지 않아도 바로 보여야 한다 (2026-08-23 최정우 수정)
-function seLabelText(baseText, seq) {
-  return baseText + (seq !== null && seq !== undefined ? ' · M' + seq : '');
+function seLabelText(baseText, seq, prefix) {
+  return baseText + (seq !== null && seq !== undefined ? ' · ' + (prefix || 'M') + seq : '');
+}
+
+// 트립 실제 종료(TRIP_EVENT=2) 지점 탐색 — 도착 마커에서 맵매칭 실패 시 raw 좌표 대체용
+//   (2026-08-25 최정우 추가). accumPoints 는 폴링마다 최신 match_status 로 갱신되므로 캐시하지
+//   않고 렌더 시점에 매번 스캔한다.
+function findTripEndPoint() {
+  let found = null;
+  accumPoints.forEach(function (p) {
+    if (p.trip_event === 2 && (!found || p.gps_seq > found.gps_seq)) found = p;
+  });
+  return found;
 }
 
 // 출발·도착 전용 마커 아이콘 — box-shadow 로 다중 테두리를 만든다 (2026-08-22 최정우 추가)
@@ -856,10 +867,18 @@ function updateStartEndMarkers(t) {
   } else {
     startMarker.setTooltipContent(startTooltip);
   }
-  const last = lastSeg[lastSeg.length - 1];
+  // 트립이 끝났는데 실제 종료(TRIP_EVENT=2) 지점이 맵매칭 안 됐으면(SKIP/ERROR) 마지막
+  //   매칭점 대신 그 지점의 raw GPS 좌표를 도착 위치로 쓴다 — 주정차단속구역처럼 정지 상태라
+  //   맵매칭이 잘 안 되는 곳에서 도착 마커가 실제 종료 지점과 동떨어져 보이는 문제 방지
+  //   (2026-08-25 최정우 추가)
+  const tripEndPoint = t.complete ? findTripEndPoint() : null;
+  const useRawEnd = !!(tripEndPoint && tripEndPoint.match_status !== 1
+    && tripEndPoint.gps_lat != null && tripEndPoint.gps_lon != null);
+  const last = useRawEnd ? [tripEndPoint.gps_lat, tripEndPoint.gps_lon] : lastSeg[lastSeg.length - 1];
   const endCls = t.complete ? 'se-end' : 'se-live';
   const endTooltip = seLabelText('② ' + (t.complete ? '도착' : '진행중') + ' (' + fmtTime(t.gps_dt_max) + ')',
-                                 lastMatchedSeq);
+                                 useRawEnd ? tripEndPoint.gps_seq : lastMatchedSeq,
+                                 useRawEnd ? 'G' : 'M');
   if (!endMarker) {
     endMarker = L.marker(last, { icon: seIcon(endCls), zIndexOffset: 1000, pane: 'sePane' })
       .bindTooltip(endTooltip,

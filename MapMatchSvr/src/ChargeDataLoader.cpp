@@ -519,7 +519,21 @@ bool CChargeDataLoader::LoadZones()
 		//   링크→구역 역인덱스가 유일한 진입/이탈 판정 수단(다른 LINE 유형은 게이트 기반이라 불필요)
 		//   (2026-08-13 최정우 추가, 2026-08-14 두 차례 수정 — ROAD_KIND=5 기반 판정을 "모든 미등록
 		//   링크" 방식으로 재설계했다가 폐기하고, charge_type=0 통합 출력 방식으로 다시 zone 기반 부활)
-		if ((strcmp(stZoneInfo.szRoadKind, "0") == 0) || (strcmp(stZoneInfo.szRoadKind, "5") == 0))
+		// 개방형(ROAD_KIND=1)도 추가 — 주행거리(dist_m)·주행시간 산출을 위해 "구역 진입~이탈"
+		//   범위를 알아야 해서 link_ids 역인덱스가 필요해짐. 게이트는 여전히 있고 과금 유효성
+		//   판정(charge_yn/status)에는 계속 쓰지만, 진입/이탈 자체는 이 역인덱스로 판정한다
+		//   (2026-08-25 최정우 추가)
+		// 폐쇄형(ROAD_KIND=2)·구간단속(ROAD_KIND=3)도 추가 — 이 둘은 여전히 게이트 기반으로
+		//   진입/이탈을 판정하지만, 게이트를 못 찾은 채 매칭 링크가 이 구역 link_ids 를 완전히
+		//   벗어나면(=확정 이탈) dist_m/speed_kmh/stay_seconds 를 0 대신 실측값으로 채우기 위한
+		//   보조 판정에 씀(실측 000376_20260819140856 — 게이트 미확인 이탈 시 전부 0으로 비어있던
+		//   문제, 2026-08-25 최정우 추가). 역인덱스는 안 만듦 — CLOSED/SPEED는 "이 특정 구역
+		//   안에 있는가"만 확인하면 되고(진행 중인 road_id 를 이미 알고 있음), 링크→구역 전체
+		//   매핑이 필요한 NODE_STEP/EXEMPT/OPEN과 달리 GetZoneByRoadId() 로 얻은 그 zone 하나의
+		//   vtLinkIds 만 선형 탐색하면 충분함(구역당 링크 수가 적어 성능 문제 없음).
+		if ((strcmp(stZoneInfo.szRoadKind, "0") == 0) || (strcmp(stZoneInfo.szRoadKind, "1") == 0)
+			|| (strcmp(stZoneInfo.szRoadKind, "2") == 0) || (strcmp(stZoneInfo.szRoadKind, "3") == 0)
+			|| (strcmp(stZoneInfo.szRoadKind, "5") == 0))
 			ParseLinkIdsJson(stZoneInfo.strLinkIdsJson, &stZoneInfo.vtLinkIds);
 
 		mapNewZoneInfo[stZoneInfo.szRoadID] = stZoneInfo;
@@ -546,6 +560,15 @@ bool CChargeDataLoader::LoadZones()
 			mapNewExemptLinkToRoadId[it->second.vtLinkIds[i]].push_back(it->second.szRoadID);
 	}
 
+	// 개방형 link_id → road_id 역인덱스 재구성 (2026-08-25 최정우 추가)
+	unordered_map<uint64, vector<string> > mapNewOpenLinkToRoadId;
+	for (mapZoneInfo::iterator it = mapNewZoneInfo.begin(); it != mapNewZoneInfo.end(); ++it)
+	{
+		if (strcmp(it->second.szRoadKind, "1") != 0) continue;
+		for (size_t i = 0; i < it->second.vtLinkIds.size(); ++i)
+			mapNewOpenLinkToRoadId[it->second.vtLinkIds[i]].push_back(it->second.szRoadID);
+	}
+
 	{
 		// 재조회 시점 교체 — m_cZoneCacheMutex 로 조회 스레드(GetZoneByRoadId/GetParkingZoneContaining 등)와
 		// 동기화(doc/README.txt §F 패턴, 2026-08-14 최정우 수정 — 락 없이 swap만 하던 걸 수정). 세 맵을
@@ -561,6 +584,7 @@ bool CChargeDataLoader::LoadZones()
 			m_dqRetiredZoneInfo.pop_front();
 		m_mapNodeStepLinkToRoadId.swap(mapNewNodeStepLinkToRoadId);
 		m_mapExemptLinkToRoadId.swap(mapNewExemptLinkToRoadId);
+		m_mapOpenLinkToRoadId.swap(mapNewOpenLinkToRoadId);
 	}
 	m_bLoad = true;
 
@@ -732,6 +756,24 @@ PZONE_INFO CChargeDataLoader::GetExemptZoneByLinkId(const uint64 qwLinkID)
 		return nullptr;
 
 	return GetZoneByRoadId(itLink->second[0]);		// 호환용 — 첫 구역만
+}
+
+/**
+ * @brief 개방형(ROAD_KIND=1) 구역 복수 조회 — 매칭 링크 ID로 역인덱스 O(1) 조회 (2026-08-25 최정우 추가)
+ * @param[in] qwLinkID 매칭 링크 ID
+ * @param[out] pvtOut 그 링크가 속한 개방형 구역 전부(없으면 빈 목록)
+*/
+void CChargeDataLoader::GetOpenZonesByLinkId(const uint64 qwLinkID, vector<PZONE_INFO> *pvtOut)
+{
+	if (pvtOut == nullptr) return;
+	lock_guard<CMutex> cLock(m_cZoneCacheMutex);
+	unordered_map<uint64, vector<string> >::iterator itLink = m_mapOpenLinkToRoadId.find(qwLinkID);
+	if (itLink == m_mapOpenLinkToRoadId.end()) return;
+	for (size_t i = 0; i < itLink->second.size(); ++i)
+	{
+		PZONE_INFO p = GetZoneByRoadId(itLink->second[i]);
+		if (p != nullptr) pvtOut->push_back(p);
+	}
 }
 
 /**

@@ -207,6 +207,11 @@ int CRawLogWorker::ExpireTtlSessions(int nThreadId, int nTtlSec, PGconn *pcConn)
 			if (bWasNodeStep)
 				it->second.nChargeSeq += 1;
 
+			bool bWasOpen = !it->second.vtOpenRuns.empty();
+			AppendExpiredOpenGateCharge(nThreadId, it->first, it->second, &vtExpiredParkingCharges);
+			if (bWasOpen)
+				it->second.nChargeSeq += 1;
+
 			bool bWasClosedRoad = it->second.bInClosedRoad;
 			AppendExpiredClosedRoadCharge(nThreadId, it->first, it->second, it->second.dtLastSeen, &vtExpiredParkingCharges);
 			if (bWasClosedRoad)
@@ -293,6 +298,35 @@ time_t CRawLogWorker::InterpolateZoneCrossingTime(PZONE_INFO pstZone,
 	double dfFrac = dfInDist / dfTotal;					// In 이 경계에서 먼 비율만큼 Out 쪽으로 이동
 	double dfDeltaSec = difftime(dtOut, dtIn) * dfFrac;
 	return dtIn + static_cast<time_t>(dfDeltaSec + (dfDeltaSec >= 0.0 ? 0.5 : -0.5));
+}
+
+/**
+ * @brief 폐쇄형/구간단속 게이트 통과 시각 보간 — 직전 확정 tick~현재 tick 사이 등속 직선 이동을
+ *   가정, 게이트까지의 직선거리 비율로 그 구간 안 실제 통과 시각을 추정한다 (2026-08-25 최정우 추가)
+ * @remark InterpolateZoneCrossingTime() 과 원리는 같으나(비율 보간) 그쪽은 폴리곤 경계까지의
+ *   거리(주정차 전용), 이쪽은 게이트라는 "점"까지의 직선거리(폐쇄형/구간단속 전용) 기준이라
+ *   구분함. dfPrevX/Y~dfCurX/Y 거리가 0이면(같은 좌표 재수신 등) 보간 근거가 없어 dtCur 을 그대로
+ *   반환한다. 비율은 0~1 로 클램프 — 게이트가 두 tick 의 이동 경로 밖(직선상 연장선)에 있는 것처럼
+ *   계산되는 경우(맵매칭 곡선경로 vs 직선거리 오차)에도 dtPrev/dtCur 범위를 벗어나지 않게 한다.
+ */
+time_t CRawLogWorker::InterpolateGateCrossingTime(double dfPrevX, double dfPrevY, time_t dtPrev,
+		double dfCurX, double dfCurY, time_t dtCur, double dfGateX, double dfGateY)
+{
+	POINT stPrev, stCur, stGate;
+	stPrev.dfX = dfPrevX;  stPrev.dfY = dfPrevY;
+	stCur.dfX = dfCurX;    stCur.dfY = dfCurY;
+	stGate.dfX = dfGateX;  stGate.dfY = dfGateY;
+
+	double dfPrevToCur = HaversineMeters(stPrev, stCur);
+	if (dfPrevToCur <= 0.0) return dtCur;
+
+	double dfPrevToGate = HaversineMeters(stPrev, stGate);
+	double dfFrac = dfPrevToGate / dfPrevToCur;
+	if (dfFrac < 0.0) dfFrac = 0.0;
+	if (dfFrac > 1.0) dfFrac = 1.0;
+
+	double dfDeltaSec = difftime(dtCur, dtPrev) * dfFrac;
+	return dtPrev + static_cast<time_t>(dfDeltaSec + (dfDeltaSec >= 0.0 ? 0.5 : -0.5));
 }
 
 bool CRawLogWorker::BuildParkRow(const PARK_RUN_SESSION& stRun, const string& strTripId,
@@ -641,6 +675,138 @@ void CRawLogWorker::AppendExpiredNodeStepCharge(int nThreadId, const string& str
 }
 
 /**
+ * @brief 개방형 과금 1행 생성 — 정상 이탈과 TTL 만료 공용 (2026-08-25 최정우 추가)
+ * @remark dist_m·from/to 좌표·charge_yn/status 산출 방식이 stRun.bStartedByTrip 으로 갈린다:
+ *   - false(구역 밖에서 정상 진입) — dist_m=구역 전체길이(ZONE_INFO.dfLengthM), from/to 좌표=
+ *     구역 자체 등록 시작/끝점(dfFirstLat/Lon·dfLastLat/Lon, SPEED/CLOSED와 동일 관례),
+ *     charge_yn/status=Y/0 고정(개방형 구역을 물리적으로 통과하려면 게이트를 지날 수밖에 없음)
+ *   - true(트립이 이 구역 도로 위에서 시작) — dist_m=stRun.dfAccumDistM(출발~이탈 실관측 거리),
+ *     from/to 좌표=실제 진입/이탈 매칭 좌표(NODE_STEP과 동일 관례), charge_yn/status 는
+ *     stRun.bGateCrossed(이 run 동안 게이트를 실제로 지났는가)로 결정 — Y/0(지남) vs N/3(못 지남,
+ *     이미 게이트를 지난 뒤 시작했다는 뜻)
+*/
+void CRawLogWorker::BuildOpenZoneRow(const ZONE_RUN_SESSION& stRun, const string& strTripId,
+		const string& strDeviceKey, int nChargeSeq, time_t dtEnd, CHARGE_INSERT_ROW *pstRow)
+{
+	PZONE_INFO pstZone = m_stConfig.pcChargeDataLoader->GetZoneByRoadId(stRun.szRoadID);
+
+	pstRow->strTripId = strTripId;
+	pstRow->strDeviceKey = strDeviceKey;
+
+	char szSeq[16];
+	snprintf(szSeq, sizeof(szSeq), "%d", nChargeSeq);
+	pstRow->strChargeSeq = szSeq;
+
+	pstRow->strChargeType = "1";							// OPEN_ROAD
+	pstRow->strChargeUnit = "0";							// NODE(실측 관례 유지)
+	pstRow->strLinkId = "";
+	pstRow->strFromId = stRun.szRoadID;					// 2026-08-25 변경 — 게이트ID→구역road_id(NODE_STEP과 동일 관례)
+	pstRow->strToId = stRun.szRoadID;
+
+	char szFromLat[32], szFromLon[32], szToLat[32], szToLon[32];
+	double dfDistM;
+	if (stRun.bStartedByTrip)
+	{
+		snprintf(szFromLat, sizeof(szFromLat), "%.06lf", stRun.dfEntryY);
+		snprintf(szFromLon, sizeof(szFromLon), "%.06lf", stRun.dfEntryX);
+		snprintf(szToLat, sizeof(szToLat), "%.06lf", stRun.dfLastY);
+		snprintf(szToLon, sizeof(szToLon), "%.06lf", stRun.dfLastX);
+		dfDistM = stRun.dfAccumDistM;
+	}
+	else if (pstZone != nullptr)
+	{
+		snprintf(szFromLat, sizeof(szFromLat), "%.06lf", pstZone->dfFirstLat);
+		snprintf(szFromLon, sizeof(szFromLon), "%.06lf", pstZone->dfFirstLon);
+		snprintf(szToLat, sizeof(szToLat), "%.06lf", pstZone->dfLastLat);
+		snprintf(szToLon, sizeof(szToLon), "%.06lf", pstZone->dfLastLon);
+		dfDistM = pstZone->dfLengthM;
+	}
+	else
+	{
+		szFromLat[0] = szFromLon[0] = szToLat[0] = szToLon[0] = '\0';
+		dfDistM = 0.0;
+	}
+	pstRow->strFromLat = szFromLat;
+	pstRow->strFromLon = szFromLon;
+	pstRow->strToLat = szToLat;
+	pstRow->strToLon = szToLon;
+
+	pstRow->strZoneId = stRun.szRoadID;
+	pstRow->strZoneName = (pstZone != nullptr) ? pstZone->szRoadNm : "";
+
+	char szDistM[16];
+	snprintf(szDistM, sizeof(szDistM), "%d", static_cast<int>(dfDistM + 0.5));
+	pstRow->strDistM = szDistM;
+
+	double dfElapsedSec = difftime(dtEnd, stRun.dtEntryTime);
+	if (dfElapsedSec > 0.0)
+	{
+		double dfAvgSpeedKmh = (dfDistM / dfElapsedSec) * 3.6;
+		char szSpeedKmh[16];
+		snprintf(szSpeedKmh, sizeof(szSpeedKmh), "%d", static_cast<int>(dfAvgSpeedKmh + 0.5));
+		pstRow->strSpeedKmh = szSpeedKmh;
+	}
+	pstRow->strSpeedLimitKmh = "";							// 개방형은 구역 제한속도 개념 해당없음(기존 관례 유지)
+
+	char szStaySeconds[16];
+	snprintf(szStaySeconds, sizeof(szStaySeconds), "%d", static_cast<int>(dfElapsedSec + 0.5));
+	pstRow->strStaySeconds = szStaySeconds;
+
+	pstRow->strOccurDt = FormatDateTime14(stRun.dtEntryTime);	// 진입 시각(다른 유형과 동일 관례)
+
+	const char *pszTripStartDt = ExtractTripStartDt(strTripId.c_str());
+	pstRow->strTripStartDt = (pszTripStartDt != nullptr) ? pszTripStartDt : pstRow->strOccurDt;
+
+	// tollgate_id — 이 run 동안 실제로 지난 게이트 ID(못 지났으면 빈 값)
+	PGATE_INFO pstGate = m_stConfig.pcChargeDataLoader->GetGateByRoadId(stRun.szRoadID, 'M');
+	pstRow->strTollgateId = (stRun.bGateCrossed && (pstGate != nullptr)) ? pstGate->szTollgateID : "";
+	pstRow->strEntryTollgateId = "";
+	pstRow->strExitTollgateId = "";
+	pstRow->strRegDt = FormatDateTime14(time(nullptr));
+	pstRow->strUpdDt = pstRow->strRegDt;
+
+	// charge_yn/status — 정상진입 run 은 Y/0 고정, 트립시작 run 은 게이트 통과 여부로 결정
+	//   (사용자 지시, 2026-08-25)
+	if (!stRun.bStartedByTrip || stRun.bGateCrossed)
+	{
+		pstRow->strChargeYn = "Y";
+		pstRow->strChargeStatus = "0";
+	}
+	else
+	{
+		pstRow->strChargeYn = "N";
+		pstRow->strChargeStatus = "3";
+	}
+}
+
+/**
+ * @brief TTL 만료로 세션이 지워지기 직전, 아직 열려있는 개방형 run 이면 그 상태 그대로 1건 기록 —
+ *   [trip_abend] UPDATE(query.sql)가 뒤이어 TRIP_END_DT IS NULL 인 이 행을 찾아 N/3(AUDIT)로
+ *   정정한다(다른 유형과 동일한 2단계 처리, AppendExpiredNodeStepCharge와 동일 패턴) (2026-08-25 최정우 추가)
+*/
+void CRawLogWorker::AppendExpiredOpenGateCharge(int nThreadId, const string& strDeviceKey,
+		const VEHICLE_TRIP_SESSION& stSession, vector<CHARGE_INSERT_ROW> *pvtOut)
+{
+	if (stSession.vtOpenRuns.empty() || (pvtOut == nullptr)
+		|| (m_stConfig.pcChargeDataLoader == nullptr) || m_stConfig.strChargeInsertSQL.empty())
+		return;
+
+	int nSeq = stSession.nChargeSeq;
+	for (size_t i = 0; i < stSession.vtOpenRuns.size(); ++i)
+	{
+		CHARGE_INSERT_ROW stRow;
+		BuildOpenZoneRow(stSession.vtOpenRuns[i], stSession.szTripId, strDeviceKey,
+			nSeq, stSession.dtLastSeen, &stRow);
+		pvtOut->push_back(stRow);
+		nSeq += 1;
+
+		LOGFMTI("[#%02d] open zone expired!device=[%s] trip_id=[%s] road=[%s] dist_m=[%s]",
+			nThreadId, strDeviceKey.c_str(), stSession.szTripId,
+			stSession.vtOpenRuns[i].szRoadID, stRow.strDistM.c_str());
+	}
+}
+
+/**
  * @brief TTL 만료 세션 중 입구만 통과하고 출구를 못 찾은 폐쇄형 세션을 N/3(AUDIT)로 마감
  *   (2026-08-14 최정우 추가)
  * @param[in] nThreadId 로그용 워커 ID
@@ -648,11 +814,10 @@ void CRawLogWorker::AppendExpiredNodeStepCharge(int nThreadId, const string& str
  * @param[in] stSession 만료 직전 세션(제거 전 스냅샷)
  * @param[out] pvtOut 세션이 입구 통과 상태였으면 CHARGE_INSERT_ROW 1건 추가
  * @remark 기존엔 이 함수 자체가 없어 "입구는 확인했지만 출구 신호가 영영 안 온" 세션이 TTL로
- *   조용히 사라지면 그 진입 사실 자체가 통째로 유실됐음(휴게소 장시간 정차 등). 다른 TTL-flush
- *   함수(주정차·일반도로·면제도로)와 달리 폐쇄형은 실시간 위치 추적을 안 하고(구간거리를
- *   ZONE_INFO.dfLengthM 사전계산값으로 씀) "직전 매칭 위치" 자체를 세션에 안 갖고 있어, 출구 위치·
- *   실제 이동거리를 알 방법이 없음 — 모르는 값을 지어내지 않고 dist_m/speed_kmh/to_id/to_lat·lon은
- *   전부 비워두고, 확실히 아는 것(입구 게이트 ID·구역·진입시각)만 기록.
+ *   조용히 사라지면 그 진입 사실 자체가 통째로 유실됐음(휴게소 장시간 정차 등). to_id/출구게이트는
+ *   여전히 못 봤으니 지어내지 않고 비워두지만, dist_m/speed_kmh/to_lat·lon 은 2026-08-25부터
+ *   dfClosedAccumDistM/dfClosedLastX·Y(ProcessClosedRoadCharge() 가 매 틱 갱신하는 실시간 누적거리·
+ *   마지막 확인 위치)로 채운다 — 과거엔 이 세션 필드 자체가 없어 전부 비워뒀었음(최정우 수정).
 */
 void CRawLogWorker::AppendExpiredClosedRoadCharge(int nThreadId, const string& strDeviceKey,
 		const VEHICLE_TRIP_SESSION& stSession, time_t dtEndTime, vector<CHARGE_INSERT_ROW> *pvtOut)
@@ -683,19 +848,34 @@ void CRawLogWorker::AppendExpiredClosedRoadCharge(int nThreadId, const string& s
 	snprintf(szFromLon, sizeof(szFromLon), "%.06lf", stSession.dfEntryFromLon);
 	stRow.strFromLat = szFromLat;
 	stRow.strFromLon = szFromLon;
-	stRow.strToLat = "";									// 출구 미확인 — 지어내지 않음(2026-08-20부터 NULL 허용, NULLIF(...,'')로 DB엔 NULL)
-	stRow.strToLon = "";
+	// 출구 미확인이라도 실시간 누적거리·마지막 확인 위치는 이제 세션에 있음(2026-08-25 최정우
+	//   추가 — ProcessClosedRoadCharge() 의 "구역 이탈" 보조판정과 같은 필드 재사용). dfClosedLastX/Y
+	//   초기값이 진입 위치라 세션이 TTL로 지워질 때까지 한 틱도 못 받았어도 0m·진입 위치 그대로 나옴
+	char szToLat[32], szToLon[32];
+	snprintf(szToLat, sizeof(szToLat), "%.06lf", stSession.dfClosedLastY);
+	snprintf(szToLon, sizeof(szToLon), "%.06lf", stSession.dfClosedLastX);
+	stRow.strToLat = szToLat;
+	stRow.strToLon = szToLon;
 
 	stRow.strZoneId = stSession.szClosedRoadId;
 	stRow.strZoneName = (pstZone != nullptr) ? pstZone->szRoadNm : "";
 
-	stRow.strDistM = "";									// 출구 미확인 — 실제 이동거리 불명
-	stRow.strSpeedKmh = "";
-	stRow.strSpeedLimitKmh = "";
+	char szDistM[16];
+	snprintf(szDistM, sizeof(szDistM), "%d", static_cast<int>(stSession.dfClosedAccumDistM + 0.5));
+	stRow.strDistM = szDistM;
+
+	double dfDwellSec = difftime(dtEndTime, stSession.dtEntryTime);
+	if (dfDwellSec > 0.0)
+	{
+		double dfAvgSpeedKmh = (stSession.dfClosedAccumDistM / dfDwellSec) * 3.6;
+		char szSpeedKmh[16];
+		snprintf(szSpeedKmh, sizeof(szSpeedKmh), "%d", static_cast<int>(dfAvgSpeedKmh + 0.5));
+		stRow.strSpeedKmh = szSpeedKmh;
+	}
+	stRow.strSpeedLimitKmh = "";							// 출구 링크를 특정 못 함 — 지어내지 않음
 
 	char szStaySeconds[16];
-	snprintf(szStaySeconds, sizeof(szStaySeconds), "%d",
-		static_cast<int>(difftime(dtEndTime, stSession.dtEntryTime) + 0.5));
+	snprintf(szStaySeconds, sizeof(szStaySeconds), "%d", static_cast<int>(dfDwellSec + 0.5));
 	stRow.strStaySeconds = szStaySeconds;
 
 	stRow.strOccurDt = FormatDateTime14(stSession.dtEntryTime);
@@ -732,10 +912,10 @@ void CRawLogWorker::AppendExpiredClosedRoadCharge(int nThreadId, const string& s
  * @param[in] strDeviceKey 세션 맵 키(=DEVICE_KEY)
  * @param[in] stSession 만료 직전 세션(제거 전 스냅샷)
  * @param[out] pvtOut 세션이 입구 통과 상태였으면 CHARGE_INSERT_ROW 1건 추가
- * @remark 폐쇄형과 동일 이유(실시간 위치 미추적)로 dist_m/speed_kmh/to_lat·lon은 비워둠.
- *   from_id/to_id·from_lat/lon은 실측 관례상 게이트ID가 아니라 구역 road_id·구역 등록 좌표
- *   (ZONE_INFO.dfFirstLat/Lon)라 이 부분은 이미 알고 있음 — to_id는 진입 구역과 동일값을 넣지
- *   않고 비워서 "이탈 미확인" 상태를 명확히 구분.
+ * @remark to_id(출구게이트)는 여전히 못 봤으니 비워두지만, dist_m/speed_kmh/to_lat·lon 은
+ *   2026-08-25부터 dfSpeedAccumDistM/dfSpeedLastX·Y(ProcessSpeedZoneCharge() 가 매 틱 갱신하는
+ *   실시간 누적거리·마지막 확인 위치)로 채운다 — ProcessClosedRoadCharge() 동일 근거.
+ *   from_lat/lon은 실측 관례상 구역 등록 좌표(ZONE_INFO.dfFirstLat/Lon) 그대로 유지.
 */
 void CRawLogWorker::AppendExpiredSpeedZoneCharge(int nThreadId, const string& strDeviceKey,
 		const VEHICLE_TRIP_SESSION& stSession, time_t dtEndTime, vector<CHARGE_INSERT_ROW> *pvtOut)
@@ -775,14 +955,27 @@ void CRawLogWorker::AppendExpiredSpeedZoneCharge(int nThreadId, const string& st
 		stRow.strFromLat = "";
 		stRow.strFromLon = "";
 	}
-	stRow.strToLat = "";									// 출구 미확인 — 지어내지 않음(NULLIF(...,'')로 DB엔 NULL)
-	stRow.strToLon = "";
+	char szToLat[32], szToLon[32];
+	snprintf(szToLat, sizeof(szToLat), "%.06lf", stSession.dfSpeedLastY);
+	snprintf(szToLon, sizeof(szToLon), "%.06lf", stSession.dfSpeedLastX);
+	stRow.strToLat = szToLat;
+	stRow.strToLon = szToLon;
 
 	stRow.strZoneId = stSession.szSpeedZoneRoadId;
 	stRow.strZoneName = (pstZone != nullptr) ? pstZone->szRoadNm : "";
 
-	stRow.strDistM = "";									// 출구 미확인 — 실제 이동거리 불명
-	stRow.strSpeedKmh = "";
+	char szDistM[16];
+	snprintf(szDistM, sizeof(szDistM), "%d", static_cast<int>(stSession.dfSpeedAccumDistM + 0.5));
+	stRow.strDistM = szDistM;
+
+	double dfElapsedSec = difftime(dtEndTime, stSession.dtSpeedEntryTime);
+	if (dfElapsedSec > 0.0)
+	{
+		double dfAvgSpeedKmh = (stSession.dfSpeedAccumDistM / dfElapsedSec) * 3.6;
+		char szSpeedKmh[16];
+		snprintf(szSpeedKmh, sizeof(szSpeedKmh), "%d", static_cast<int>(dfAvgSpeedKmh + 0.5));
+		stRow.strSpeedKmh = szSpeedKmh;
+	}
 	if (pstZone != nullptr)
 	{
 		char szSpeedLimit[8];
@@ -791,8 +984,7 @@ void CRawLogWorker::AppendExpiredSpeedZoneCharge(int nThreadId, const string& st
 	}
 
 	char szStaySeconds[16];
-	snprintf(szStaySeconds, sizeof(szStaySeconds), "%d",
-		static_cast<int>(difftime(dtEndTime, stSession.dtSpeedEntryTime) + 0.5));
+	snprintf(szStaySeconds, sizeof(szStaySeconds), "%d", static_cast<int>(dfElapsedSec + 0.5));
 	stRow.strStaySeconds = szStaySeconds;
 
 	stRow.strOccurDt = FormatDateTime14(stSession.dtSpeedEntryTime);
@@ -1138,25 +1330,54 @@ void CRawLogWorker::ResetTripSessionForBegin(VEHICLE_TRIP_SESSION& stSession, bo
 	if (bFullReset)
 	{
 		stSession.bStartWarned = false;
-		// 실제 신규 trip 시작(START/trip_id 변경)일 때만 게이트 트랙 리셋 — GPS_SEQ 역전 재처리(bFullReset=false)는
-		//   같은 trip 이 계속되는 것이라 리셋하면 안 됨(이미 지난 게이트 재부과 위험) (2026-08-12 최정우 추가)
-		stSession.vtActiveGateIds.clear();
+		// 실제 신규 trip 시작(START/trip_id 변경)일 때만 과금 트랙 리셋 — GPS_SEQ 역전 재처리(bFullReset=false)는
+		//   같은 trip 이 계속되는 것이라 리셋하면 안 됨(이미 지난 게이트·구역 재부과 위험) (2026-08-12 최정우 추가)
 		stSession.nChargeSeq = 1;
+		stSession.dtLastGpsEventTime = 0;						// 신규 trip 은 이전 trip 최댓값을 이어받으면 안 됨 (2026-08-25 최정우 추가)
 
 		// 폐쇄형 진입 상태도 동일하게 신규 trip 시작 시에만 리셋 (2026-08-12 최정우 추가)
 		stSession.bInClosedRoad = false;
 		stSession.szEntryTollgateId[0] = '\0';
 		stSession.szClosedRoadId[0] = '\0';
+		stSession.dfClosedAccumDistM = 0.0;						// (2026-08-25 최정우 추가)
+		stSession.qwClosedLastZoneLinkID = 0;						// (2026-08-25 최정우 추가)
+		stSession.dtClosedLastZoneTime = 0;						// (2026-08-25 최정우 추가)
+		stSession.bClosedEntryAmbiguous = false;					// (2026-08-25 최정우 추가)
 
 		// 구간단속 진입 상태도 동일하게 신규 trip 시작 시에만 리셋 (2026-08-12 최정우 추가)
 		stSession.bInSpeedZone = false;
 		stSession.szSpeedZoneRoadId[0] = '\0';
 		stSession.szSpeedEntryTollgateId[0] = '\0';
+		stSession.dfSpeedAccumDistM = 0.0;						// (2026-08-25 최정우 추가)
+		stSession.qwSpeedLastZoneLinkID = 0;						// (2026-08-25 최정우 추가)
+		stSession.dtSpeedLastZoneTime = 0;						// (2026-08-25 최정우 추가)
+		stSession.bSpeedEntryAmbiguous = false;					// (2026-08-25 최정우 추가)
 
 		// 면제도로·일반도로 진행 세션도 신규 trip 시작 시에만 리셋 (2026-08-23 최정우 수정 — 벡터화)
 		stSession.vtExemptRuns.clear();
 		stSession.vtNodeStepRuns.clear();
+		stSession.vtOpenRuns.clear();							// (2026-08-25 최정우 추가)
 	}
+}
+
+/**
+ * @brief TRIP_EVENT=END 신뢰 여부 판정(스퓨리어스 순서역전 검사) (2026-08-25 최정우 추가)
+ * @remark gps_dt 가 이 세션에서 지금까지 확인된 최대 gps_dt(dtLastGpsEventTime)보다 과거면
+ *   신뢰하지 않는다 — 단말이 보낸 순서역전·중복 도착 이벤트로 추정(실측 근거·오판 시 안전장치는
+ *   [[project_duplicate_trip_end_event_speed_charge]] 참고). ProcessRawLog() 의 "현재 틱" 판정과
+ *   CommitPendingRow() 의 "보류 중이던 옛 틱을 나중에 flush 할 때" 판정에 공용으로 쓴다 — 후자를
+ *   빠뜨리면, 스퓨리어스 END 로 판정돼 보류 상태로 남아있던 행이 나중에 다른 이유로 flush 될 때
+ *   그 안에서 또 nTripEvent==END 를 그대로 믿어버려 원래 막으려던 버그가 재발한다(2026-08-25
+ *   OPEN/EXEMPT/NODE_STEP/PARKING 에 이 판정을 배선하던 중 발견). dtLastGpsEventTime 갱신(상태
+ *   변경)은 이 함수가 아니라 ProcessRawLog() 가 매 틱 1회만 수행 — 이 함수는 순수 판정만 한다.
+*/
+bool CRawLogWorker::IsTrustedTripEnd(const sRawLogInfo& stRawLogInfo, const VEHICLE_TRIP_SESSION& stSession)
+{
+	if (stRawLogInfo.nTripEvent != TRIP_EVENT_END)
+		return false;
+	if ((stSession.dtLastGpsEventTime > 0) && (stRawLogInfo.dtGPS < stSession.dtLastGpsEventTime))
+		return false;
+	return true;
 }
 
 /**
@@ -1324,9 +1545,10 @@ void CRawLogWorker::run(int nThreadId, void *context)
 
 	if (bUpdateOk)
 	{
-		// 개방형 게이트 통과 bulk INSERT — rawgps_update 성공 후에만 시도. 실패 시 map-match
-		//   bulk update 실패와 동일하게 취급(배치 release·세션 미커밋) → 다음 poll 에서 재처리되며
-		//   게이트 진입 마킹(vtActiveGateIds)도 커밋되지 않아 재통과 시 정상 재부과됨 (2026-08-12 최정우 추가)
+		// 과금 bulk INSERT(개방형·폐쇄형·구간단속·주정차·면제도로·일반도로 공용) — rawgps_update
+		//   성공 후에만 시도. 실패 시 map-match bulk update 실패와 동일하게 취급(배치 release·
+		//   세션 미커밋) → 다음 poll 에서 재처리되며 세션의 진행 중 트랙(vtOpenRuns 등)도 커밋되지
+		//   않아 재통과 시 정상 재부과됨 (2026-08-12 최정우 추가)
 		bool bChargeOk = true;
 		if (!vtChargeInserts.empty())
 		{
@@ -1460,6 +1682,11 @@ void CRawLogWorker::CommitPendingRow(int nThreadId, VEHICLE_TRIP_SESSION *pstSes
 
 	const sRawLogInfo stRawLogInfo = pstSession->stPendingRawLogInfo;			// 지역 복사(commit 중 세션 필드 재사용 대비)
 	MATCH_LINK_INFO stMatchLinkInfo = pstSession->stPendingMatchLinkInfo;		// 지역 복사(보정 시 nFinalStatus 만 별도 변수로 바꿈)
+	// 보류 중이던 이 행 자체의 TRIP_EVENT=END 신뢰 여부 — ProcessRawLog() 가 처음 이 행을 봤을 때
+	//   스퓨리어스로 판정해 보류 상태로 남겨뒀을 수 있는데, 여기서 다시 stRawLogInfo.nTripEvent 를
+	//   직접 보면 그 판정이 무시되고 원래 막으려던 버그가 재발한다 — IsTrustedTripEnd() 로 동일하게
+	//   재판정(dtLastGpsEventTime 은 이미 더 이후 틱까지 반영돼 있어 오히려 더 안전) (2026-08-25 최정우 추가)
+	const bool bTrustedTripEnd = IsTrustedTripEnd(stRawLogInfo, *pstSession);
 	sint16 nFinalStatus = pstSession->nPendingFinalStatus;
 	bool bMatched = (nFinalStatus == MATCH_STATUS_MATCHED);
 
@@ -1655,11 +1882,11 @@ void CRawLogWorker::CommitPendingRow(int nThreadId, VEHICLE_TRIP_SESSION *pstSes
 		pstSession->dtLastMatchGps = pstSession->dtPendingPrevMatchGps;
 		pstSession->bHasLastMatch = pstSession->bPendingHadLastMatch;
 
-		ProcessOpenGateCharge(nThreadId, stRawLogInfo, stMatchLinkInfo, pstSession, pvtChargeInserts);
+		ProcessOpenGateCharge(nThreadId, stRawLogInfo, stMatchLinkInfo, pstSession, pvtChargeInserts, bTrustedTripEnd);
 		ProcessClosedRoadCharge(nThreadId, stRawLogInfo, stMatchLinkInfo, pstSession, pvtChargeInserts);
 		ProcessSpeedZoneCharge(nThreadId, stRawLogInfo, stMatchLinkInfo, pstSession, pvtChargeInserts);
-		ProcessExemptZoneCharge(nThreadId, stRawLogInfo, stMatchLinkInfo, pstSession, pvtChargeInserts);
-		ProcessNodeStepCharge(nThreadId, stRawLogInfo, stMatchLinkInfo, pstSession, pvtChargeInserts);
+		ProcessExemptZoneCharge(nThreadId, stRawLogInfo, stMatchLinkInfo, pstSession, pvtChargeInserts, bTrustedTripEnd);
+		ProcessNodeStepCharge(nThreadId, stRawLogInfo, stMatchLinkInfo, pstSession, pvtChargeInserts, bTrustedTripEnd);
 
 		pstSession->dfLastMatchX = dfCurX;
 		pstSession->dfLastMatchY = dfCurY;
@@ -1763,12 +1990,30 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 	strncpy(stSession.szTripId, stRawLogInfo.szTripID, sizeof(stSession.szTripId) - 1);
 	stSession.szTripId[sizeof(stSession.szTripId) - 1] = '\0';
 
+	// TRIP_EVENT=END 스퓨리어스(순서역전) 검사 — 이 END 의 gps_dt 가 이 trip 에서 지금까지 확인된
+	//   최대 gps_dt(dtLastGpsEventTime)보다 과거면 신뢰하지 않는다(단말이 보낸 순서역전·중복 도착
+	//   이벤트로 추정). 실측 000376_20260819140856 seq19(gps_dt 가 직전 seq18보다 과거인 END) —
+	//   이 스퓨리어스 END 가 그대로 처리되면서 열려있던 구간단속 세션이 강제마감→리셋되고, 뒤이은
+	//   정상 주행이 같은 구역 재진입으로 오판돼 AUDIT 행이 중복 적재됐다. 오판(진짜 END를 스퓨리어스로
+	//   착각)해도 세션이 안 지워질 뿐 데이터 유실은 없음 — 결국 TTL 만료로 안전하게 마감된다(사용자
+	//   확정, 2026-08-25). dtLastGpsEventTime==0(신규 trip 첫 행)이면 비교 대상이 없어 항상 신뢰한다.
+	//   (2026-08-25 최정우 추가)
+	bool bTrustedTripEnd = IsTrustedTripEnd(stRawLogInfo, stSession);
+	if (!bTrustedTripEnd && (stRawLogInfo.nTripEvent == TRIP_EVENT_END))
+	{
+		LOGFMTW("[#%02d] spurious END skip!device=[%s] trip_id=[%s] seq=[%u] gps_dt=[%ld] last_gps_dt=[%ld]",
+			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRawLogInfo.dwSeqNo,
+			static_cast<long>(stRawLogInfo.dtGPS), static_cast<long>(stSession.dtLastGpsEventTime));
+	}
+	if (stRawLogInfo.dtGPS > stSession.dtLastGpsEventTime)
+		stSession.dtLastGpsEventTime = stRawLogInfo.dtGPS;
+
 	// 트립종료 직전, 아직 보류(pending) 중인 1틱 지연 행이 있으면 먼저 확정(commit)한다 — 바로
 	//   아래 AppendExpiredClosedRoadCharge/AppendExpiredSpeedZoneCharge 가 세션의 bInClosedRoad/
 	//   bInSpeedZone 을 읽기 "전"에 보류 행의 과금 반영이 먼저 끝나 있어야 정확하다. 이 시점엔
 	//   이번 행(TRIP_EVENT=END) 자신의 매칭 결과를 아직 몰라 보정판단용 "다음" 링크가 없음(보정
 	//   시도 안 함, 보류 행을 계산된 값 그대로 커밋) (2026-08-21 최정우 추가)
-	if (stRawLogInfo.nTripEvent == TRIP_EVENT_END)
+	if (bTrustedTripEnd)
 		CommitPendingRow(nThreadId, &stSession, false, 0, pvtUpdates, pvtChargeInserts);
 
 	// 트립 종료(TRIP_EVENT=2) — 매칭 성공/실패 무관하게 그 trip_id 의 PRIM_CHARGEHAND 전 행에
@@ -1776,8 +2021,8 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 	//   UPD_DT 도 TRIP_END_DT 와 동일하게 GPS 시각(wall-clock 아님) 사용 — 사용자 지시(2026-08-14):
 	//   "구역 이탈"과 "트립 정상종료"가 같은 tick 에 겹치는 경우(예: 일반도로 구간 안에서 트립이
 	//   끝나는 경우) 진출시각과 종료시각이 같은 값이니 UPD_DT 도 그 값으로 맞추는 게 자연스러움 —
-	//   5유형 공용 UPDATE라 전부에 동일 적용됨
-	if (stRawLogInfo.nTripEvent == TRIP_EVENT_END)
+	//   5유형 공용 UPDATE라 전부에 동일 적용됨. bTrustedTripEnd 로 스퓨리어스 END 는 제외(2026-08-25)
+	if (bTrustedTripEnd)
 	{
 		TRIP_END_UPDATE_ROW stEndRow;
 		stEndRow.strTripId = stRawLogInfo.szTripID;
@@ -1832,7 +2077,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 	//   트립종료(TRIP_EVENT=END) 기록·보류행 커밋은 바로 위에서 이미 끝냈다.
 	if (bSeqRollback)
 	{
-		if (stRawLogInfo.nTripEvent == TRIP_EVENT_END)
+		if (bTrustedTripEnd)
 			*pbTripEnded = true;
 		return AppendUpdateRow(pvtUpdates, stRawLogInfo, MATCH_STATUS_SKIP);
 	}
@@ -1842,7 +2087,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 	{
 		stSession.dwLastGpsSeq = stRawLogInfo.dwSeqNo;
 		stSession.bLastPointOk = false;			// (2026-07-21 최정우 추가)
-		if (stRawLogInfo.nTripEvent == TRIP_EVENT_END)
+		if (bTrustedTripEnd)
 			*pbTripEnded = true;
 
 		// 주정차 판정은 RAW_VLD 와 무관하게 원시 GPS 좌표로 수행한다 (2026-08-22 사용자 확정).
@@ -1854,7 +2099,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		//   "폴리곤 안에 있었나"는 그보다 훨씬 큰 공간 판정이라 성격이 다르다.
 		//   GPS_LAT/LON 자체가 NULL 이면 판정 불가라 제외.
 		if (!stRawLogInfo.bGpsLatNull && !stRawLogInfo.bGpsLonNull)
-			ProcessParkingCharge(nThreadId, stRawLogInfo, &stSession, pvtChargeInserts);
+			ProcessParkingCharge(nThreadId, stRawLogInfo, &stSession, pvtChargeInserts, bTrustedTripEnd);
 		// 보정판단용 "다음" 링크 없음(이 행은 raw_vld=false라 신뢰 못함) — 보류 행 계산된 값 그대로 커밋 (2026-08-21 최정우 추가)
 		CommitPendingRow(nThreadId, &stSession, false, 0, pvtUpdates, pvtChargeInserts);
 		return AppendUpdateRow(pvtUpdates, stRawLogInfo, MATCH_STATUS_SKIP);
@@ -1876,7 +2121,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 			static_cast<int>(stRawLogInfo.nAccuracyM), m_stConfig.nRadiusSkip);
 		stSession.dwLastGpsSeq = stRawLogInfo.dwSeqNo;
 		stSession.bLastPointOk = false;			// (2026-07-21 최정우 추가)
-		if (stRawLogInfo.nTripEvent == TRIP_EVENT_END)
+		if (bTrustedTripEnd)
 			*pbTripEnded = true;
 
 		// 정확도 SKIP — 최근접 있으면 참고용 MATCH_LAT/LON·INTERSECT_LEN(GPS↔세그먼트 교차점 거리) 저장
@@ -1901,7 +2146,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 	{
 		stSession.dwLastGpsSeq = stRawLogInfo.dwSeqNo;
 		stSession.bLastPointOk = false;			// (2026-07-21 최정우 추가)
-		if (stRawLogInfo.nTripEvent == TRIP_EVENT_END)
+		if (bTrustedTripEnd)
 			*pbTripEnded = true;
 
 		// 정합성 SKIP — 최근접 있으면 참고용 MATCH_LAT/LON·INTERSECT_LEN(GPS↔세그먼트 교차점 거리) 저장
@@ -2057,7 +2302,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 	//   넘겨 원시 좌표만으로 규칙1 판정한다 (2026-08-22 최정우 수정, 원래는 맵매칭 전 호출)
 	{
 		const bool bParkMatchOk = (bMatched && !bUntrustedMatch);
-		ProcessParkingCharge(nThreadId, stRawLogInfo, &stSession, pvtChargeInserts,
+		ProcessParkingCharge(nThreadId, stRawLogInfo, &stSession, pvtChargeInserts, bTrustedTripEnd,
 			bParkMatchOk, bParkMatchOk ? stMatchLinkInfo.dfMatchX : 0.0,
 			bParkMatchOk ? stMatchLinkInfo.dfMatchY : 0.0);
 	}
@@ -2113,7 +2358,8 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		stSession.bPendingHadLastMatch = bPrevHasMatch;
 
 		// 트립 종료(TRIP_EVENT=2) — 더 이상 "다음" GPS 가 안 올 수 있으므로 보정판단 없이 즉시 확정 (2026-08-21 최정우 추가)
-		if (stRawLogInfo.nTripEvent == TRIP_EVENT_END)
+		//   bTrustedTripEnd 로 스퓨리어스 END 는 제외(2026-08-25)
+		if (bTrustedTripEnd)
 		{
 			CommitPendingRow(nThreadId, &stSession, false, 0, pvtUpdates, pvtChargeInserts);
 			*pbTripEnded = true;
@@ -2142,7 +2388,8 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		return false;
 
 	// END 이벤트면 MATCHED/ERROR/SKIP 무관 세션 종료 (bulk 성공 후 mapSessions.erase)
-	if (stRawLogInfo.nTripEvent == TRIP_EVENT_END)
+	//   bTrustedTripEnd 로 스퓨리어스 END 는 제외(2026-08-25)
+	if (bTrustedTripEnd)
 		*pbTripEnded = true;
 
 	return true;
@@ -2361,193 +2608,298 @@ const char* CRawLogWorker::ExtractTripStartDt(const char *szTripId)
 }
 
 /**
- * @brief 개방형(OPEN_ROAD) 게이트 통과 판정 — 엣지 감지(진입 시 1건 적재) (2026-08-12 최정우 추가)
+ * @brief 개방형 구역의 M게이트를 이 진행(run) 동안 실제로 지났는지 갱신(래치 — 한 번 true 면
+ *   재확인 안 함) (2026-08-25 최정우 추가)
+ * @remark 단순히 "지금 위치가 게이트 지점 이후인가"만 보면 안 된다 — case C(트립이 이미 게이트를
+ *   지난 뒤 시작)는 시작하자마자 그 조건을 항상 만족해버려서 첫 틱부터 "통과함"으로 오판된다
+ *   (실측 000376/900202 합성테스트로 발견, 2026-08-25). 그래서 "이 run 안에서 게이트 이전
+ *   상태를 실제로 거쳐왔는가"(bSeenBeforeGate)를 먼저 확인하고, 그 상태에서 게이트 위치에
+ *   도달했을 때만 "진짜 통과"로 확정한다. 판정 순서:
+ *   (1) 경유 링크(aqwPathLinkIDs)에 게이트 링크가 있으면 이미 완전히 지나온 것으로 확정
+ *       (그 경유 링크에 도달했다는 것 자체가 그 이전엔 게이트 이전 위치였다는 뜻이라 안전)
+ *   (2) 이번 확정 링크가 게이트 링크가 아닌 이 구역의 다른 링크면 — 개방형 구역은 단방향
+ *       코리도라는 전제로 "게이트 이전" 상태로 기록만 해둔다(RL-Z00004 등 실측 구조상 게이트
+ *       앞뒤로 링크가 나뉘어 있음)
+ *   (3) 이번 확정 링크가 게이트 자신의 링크면 "링크 시작점부터 게이트까지 거리" vs "링크
+ *       시작점부터 현재 매칭 위치까지 거리"를 비교(-3m 오차 허용) — 아직 못 미쳤으면 "게이트
+ *       이전" 기록만, 이미 도달/통과했으면 bSeenBeforeGate 가 true 일 때만 "진짜 통과"로 확정
+ *   HaversineMeters() 가 private static 이라 CollectGateCandidates() 처럼 파일지역 static 함수로
+ *   못 두고 멤버 함수로 둠
+*/
+void CRawLogWorker::UpdateOpenGateCrossed(const MATCH_LINK_INFO& stMatchLinkInfo, ZONE_RUN_SESSION *pstRun)
+{
+	if (pstRun->bGateCrossed) return;
+	if (m_stConfig.pcChargeDataLoader == nullptr) return;
+
+	PGATE_INFO pstGate = m_stConfig.pcChargeDataLoader->GetGateByRoadId(pstRun->szRoadID, 'M');
+	if (pstGate == nullptr) return;			// 이 구역엔 등록된 M게이트가 없음(방어적)
+
+	// aqwPathLinkIDs 의 마지막 원소는 이번 확정 링크(stMatchLinkInfo.qwLinkID)와 항상 같다
+	//   (CollectGateCandidatesOnIntermediateLinks() 주석 참고) — 그래서 "이미 완전히 지나온
+	//   경유 링크"만 보려면 마지막 하나는 반드시 제외해야 한다. 안 그러면 이번 확정 링크가
+	//   게이트 링크 자신인 매 틱마다 이 루프가 자기 자신과 매치돼 무조건 true 가 되어 버려서,
+	//   case C(이미 게이트 지난 뒤 출발) 의 두 번째 틱부터 곧바로 "통과함"으로 오판된다(실측
+	//   000376/900202 합성테스트로 발견, 2026-08-25)
+	for (uint8 i = 0; (i + 1) < stMatchLinkInfo.nPathLinkCount; ++i)
+	{
+		if (stMatchLinkInfo.aqwPathLinkIDs[i] == pstGate->qwLinkID)
+		{ pstRun->bGateCrossed = true; return; }
+	}
+
+	if (stMatchLinkInfo.qwLinkID != pstGate->qwLinkID)
+	{
+		pstRun->bSeenBeforeGate = true;			// 게이트 아닌 구역 내 다른(=상류) 링크 위
+		return;
+	}
+
+	POINT stLinkStart, stGatePos;
+	stLinkStart.dfX = stMatchLinkInfo.dfStNodeX;
+	stLinkStart.dfY = stMatchLinkInfo.dfStNodeY;
+	stGatePos.dfX = pstGate->dfLon;
+	stGatePos.dfY = pstGate->dfLat;
+	double dfGatePosOnLink = HaversineMeters(stLinkStart, stGatePos);
+	double dfCurPosOnLink = static_cast<double>(stMatchLinkInfo.wLenFromLink) + stMatchLinkInfo.dfSgmtMatchLen;
+
+	if (dfCurPosOnLink < (dfGatePosOnLink - 3.0))
+	{
+		pstRun->bSeenBeforeGate = true;			// 아직 게이트 전 — 나중에 지나면 확정할 근거
+		return;
+	}
+
+	if (pstRun->bSeenBeforeGate)
+		pstRun->bGateCrossed = true;				// 게이트 전이었다가 지금 지남 확인 — 진짜 통과
+	// bSeenBeforeGate 가 false 면(=이 run 안에서 게이트 전 상태를 본 적이 없음) 지금 위치가
+	//   게이트 지난 곳이어도 확정 안 함 — 트립이 이미 게이트를 지난 뒤 시작했을 가능성(case C)
+}
+
+/**
+ * @brief 개방형(ROAD_KIND=1) 구역 진입/이탈 판정 (2026-08-25 최정우 재작성)
  * @param[in] nThreadId 워커 스레드 ID (로그용)
  * @param[in] stRawLogInfo 원시 GPS
  * @param[in] stMatchLinkInfo 신뢰 가능한 맵매칭 결과(호출측이 bMatched && !bUntrustedMatch 확인 후 호출)
- * @param[in,out] pstSession 배치 임시 세션 — vtActiveGateIds/nChargeSeq 갱신
- * @param[out] pvtChargeInserts 신규 진입 시 게이트별 1행씩 적재 (bulk INSERT 는 run() 이 배치 종료 시 일괄 실행)
+ * @param[in,out] pstSession 배치 임시 세션 — vtOpenRuns/nChargeSeq 갱신
+ * @param[out] pvtChargeInserts 정상 이탈·트립종료 시 1행씩 적재 (일반도로 NODE_STEP과 동일 구조)
  * @return void
- * @remark
- *   - 같은 link_id 에 개방형(M) 게이트가 2개 이상 있을 수 있어 GetGatesByLinkId 로 전부 조회,
- *     게이트마다 독립적으로 진입/유지 판정(2026-08-13 최정우 수정 — 원래 GetGateByLinkId 단일
- *     조회는 첫 게이트만 처리하고 나머지는 조용히 부과 누락되는 한계가 있었음)
- *   - vtActiveGateIds 에 없는 게이트면 "신규 진입" → 적재 + 목록에 추가
- *   - vtActiveGateIds 에 이미 있으면 같은 통과 구간 연속 매칭 중 → 스킵(중복 방지)
- *   - 이번 매칭에 안 잡히는(=이 링크에서 벗어난) 기존 활성 게이트는 목록에서 제거 — 나중에
- *     같은 게이트로 재진입해도 정상 재부과되게 함
+ * @remark 원래는 게이트 통과 순간의 점 이벤트였으나, 주행거리(dist_m)·주행시간(stay_seconds)을
+ *   함께 적재하기 위해 일반도로와 동일한 "구역 진입~이탈" 구조로 전환(사용자 지시). 게이트는
+ *   여전히 있고 UpdateOpenGateCrossed()가 이 진행(run) 동안 실제로 지났는지를 매 틱 갱신 —
+ *   BuildOpenZoneRow()가 이 값과 bStartedByTrip 으로 dist_m 산출 방식·charge_yn/status 를 정한다.
+ *   트립종료(TRIP_EVENT=2)는 일반도로와 동일하게 디바운스 없이 즉시 마감(다음 GPS가 안 올 수 있음)
 */
 void CRawLogWorker::ProcessOpenGateCharge(int nThreadId, const sRawLogInfo& stRawLogInfo,
 		const MATCH_LINK_INFO& stMatchLinkInfo, VEHICLE_TRIP_SESSION *pstSession,
-		vector<CHARGE_INSERT_ROW> *pvtChargeInserts)
+		vector<CHARGE_INSERT_ROW> *pvtChargeInserts, bool bTrustedTripEnd)
 {
 	if ((m_stConfig.pcChargeDataLoader == nullptr) || m_stConfig.strChargeInsertSQL.empty())
 		return;
 
-	// gate_div='M'(본선/개방형) 명시 — 폐쇄형 입/출구 게이트(I/O)가 같은 link_id 를 공유하는
-	//   사례가 있어(TG00007/08) div 필터 없이 조회하면 폐쇄형 게이트 통과가 개방형으로도 잘못
-	//   처리됨(2026-08-12 최정우 발견·수정) — 실측 테스트 중 로그로 확인된 버그
-	// 이번 확정 링크 하나만이 아니라 직전 확정 링크부터 경유한 전체 경로(aqwPathLinkIDs)를 순회해
-	//   게이트 후보 병합 — GPS 수신 주기가 늘어나(1초→3초) 두 GPS 포인트 사이 이동거리가 커지면
-	//   짧은 게이트 링크가 통째로 건너뛰어져 어느 쪽 매칭 결과에도 안 잡히는 경우를 보완
-	//   (2026-08-20 최정우 추가). nPathLinkCount==0(경로 정보 없음)이면 최종 링크 1개만 쓰는
-	//   기존 동작으로 자연 축소됨
-	vector<PGATE_INFO> vtGates;
+	// 경유 링크 포함 전체 경로에서 개방형 구역을 "전부" 수집(NODE_STEP과 동일 패턴, 2026-08-25 최정우 추가)
+	vector<PZONE_INFO> vtZones;
 	{
+		vector<PZONE_INFO> vtOne;
 		uint8 nPathCount = stMatchLinkInfo.nPathLinkCount;
 		if (nPathCount == 0)
-		{
-			m_stConfig.pcChargeDataLoader->GetGatesByLinkId(stMatchLinkInfo.qwLinkID, 'M', &vtGates);
-		}
+			m_stConfig.pcChargeDataLoader->GetOpenZonesByLinkId(stMatchLinkInfo.qwLinkID, &vtOne);
 		else
 		{
 			for (uint8 i = 0; i < nPathCount; ++i)
+				m_stConfig.pcChargeDataLoader->GetOpenZonesByLinkId(
+					stMatchLinkInfo.aqwPathLinkIDs[i], &vtOne);
+		}
+		for (size_t i = 0; i < vtOne.size(); ++i)			// road_id 기준 중복 제거
+		{
+			bool bDup = false;
+			for (size_t e = 0; e < vtZones.size(); ++e)
 			{
-				vector<PGATE_INFO> vtOne;
-				m_stConfig.pcChargeDataLoader->GetGatesByLinkId(stMatchLinkInfo.aqwPathLinkIDs[i], 'M', &vtOne);
-				for (size_t g = 0; g < vtOne.size(); ++g)
+				if (strcmp(vtZones[e]->szRoadID, vtOne[i]->szRoadID) == 0) { bDup = true; break; }
+			}
+			if (!bDup) vtZones.push_back(vtOne[i]);
+		}
+	}
+
+	const bool bTripEnding = bTrustedTripEnd;
+
+	// ── ① 진행 중인 구역 세션 갱신·마감 ───────────────────────────────────────
+	for (size_t si = 0; si < pstSession->vtOpenRuns.size(); )
+	{
+		ZONE_RUN_SESSION& stRun = pstSession->vtOpenRuns[si];
+
+		UpdateOpenGateCrossed(stMatchLinkInfo, &stRun);
+
+		bool bSameZone = false;
+		for (size_t e = 0; e < vtZones.size(); ++e)
+		{
+			if (strcmp(stRun.szRoadID, vtZones[e]->szRoadID) == 0) { bSameZone = true; break; }
+		}
+
+		// 누적 이동거리 — bStartedByTrip(부분거리) run 에만 의미 있지만, 정상진입 run 도 계산 자체는
+		//   해둔다(사용 안 하고 버릴 뿐, 분기 단순화)
+		if (bSameZone)
+		{
+			stRun.nExitTicks = 0;
+			POINT stPrev, stCur;
+			stPrev.dfX = stRun.dfLastX;  stPrev.dfY = stRun.dfLastY;
+			stCur.dfX = stMatchLinkInfo.dfMatchX;  stCur.dfY = stMatchLinkInfo.dfMatchY;
+			stRun.dfAccumDistM += HaversineMeters(stPrev, stCur);
+			stRun.dfLastX = stMatchLinkInfo.dfMatchX;
+			stRun.dfLastY = stMatchLinkInfo.dfMatchY;
+			stRun.qwLastLinkID = stMatchLinkInfo.qwLinkID;
+			stRun.dtLastInZoneTime = stRawLogInfo.dtGPS;
+		}
+		else if (stRun.nExitTicks == 0)
+		{
+			// 이탈 디바운스 스트릭의 첫 "밖" tick — ProcessNodeStepCharge() 동일 근거(dfFirstOutX/Y
+			//   필드 주석 참고, 2026-08-25 최정우 추가)
+			stRun.dfFirstOutX = stMatchLinkInfo.dfMatchX;
+			stRun.dfFirstOutY = stMatchLinkInfo.dfMatchY;
+			stRun.dtFirstOut = stRawLogInfo.dtGPS;
+		}
+
+		if (bSameZone && !bTripEnding) { ++si; continue; }		// 계속 진행 중
+
+		// node_exitcnt 재사용 — 순간 오매칭 1틱으로 세션이 쪼개지는 것 방지(NODE_STEP과 동일 원리).
+		//   트립종료는 디바운스 없이 즉시 마감(다음 틱이 안 옴)
+		if (!bTripEnding)
+		{
+			stRun.nExitTicks += 1;
+			if (stRun.nExitTicks < m_stConfig.nNodeExitCnt) { ++si; continue; }
+		}
+
+		// 이탈 지점 보정 — 구역 안에서 마지막으로 달린 링크의 종료 노드까지 거리를 채운다(NODE_STEP과
+		//   동일 원리). 거리 보정 자체는 bStartedByTrip(부분거리) run 에만 의미 있음 — 정상진입 run 은
+		//   dist_m 이 구역 전체길이 고정값이라 무관. 단 "시각" 보간(dtOpenExitTime)은 두 run 유형
+		//   모두에 적용한다 — 정상진입 run 도 stay_seconds/speed_kmh 는 dtEnd 기준으로 계산되므로
+		//   똑같이 부정확할 수 있음(사용자 지시, 2026-08-25 최정우 추가 — CLOSED/SPEED 의
+		//   InterpolateGateCrossingTime() 동일 로직을 "구역 경계 노드"를 목표점 삼아 재사용)
+		time_t dtOpenExitTime = (stRun.dtLastInZoneTime != 0) ? stRun.dtLastInZoneTime : stRawLogInfo.dtGPS;
+		if (!bSameZone && (stRun.qwLastLinkID != 0) && (m_stConfig.pcDataLoader != nullptr))
+		{
+			PLINK_INFO pstLastLink = m_stConfig.pcDataLoader->GetLinkInfo(stRun.qwLastLinkID);
+			if (pstLastLink != nullptr)
+			{
+				POINT stFrom, stNode;
+				stFrom.dfX = stRun.dfLastX;  stFrom.dfY = stRun.dfLastY;
+				stNode.dfX = static_cast<double>(pstLastLink->dwEdNodeX) / 360000.0;
+				stNode.dfY = static_cast<double>(pstLastLink->dwEdNodeY) / 360000.0;
+
+				if (stRun.bStartedByTrip)
 				{
-					bool bDup = false;
-					for (size_t e = 0; e < vtGates.size(); ++e)
+					double dfTail = HaversineMeters(stFrom, stNode);
+					if ((dfTail > 0.0) && (dfTail <= pstLastLink->dfLen + 1.0))
 					{
-						if (strcmp(vtGates[e]->szTollgateID, vtOne[g]->szTollgateID) == 0) { bDup = true; break; }
+						stRun.dfAccumDistM += dfTail;
+						stRun.dfLastX = stNode.dfX;
+						stRun.dfLastY = stNode.dfY;
 					}
-					if (!bDup)
-						vtGates.push_back(vtOne[g]);
+				}
+
+				// "밖" 기준점은 세션 범용 직전tick이 아니라 dfFirstOutX/Y 를 써야 한다 —
+				//   ProcessNodeStepCharge() 동일 근거(node_exitcnt 디바운스 구간 오염 방지,
+				//   2026-08-25 최정우 추가)
+				if (stRun.dtFirstOut != 0)
+				{
+					dtOpenExitTime = InterpolateGateCrossingTime(
+						stFrom.dfX, stFrom.dfY, stRun.dtLastInZoneTime,
+						stRun.dfFirstOutX, stRun.dfFirstOutY, stRun.dtFirstOut,
+						stNode.dfX, stNode.dfY);
 				}
 			}
 		}
-	}
 
-	// 이번 매칭 링크의 게이트 목록에 더 이상 없는 기존 활성 게이트는 제거(엣지 감지) — 링크가
-	//   바뀌었거나 게이트 링크를 완전히 벗어난 경우 (2026-08-13 최정우 수정)
-	for (size_t i = 0; i < pstSession->vtActiveGateIds.size(); )
-	{
-		bool bStillOnLink = false;
-		for (size_t g = 0; g < vtGates.size(); ++g)
-		{
-			if (pstSession->vtActiveGateIds[i] == vtGates[g]->szTollgateID) { bStillOnLink = true; break; }
-		}
-		if (!bStillOnLink)
-			pstSession->vtActiveGateIds.erase(pstSession->vtActiveGateIds.begin() + i);
-		else
-			++i;
-	}
-
-	if (vtGates.empty())
-		return;										// 게이트 링크 아님(또는 M 이 아닌 다른 div)
-
-	for (size_t nGateIdx = 0; nGateIdx < vtGates.size(); ++nGateIdx)
-	{
-		PGATE_INFO pstGate = vtGates[nGateIdx];
-
-		bool bAlreadyActive = false;
-		for (size_t i = 0; i < pstSession->vtActiveGateIds.size(); ++i)
-		{
-			if (pstSession->vtActiveGateIds[i] == pstGate->szTollgateID) { bAlreadyActive = true; break; }
-		}
-		if (bAlreadyActive)
-			continue;									// 같은 게이트 연속 매칭 중 — 중복 부과 방지
-
-		// 신규 진입 — PRIM_CHARGEHAND 1행 적재 (2026-08-12 최정우 추가)
 		CHARGE_INSERT_ROW stRow;
-		stRow.strTripId = stRawLogInfo.szTripID;
-		stRow.strDeviceKey = stRawLogInfo.szDeviceKey;
-
-		char szSeq[16];
-		snprintf(szSeq, sizeof(szSeq), "%d", pstSession->nChargeSeq);
-		stRow.strChargeSeq = szSeq;
-
-		// charge_unit/link_id/from_id/to_id/tollgate_id — 실측(59.11.91.162 운영 DB, charge_type=1
-		//   기존 23건 전수) 컨벤션 그대로 반영 (2026-08-12 최정우 수정): charge_unit=0(NODE),
-		//   from_id=to_id=게이트ID(TG00009 등), tollgate_id 비움.
-		//   from_lat/lon·to_lat/lon 은 실측과 이미 일치(매칭 링크 시작·종료 노드 좌표) — 그대로 유지.
-		//   link_id 는 실측(23건)은 비어있었지만, 이미 확보된 값(게이트 자체의 link_id — GetGateByLinkId
-		//   조회 키와 동일값이라 매칭 결과 link_id 와 항상 같음)이라 참고용으로 채워 넣기로 결정 (2026-08-12 최정우 수정)
-		stRow.strChargeType = "1";							// OPEN_ROAD
-		stRow.strChargeUnit = "0";							// NODE (실측 확인)
-
-		char szLinkId[24];
-		snprintf(szLinkId, sizeof(szLinkId), "%llu", static_cast<unsigned long long>(pstGate->qwLinkID));
-		stRow.strLinkId = szLinkId;
-
-		stRow.strFromId = pstGate->szTollgateID;
-		stRow.strToId = pstGate->szTollgateID;
-
-		char szFromLat[32], szFromLon[32], szToLat[32], szToLon[32];
-		snprintf(szFromLat, sizeof(szFromLat), "%.06lf", stMatchLinkInfo.dfStNodeY);
-		snprintf(szFromLon, sizeof(szFromLon), "%.06lf", stMatchLinkInfo.dfStNodeX);
-		snprintf(szToLat, sizeof(szToLat), "%.06lf", stMatchLinkInfo.dfEdNodeY);
-		snprintf(szToLon, sizeof(szToLon), "%.06lf", stMatchLinkInfo.dfEdNodeX);
-		stRow.strFromLat = szFromLat;
-		stRow.strFromLon = szFromLon;
-		stRow.strToLat = szToLat;
-		stRow.strToLon = szToLon;
-
-		// 구역명 — base_roadlink 캐시(road_id 키) 조회. 못 찾아도 과금 자체는 진행(zone_name 참고용 컬럼) (2026-08-12 최정우 추가)
-		stRow.strZoneId = pstGate->szRoadID;
-		PZONE_INFO pstZone = m_stConfig.pcChargeDataLoader->GetZoneByRoadId(pstGate->szRoadID);
-		stRow.strZoneName = (pstZone != nullptr) ? pstZone->szRoadNm : "";
-
-		// 순간속도 — 직전 매칭 위치·시각(세션 앵커, 호출측이 갱신 전에 넘겨줌)과 이번 장비 위치·시각
-		//   사이 거리/시간으로 계산. 직전 매칭이 없거나(트립 시작 첫 포인트) 시간차 0 이하면 계산 불가 →
-		//   빈 값(DB 기본값 0) 유지 (2026-08-12 최정우 추가)
-		if (pstSession->bHasLastMatch && !stRawLogInfo.bGpsLatNull && !stRawLogInfo.bGpsLonNull)
-		{
-			double dfGapSec = difftime(stRawLogInfo.dtGPS, pstSession->dtLastMatchGps);
-			if (dfGapSec > 0.0)
-			{
-				POINT stPrev, stCur;
-				stPrev.dfX = pstSession->dfLastMatchX;
-				stPrev.dfY = pstSession->dfLastMatchY;
-				stCur.dfX = stRawLogInfo.dfX;
-				stCur.dfY = stRawLogInfo.dfY;
-				double dfMoveM = HaversineMeters(stPrev, stCur);
-				double dfSpeedKmh = (dfMoveM / dfGapSec) * 3.6;
-
-				char szSpeedKmh[16];
-				snprintf(szSpeedKmh, sizeof(szSpeedKmh), "%d", static_cast<int>(dfSpeedKmh + 0.5));
-				stRow.strSpeedKmh = szSpeedKmh;
-			}
-		}
-
-		// 제한속도 — 매칭 링크 기준 (2026-08-12 최정우 추가)
-		char szSpeedLimit[8];
-		snprintf(szSpeedLimit, sizeof(szSpeedLimit), "%d", static_cast<int>(stMatchLinkInfo.nMaxSpeed));
-		stRow.strSpeedLimitKmh = szSpeedLimit;
-
-		stRow.strOccurDt = FormatDateTime14(stRawLogInfo.dtGPS);
-
-		// trip_start_dt — TRIP_ID({6자리 숫자}_{YYYYMMDDHH24MISS})에서 시각 부분 추출.
-		//   형식이 어긋나면(방어적) occur_dt 로 대체 — trip_start_dt 는 NOT NULL 컬럼이라 빈 값
-		//   불가 (2026-08-12 최정우 추가, 2026-08-19 최정우 수정 — ExtractTripStartDt() 로 교체,
-		//   자세한 사유는 그 함수 주석 참고)
-		const char *pszTripStartDt = ExtractTripStartDt(stRawLogInfo.szTripID);
-		if (pszTripStartDt != nullptr)
-			stRow.strTripStartDt = pszTripStartDt;
-		else
-			stRow.strTripStartDt = stRow.strOccurDt;
-
-		// tollgate_id — 개방형은 게이트 통과 자체가 곧 과금 이벤트라 진입~진출 2단계 구조(폐쇄형·
-		//   구간단속처럼 진입 시점엔 모르고 진출 때 채우는 방식)가 필요 없이, 이 INSERT 시점에 이미
-		//   게이트 ID를 알고 있음 — 그래서 UPDATE 없이 여기서 바로 채움(2026-08-20 최정우 수정,
-		//   사용자 지시. 기존엔 from_id/to_id 에 게이트ID가 이미 들어간다는 이유로 비워뒀었음
-		//   (2026-08-12) — tollgate_id 컬럼 자체로도 조회할 수 있게 하기 위해 채우는 걸로 변경)
-		stRow.strTollgateId = pstGate->szTollgateID;
-
-		// reg_dt/upd_dt — 등록 시각(현재)으로 동일하게 채움. DB DEFAULT(now()) 에 맡기지 않고 명시
-		//   지정 — 두 컬럼이 항상 같은 값이어야 한다는 요건을 SQL/트랜잭션 타이밍에 의존하지 않고 보장 (2026-08-12 최정우 추가)
-		stRow.strRegDt = FormatDateTime14(time(nullptr));
-		stRow.strUpdDt = stRow.strRegDt;
-
+		BuildOpenZoneRow(stRun, stRawLogInfo.szTripID, stRawLogInfo.szDeviceKey,
+			pstSession->nChargeSeq, dtOpenExitTime, &stRow);
 		pvtChargeInserts->push_back(stRow);
 
-		LOGFMTI("[#%02d] open gate charge queued!device=[%s] trip_id=[%s] seq=[%d] gate=[%s] link=[%llu]",
+		LOGFMTI("[#%02d] open zone exit recorded!device=[%s] trip_id=[%s] seq=[%d] road=[%s] "
+			"started_by_trip=[%d] gate_crossed=[%d] dist_m=[%s] avg_speed=[%s] trip_ending=[%d]",
 			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstSession->nChargeSeq,
-			pstGate->szTollgateID, static_cast<unsigned long long>(stMatchLinkInfo.qwLinkID));
+			stRun.szRoadID, static_cast<int>(stRun.bStartedByTrip), static_cast<int>(stRun.bGateCrossed),
+			stRow.strDistM.c_str(), stRow.strSpeedKmh.c_str(), static_cast<int>(bTripEnding));
 
-		pstSession->vtActiveGateIds.push_back(pstGate->szTollgateID);
 		pstSession->nChargeSeq += 1;
+		pstSession->vtOpenRuns.erase(pstSession->vtOpenRuns.begin() + si);
+	}
+
+	// ── ② 새로 진입한 구역 세션 개시 ─────────────────────────────────────────
+	if (bTripEnding)
+		return;											// 종료 틱에서는 새로 열지 않는다
+
+	// 트립 자체가 이 구역 도로 위에서 시작했는지 — TRIP_EVENT=START 행의 매칭 링크가 이미 구역
+	//   안이면 게이트를 지나온 적 없는 상태로 진행이 시작된 것(사용자 지시, 2026-08-25 추가)
+	const bool bTripStarting = (stRawLogInfo.nTripEvent == TRIP_EVENT_START);
+
+	for (size_t e = 0; e < vtZones.size(); ++e)
+	{
+		bool bOpen = false;
+		for (size_t si = 0; si < pstSession->vtOpenRuns.size(); ++si)
+		{
+			if (strcmp(pstSession->vtOpenRuns[si].szRoadID, vtZones[e]->szRoadID) == 0)
+			{ bOpen = true; break; }
+		}
+		if (bOpen) continue;
+
+		ZONE_RUN_SESSION stRun;
+		strncpy(stRun.szRoadID, vtZones[e]->szRoadID, sizeof(stRun.szRoadID) - 1);
+		stRun.szRoadID[sizeof(stRun.szRoadID) - 1] = '\0';
+		// 진입 경계(구역에 들어온 링크의 시작 노드) 통과 시각 보간 — 위 dtOpenExitTime 동일 근거
+		//   참고. 트립시작(bTripStarting) run 은 겨냥할 "직전(구역 밖) tick" 자체가 없어 대상 아님
+		//   (2026-08-25 최정우 추가, 사용자 지시)
+		if (!bTripStarting && pstSession->bHasLastMatch)
+		{
+			stRun.dtEntryTime = InterpolateGateCrossingTime(
+				pstSession->dfLastMatchX, pstSession->dfLastMatchY, pstSession->dtLastMatchGps,
+				stMatchLinkInfo.dfMatchX, stMatchLinkInfo.dfMatchY, stRawLogInfo.dtGPS,
+				stMatchLinkInfo.dfStNodeX, stMatchLinkInfo.dfStNodeY);
+		}
+		else
+		{
+			stRun.dtEntryTime = stRawLogInfo.dtGPS;
+		}
+		stRun.dfEntryX = stMatchLinkInfo.dfMatchX;
+		stRun.dfEntryY = stMatchLinkInfo.dfMatchY;
+		stRun.dfAccumDistM = 0.0;
+		stRun.dfLastX = stMatchLinkInfo.dfMatchX;
+		stRun.dfLastY = stMatchLinkInfo.dfMatchY;
+		stRun.qwLastLinkID = stMatchLinkInfo.qwLinkID;
+		stRun.dtLastInZoneTime = stRawLogInfo.dtGPS;
+		stRun.bStartedByTrip = bTripStarting;
+
+		if (bTripStarting)
+		{
+			// 트립시작 run 은 "이미 지나온 뒤 시작"(case C)과 "지금 막 그 지점에서 시작"(case B)을
+			//   구분해야 한다 — 이전 틱이 없어 UpdateOpenGateCrossed()의 "reached-or-passed"(한쪽
+			//   방향) 판정을 그대로 쓰면 게이트보다 훨씬 뒤에서 시작해도 무조건 "지났다"로 오판된다.
+			//   대칭 허용오차(±3m)로 "지금 막 그 지점"만 인정 — 그보다 뚜렷이 앞서면(이미 지남)
+			//   미인정, 뚜렷이 뒤면(아직 못 지남) 당연히 미인정(사용자 지시, 2026-08-25 추가)
+			PGATE_INFO pstGate = m_stConfig.pcChargeDataLoader->GetGateByRoadId(stRun.szRoadID, 'M');
+			if ((pstGate != nullptr) && (pstGate->qwLinkID == stMatchLinkInfo.qwLinkID))
+			{
+				POINT stLinkStart, stGatePos;
+				stLinkStart.dfX = stMatchLinkInfo.dfStNodeX;
+				stLinkStart.dfY = stMatchLinkInfo.dfStNodeY;
+				stGatePos.dfX = pstGate->dfLon;
+				stGatePos.dfY = pstGate->dfLat;
+				double dfGatePosOnLink = HaversineMeters(stLinkStart, stGatePos);
+				double dfCurPosOnLink = static_cast<double>(stMatchLinkInfo.wLenFromLink) + stMatchLinkInfo.dfSgmtMatchLen;
+				if (fabs(dfCurPosOnLink - dfGatePosOnLink) <= 3.0)
+					stRun.bGateCrossed = true;
+			}
+			// 게이트가 다른 링크면(=이 링크엔 아예 없음) 이 시작 틱만으론 판단 불가 — false 유지,
+			//   뒤이은 틱에서 UpdateOpenGateCrossed()가 정상 갱신(그 시점부턴 "이 run 안에서 계속
+			//   있었다"는 전제가 성립하므로 한쪽 방향 판정이 맞다)
+		}
+		else
+		{
+			// 정상진입(case A) run — 직전 틱까지 구역 밖에 있었다는 게 보장되므로 한쪽 방향
+			//   판정(경유 링크 포함)을 그대로 써도 안전
+			UpdateOpenGateCrossed(stMatchLinkInfo, &stRun);
+		}
+		pstSession->vtOpenRuns.push_back(stRun);
+
+		LOGFMTI("[#%02d] open zone entry!device=[%s] trip_id=[%s] road=[%s] started_by_trip=[%d] open=[%zu]",
+			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRun.szRoadID,
+			static_cast<int>(bTripStarting), pstSession->vtOpenRuns.size());
 	}
 }
 
@@ -2597,6 +2949,31 @@ static void CollectGateCandidatesOnIntermediateLinks(CChargeDataLoader *pcLoader
 }
 
 /**
+ * @brief 이번 확정 링크(경유 링크 포함)가 그 구역의 link_ids 안에 있는지 — 게이트를 못 찾은 채
+ *   구역을 "확정 이탈"했는지 판정하는 보조 수단 (2026-08-25 최정우 추가)
+ * @remark CLOSED_ROAD/SPEED 전용 — 진행 중인 구역의 road_id 를 이미 알고 있는 상태에서 "그 구역
+ *   안에 계속 있는가"만 확인하면 되므로, NODE_STEP/EXEMPT/OPEN처럼 link_id→구역 전체 역인덱스를
+ *   따로 만들 필요 없이 GetZoneByRoadId() 로 얻은 그 zone 하나의 vtLinkIds 만 선형 탐색한다.
+*/
+static bool IsMatchedLinkInZone(PZONE_INFO pstZone, const MATCH_LINK_INFO& stMatchLinkInfo)
+{
+	if ((pstZone == nullptr) || pstZone->vtLinkIds.empty())
+		return false;
+
+	for (size_t z = 0; z < pstZone->vtLinkIds.size(); ++z)
+	{
+		if (pstZone->vtLinkIds[z] == stMatchLinkInfo.qwLinkID)
+			return true;
+		for (uint8 p = 0; p < stMatchLinkInfo.nPathLinkCount; ++p)
+		{
+			if (pstZone->vtLinkIds[z] == stMatchLinkInfo.aqwPathLinkIDs[p])
+				return true;
+		}
+	}
+	return false;
+}
+
+/**
  * @brief 폐쇄형(CLOSED_ROAD) 입/출구 게이트 판정 (2026-08-12 최정우 추가, 2026-08-13 재작성)
  * @param[in] nThreadId 워커 스레드 ID (로그용)
  * @param[in] stRawLogInfo 원시 GPS
@@ -2631,6 +3008,35 @@ void CRawLogWorker::ProcessClosedRoadCharge(int nThreadId, const sRawLogInfo& st
 	//   섞여 있어도 정확히 골라냄) (2026-08-13 최정우 재작성)
 	if (pstSession->bInClosedRoad)
 	{
+		// 실시간 누적거리·마지막 위치 갱신 — 게이트 확정 여부와 무관하게 매 틱 항상 최신으로
+		//   유지한다. 게이트 기반 정상 종료는 여전히 ZONE_INFO.dfLengthM(고정값)을 쓰지만, 게이트를
+		//   못 찾고 구역을 벗어나거나(아래 else 분기) TTL/트립종료로 강제마감되는 경우
+		//   (AppendExpiredClosedRoadCharge)엔 이 실측값이 유일한 근거라 "게이트 대기 중"이었던
+		//   틱들도 빠짐없이 누적돼 있어야 한다(실측 000376_20260819140856 RL-Z00003 — 게이트를
+		//   찾긴 했지만 위치 미도달로 대기만 하다 트립이 끝난 케이스에서 처음엔 이 갱신이 빠져
+		//   dist_m=0으로 남는 문제 발견, 2026-08-25 최정우 추가)
+		{
+			POINT stPrevPos, stCurPos;
+			stPrevPos.dfX = pstSession->dfClosedLastX;  stPrevPos.dfY = pstSession->dfClosedLastY;
+			stCurPos.dfX = stMatchLinkInfo.dfMatchX;    stCurPos.dfY = stMatchLinkInfo.dfMatchY;
+			pstSession->dfClosedAccumDistM += HaversineMeters(stPrevPos, stCurPos);
+			pstSession->dfClosedLastX = stMatchLinkInfo.dfMatchX;
+			pstSession->dfClosedLastY = stMatchLinkInfo.dfMatchY;
+		}
+
+		// "구역 안에서 마지막으로 확인된 링크/시각" 갱신 — qwLastConfirmedLinkID 가 트립 시작
+		//   후보(A/B) 판정 중이라 아직 0인 상태로 진입~이탈이 한 tick 만에 벌어지면(실측
+		//   000376_20260819140856) 아래 bExitOnPrevLink 판정이 qwLastConfirmedLinkID 만으론
+		//   출구 게이트를 못 찾는다 — 그 대체 근거로 매 틱 갱신(2026-08-25 최정우 추가)
+		{
+			PZONE_INFO pstTrackingZoneForUpdate = m_stConfig.pcChargeDataLoader->GetZoneByRoadId(pstSession->szClosedRoadId);
+			if (IsMatchedLinkInZone(pstTrackingZoneForUpdate, stMatchLinkInfo))
+			{
+				pstSession->qwClosedLastZoneLinkID = stMatchLinkInfo.qwLinkID;
+				pstSession->dtClosedLastZoneTime = stRawLogInfo.dtGPS;
+			}
+		}
+
 		// 경유(이미 완전 통과) 링크들을 먼저 확인 — 발견되면 위치 판정 없이 무조건 통과로 확정
 		//   (2026-08-20 최정우 추가, 근거는 CollectGateCandidatesOnIntermediateLinks() 주석 참고)
 		PGATE_INFO pstExitGate = nullptr;
@@ -2668,19 +3074,37 @@ void CRawLogWorker::ProcessClosedRoadCharge(int nThreadId, const sRawLogInfo& st
 		//   틱이 아예 다른 링크로 확정됐다는 것 자체가 그 링크를 끝까지 지나왔다는 뜻이므로 위치
 		//   판정 없이 확정한다. 자세한 배경은 ProcessSpeedZoneCharge() 동일 로직 주석 참고
 		//   (2026-08-24 최정우 추가)
+		// 후보 링크 두 개를 순서대로 시도 — (1) qwLastConfirmedLinkID, (2) qwClosedLastZoneLinkID.
+		//   qwLastConfirmedLinkID 는 트립 시작 후보(A/B) 판정이 아직 안 끝났으면 0에 머물러 있어
+		//   못 쓰는 경우가 있다(실측 000376_20260819140856 — 트립 첫 tick 이 이미 구역 안이라
+		//   그 tick 이 바로 진입+구역 내 유일한 링크였는데, 다음 tick 에 완전히 다른 링크로 넘어가며
+		//   출구를 못 잡고 "게이트 미확인 이탈"로 빠짐). qwClosedLastZoneLinkID 는 그 대체용으로
+		//   "실제로 이 구역 안에서 마지막으로 확인됐던 링크"를 추적한 값이라 이 경우에도 유효
+		//   (2026-08-25 최정우 추가, 사용자 지시 — "다음 맵매칭 좌표/링크로 진출 확인 가능")
 		bool bExitOnPrevLink = false;
-		if ((pstExitGate == nullptr) && (pstSession->qwLastConfirmedLinkID != 0)
-			&& (pstSession->qwLastConfirmedLinkID != stMatchLinkInfo.qwLinkID))
+		uint64 qwExitPrevLinkID = 0;
+		time_t dtExitPrevLinkTime = 0;
+		if (pstExitGate == nullptr)
 		{
-			vector<PGATE_INFO> vtPrevExit;
-			CollectGateCandidates(m_stConfig.pcChargeDataLoader, pstSession->qwLastConfirmedLinkID, 'O', &vtPrevExit);
-			for (size_t i = 0; i < vtPrevExit.size(); ++i)
+			const uint64 aqwPrevCand[2] = { pstSession->qwLastConfirmedLinkID, pstSession->qwClosedLastZoneLinkID };
+			const time_t adtPrevCandTime[2] = { pstSession->dtLastConfirmedLinkTime, pstSession->dtClosedLastZoneTime };
+			for (int c = 0; (c < 2) && (pstExitGate == nullptr); ++c)
 			{
-				if (strcmp(pstSession->szClosedRoadId, vtPrevExit[i]->szRoadID) == 0)
+				if ((aqwPrevCand[c] == 0) || (aqwPrevCand[c] == stMatchLinkInfo.qwLinkID))
+					continue;
+
+				vector<PGATE_INFO> vtPrevExit;
+				CollectGateCandidates(m_stConfig.pcChargeDataLoader, aqwPrevCand[c], 'O', &vtPrevExit);
+				for (size_t i = 0; i < vtPrevExit.size(); ++i)
 				{
-					pstExitGate = vtPrevExit[i];
-					bExitOnPrevLink = true;
-					break;
+					if (strcmp(pstSession->szClosedRoadId, vtPrevExit[i]->szRoadID) == 0)
+					{
+						pstExitGate = vtPrevExit[i];
+						bExitOnPrevLink = true;
+						qwExitPrevLinkID = aqwPrevCand[c];
+						dtExitPrevLinkTime = adtPrevCandTime[c];
+						break;
+					}
 				}
 			}
 		}
@@ -2735,13 +3159,24 @@ void CRawLogWorker::ProcessClosedRoadCharge(int nThreadId, const sRawLogInfo& st
 					pstSession->szEntryTollgateId, pstExitGate->szTollgateID);
 			}
 
-			// bExitOnPrevLink 로 확정된 경우, 이번 틱의 stMatchLinkInfo 는 이미 다른(무관한) 링크를
-			//   가리키므로 그 값을 그대로 쓰면 안 된다 — 종료 시각·종료 좌표·제한속도 전부 "실제로
-			//   게이트 링크 위에 마지막으로 있던 시점(dtLastConfirmedLinkTime)·게이트 자체 좌표·직전
-			//   링크의 제한속도"로 대체한다. 안 그러면 stay_seconds 에 이미 이탈한 뒤 시간까지
-			//   섞이고(실측 000370_20260824103155 — G54 까지 밀려 나옴), to_lat/lon 도 엉뚱한 링크의
-			//   종점이 찍힌다 (2026-08-24 최정우 추가)
-			time_t dtExitTime = bExitOnPrevLink ? pstSession->dtLastConfirmedLinkTime : stRawLogInfo.dtGPS;
+			// 출구 게이트 통과 시각 보간 — 직전 확정 tick~이번 tick 사이에서 게이트를 지났을 시각을
+			//   추정한다(사용자 지시, 2026-08-25 최정우 추가). bExitOnPrevLink 로 확정된 경우 이번
+			//   틱의 stMatchLinkInfo 는 이미 다른(무관한) 링크를 가리키지만, 보간 기준으로는 오히려
+			//   "그 무관한 링크까지 이동한 시각"이 곧 게이트를 확실히 지난 시점이라 유효한 종점이 됨.
+			//   직전 tick 이 없으면(트립 첫 tick) 예전처럼 dtExitPrevLinkTime/현재시각 그대로 사용
+			//   (원래 방식: 2026-08-24 최정우 추가, dtExitPrevLinkTime 로 일반화 2026-08-25)
+			time_t dtExitTime;
+			if (pstSession->bHasLastMatch)
+			{
+				dtExitTime = InterpolateGateCrossingTime(
+					pstSession->dfLastMatchX, pstSession->dfLastMatchY, pstSession->dtLastMatchGps,
+					stMatchLinkInfo.dfMatchX, stMatchLinkInfo.dfMatchY, stRawLogInfo.dtGPS,
+					pstExitGate->dfLon, pstExitGate->dfLat);
+			}
+			else
+			{
+				dtExitTime = bExitOnPrevLink ? dtExitPrevLinkTime : stRawLogInfo.dtGPS;
+			}
 
 			char szFromLat[32], szFromLon[32], szToLat[32], szToLon[32];
 			snprintf(szFromLat, sizeof(szFromLat), "%.06lf", pstSession->dfEntryFromLat);
@@ -2765,19 +3200,37 @@ void CRawLogWorker::ProcessClosedRoadCharge(int nThreadId, const sRawLogInfo& st
 			PZONE_INFO pstZone = m_stConfig.pcChargeDataLoader->GetZoneByRoadId(pstSession->szClosedRoadId);
 			stRow.strZoneName = (pstZone != nullptr) ? pstZone->szRoadNm : "";
 
-			// 구간거리 — 실시간 GPS 누적이 아니라 base_roadlink.coords 폴리라인 실거리(ZONE_INFO.dfLengthM,
-			//   [zone_select] SQL 에서 하버사인 합산으로 미리 계산됨) 사용 (2026-08-12 최정우 수정)
-			double dfLengthM = (pstZone != nullptr) ? pstZone->dfLengthM : 0.0;
+			// 구간거리 — 원래는 실시간 GPS 누적이 아니라 base_roadlink.coords 폴리라인 실거리
+			//   (ZONE_INFO.dfLengthM, [zone_select] SQL 에서 하버사인 합산으로 미리 계산됨) 사용
+			//   (2026-08-12 최정우 수정). 단, 진입 자체가 애매(bClosedEntryAmbiguous — 트립이 이미
+			//   폐쇄형 도로 위에서 시작해 진입 게이트를 못 잡은 경우)했으면 "구역 전체를 다 지났다"는
+			//   전제가 성립하지 않으므로, 대신 실제 출발 지점(dfEntryFromLat/Lon)~출구 게이트 간
+			//   실거리를 쓴다(사용자 지시, 2026-08-25 최정우 추가)
+			double dfLengthM;
+			if (pstSession->bClosedEntryAmbiguous)
+			{
+				POINT stStartPos, stGatePos;
+				stStartPos.dfX = pstSession->dfEntryFromLon;  stStartPos.dfY = pstSession->dfEntryFromLat;
+				stGatePos.dfX = pstExitGate->dfLon;           stGatePos.dfY = pstExitGate->dfLat;
+				dfLengthM = HaversineMeters(stStartPos, stGatePos);
+			}
+			else
+			{
+				dfLengthM = (pstZone != nullptr) ? pstZone->dfLengthM : 0.0;
+			}
 			char szDistM[16];
 			snprintf(szDistM, sizeof(szDistM), "%d", static_cast<int>(dfLengthM + 0.5));
 			stRow.strDistM = szDistM;
 
 			double dfDwellSec = difftime(dtExitTime, pstSession->dtEntryTime);
+			// 주행은 실제로 있었으므로 경과시간이 0(또는 반올림 시 0이 되는 소수)으로 남으면 안 됨 —
+			//   최소 1초로 보정(사용자 지시, 2026-08-25 최정우 추가)
+			if (dfDwellSec < 1.0)
+				dfDwellSec = 1.0;
 
 			// 평균속도 — 구역 실거리 ÷ 입구~출구 경과시간(사용자 지시, 2026-08-14 — 개방형 제외 전
 			//   유형 평균속도로 통일. 기존엔 개방형과 동일하게 순간속도를 썼으나, 구역 개념이 있는
 			//   유형은 구간단속과 동일하게 평균속도가 맞다는 지시로 변경)
-			if (dfDwellSec > 0.0)
 			{
 				double dfAvgSpeedKmh = (dfLengthM / dfDwellSec) * 3.6;
 				char szSpeedKmh[16];
@@ -2785,16 +3238,27 @@ void CRawLogWorker::ProcessClosedRoadCharge(int nThreadId, const sRawLogInfo& st
 				stRow.strSpeedKmh = szSpeedKmh;
 			}
 
-			uint8 nSpeedLimitForRow = stMatchLinkInfo.nMaxSpeed;
-			if (bExitOnPrevLink && (m_stConfig.pcDataLoader != nullptr))
+			// 제한속도 — 진입 애매(bClosedEntryAmbiguous) 시엔 이 레코드가 어느 구간의 제한속도를
+			//   대표하는지 정의할 근거 자체가 없음(입구 링크를 특정 못 함) — 0으로 둔다(사용자 지시,
+			//   2026-08-25 최정우 추가). 그 외엔 기존과 동일하게 매칭 링크(또는 bExitOnPrevLink 시
+			//   직전 링크)의 실제 도로 제한속도 사용
+			if (pstSession->bClosedEntryAmbiguous)
 			{
-				PLINK_INFO pstPrevLink = m_stConfig.pcDataLoader->GetLinkInfo(pstSession->qwLastConfirmedLinkID);
-				if (pstPrevLink != nullptr)
-					nSpeedLimitForRow = pstPrevLink->nMaxSpeed;
+				stRow.strSpeedLimitKmh = "0";
 			}
-			char szSpeedLimit[8];
-			snprintf(szSpeedLimit, sizeof(szSpeedLimit), "%d", static_cast<int>(nSpeedLimitForRow));
-			stRow.strSpeedLimitKmh = szSpeedLimit;
+			else
+			{
+				uint8 nSpeedLimitForRow = stMatchLinkInfo.nMaxSpeed;
+				if (bExitOnPrevLink && (m_stConfig.pcDataLoader != nullptr))
+				{
+					PLINK_INFO pstPrevLink = m_stConfig.pcDataLoader->GetLinkInfo(qwExitPrevLinkID);
+					if (pstPrevLink != nullptr)
+						nSpeedLimitForRow = pstPrevLink->nMaxSpeed;
+				}
+				char szSpeedLimit[8];
+				snprintf(szSpeedLimit, sizeof(szSpeedLimit), "%d", static_cast<int>(nSpeedLimitForRow));
+				stRow.strSpeedLimitKmh = szSpeedLimit;
+			}
 
 			// stay_seconds — 입구~출구 체류시간(초), 사용자 지시(2026-08-14 — 개방형 제외 전 유형 공통화).
 			//   위 dfDwellSec(평균속도 계산에 이미 씀)과 동일한 경과시간 재사용
@@ -2830,6 +3294,104 @@ void CRawLogWorker::ProcessClosedRoadCharge(int nThreadId, const sRawLogInfo& st
 			// return 하지 않고 아래 진입 후보 검사로 계속 진행 — 이 링크가 바로 다음 구역의
 			//   입구 게이트도 겸하는 경우(사용자 질문 케이스) 같은 tick 에 바로 이어서 처리 (2026-08-13 최정우 추가)
 		}
+		else
+		{
+			// 게이트를 못 찾음 — 이 구역(link_ids)을 완전히 벗어났는지로 "확정 이탈" 여부만 보조
+			//   판정한다(실측 누적거리·위치는 위에서 이미 매 틱 갱신됨). 아직 구역 안이면 계속
+			//   대기, 완전히 벗어났으면 게이트 미확인이라 여전히 N/3(AUDIT)이지만 dist_m/speed_kmh/
+			//   stay_seconds는 0 대신 실측값으로 채워 마감한다(실측 000376_20260819140856 — 게이트를
+			//   못 찾고 구역을 나갔는데 전부 0으로 비어있던 문제, 2026-08-25 최정우 추가)
+			PZONE_INFO pstTrackingZone = m_stConfig.pcChargeDataLoader->GetZoneByRoadId(pstSession->szClosedRoadId);
+
+			if (IsMatchedLinkInZone(pstTrackingZone, stMatchLinkInfo))
+				return;			// 아직 구역 안 — 다음 틱 대기
+
+			// 링크가 2개 이상인 구역은 "지금 이 링크가 link_ids 에 없다"만으로 확정 이탈 처리하면
+			//   안 된다 — 교차로 부근에서 잠깐 인접한 비구성원 링크로 튀었다가 같은 구역의 남은
+			//   링크로 되돌아오는 매칭 흔들림이 실측으로 확인됨(000376_20260819141002 RL-Z00006,
+			//   6개 링크 중 3번째 링크 대신 잠깐 옆 링크로 튀었다가 복귀 — 이걸 확정 이탈로 오판해
+			//   실제 출구 게이트(TG00011)에 도달하기 훨씬 전에 1266m/144s 짜리 정상 통과를
+			//   459m/24s 로 조기 마감시켜버림). 링크 1개짜리 구역(RL-Z00005 등)은 "그 링크를
+			//   벗어남=구역을 벗어남"이 유일한 해석이라 안전하지만, 여러 링크로 구성된 구역은
+			//   TTL/트립종료 마감(AppendExpiredClosedRoadCharge)에 맡기는 게 더 안전함 — 그쪽도
+			//   이미 실측 누적거리를 쓰므로 dist_m=0 으로 비는 문제는 없다 (2026-08-25 최정우 추가,
+			//   전체 재맵매칭 회귀검증 중 발견)
+			if ((pstTrackingZone != nullptr) && (pstTrackingZone->vtLinkIds.size() > 1))
+				return;			// 여러 링크 구역 — 일시적 이탈일 수 있음, 확정 짓지 않고 계속 대기
+
+			CHARGE_INSERT_ROW stRow;
+			stRow.strTripId = stRawLogInfo.szTripID;
+			stRow.strDeviceKey = stRawLogInfo.szDeviceKey;
+
+			char szSeq[16];
+			snprintf(szSeq, sizeof(szSeq), "%d", pstSession->nChargeSeq);
+			stRow.strChargeSeq = szSeq;
+
+			stRow.strChargeType = "2";							// CLOSED_ROAD
+			stRow.strChargeUnit = "1";
+			stRow.strLinkId = "";
+			stRow.strFromId = pstSession->szEntryTollgateId;
+			stRow.strToId = "";								// 출구 미확인 — 지어내지 않음
+
+			char szFromLat[32], szFromLon[32], szToLat[32], szToLon[32];
+			snprintf(szFromLat, sizeof(szFromLat), "%.06lf", pstSession->dfEntryFromLat);
+			snprintf(szFromLon, sizeof(szFromLon), "%.06lf", pstSession->dfEntryFromLon);
+			snprintf(szToLat, sizeof(szToLat), "%.06lf", stMatchLinkInfo.dfMatchY);
+			snprintf(szToLon, sizeof(szToLon), "%.06lf", stMatchLinkInfo.dfMatchX);
+			stRow.strFromLat = szFromLat;
+			stRow.strFromLon = szFromLon;
+			stRow.strToLat = szToLat;
+			stRow.strToLon = szToLon;
+
+			stRow.strZoneId = pstSession->szClosedRoadId;
+			stRow.strZoneName = (pstTrackingZone != nullptr) ? pstTrackingZone->szRoadNm : "";
+
+			char szDistM[16];
+			snprintf(szDistM, sizeof(szDistM), "%d", static_cast<int>(pstSession->dfClosedAccumDistM + 0.5));
+			stRow.strDistM = szDistM;
+
+			double dfDwellSec = difftime(stRawLogInfo.dtGPS, pstSession->dtEntryTime);
+			if (dfDwellSec > 0.0)
+			{
+				double dfAvgSpeedKmh = (pstSession->dfClosedAccumDistM / dfDwellSec) * 3.6;
+				char szSpeedKmh[16];
+				snprintf(szSpeedKmh, sizeof(szSpeedKmh), "%d", static_cast<int>(dfAvgSpeedKmh + 0.5));
+				stRow.strSpeedKmh = szSpeedKmh;
+			}
+			stRow.strSpeedLimitKmh = "";						// 출구 링크를 특정 못 함 — 지어내지 않음
+
+			char szStaySeconds[16];
+			snprintf(szStaySeconds, sizeof(szStaySeconds), "%d", static_cast<int>(dfDwellSec + 0.5));
+			stRow.strStaySeconds = szStaySeconds;
+
+			stRow.strOccurDt = FormatDateTime14(pstSession->dtEntryTime);
+
+			const char *pszTripStartDt = ExtractTripStartDt(stRawLogInfo.szTripID);
+			stRow.strTripStartDt = (pszTripStartDt != nullptr) ? pszTripStartDt : stRow.strOccurDt;
+
+			stRow.strTollgateId = "";
+			stRow.strEntryTollgateId = pstSession->szEntryTollgateId;
+			stRow.strExitTollgateId = "";
+
+			stRow.strRegDt = FormatDateTime14(time(nullptr));
+			stRow.strUpdDt = stRow.strRegDt;
+
+			stRow.strChargeYn = "N";							// 출구 게이트 미확인 — 항상 AUDIT
+			stRow.strChargeStatus = "3";
+
+			pvtChargeInserts->push_back(stRow);
+
+			LOGFMTW("[#%02d] closed road exit unconfirmed(zone left)!device=[%s] trip_id=[%s] seq=[%d] "
+				"entry=[%s] road=[%s] dist_m=[%s]",
+				nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstSession->nChargeSeq,
+				pstSession->szEntryTollgateId, pstSession->szClosedRoadId, szDistM);
+
+			pstSession->nChargeSeq += 1;
+			pstSession->bInClosedRoad = false;
+			pstSession->szEntryTollgateId[0] = '\0';
+			pstSession->szClosedRoadId[0] = '\0';
+			// return 하지 않고 아래 진입 후보 검사로 계속 진행 — 게이트 확정 이탈과 동일 관례
+		}
 	}
 
 	// 진입 처리 — 이미 다른 구역에 진입해 있는 상태면(bInClosedRoad=true 로 위 블록에서 못 닫혔으면)
@@ -2860,6 +3422,7 @@ void CRawLogWorker::ProcessClosedRoadCharge(int nThreadId, const sRawLogInfo& st
 	for (size_t i = 0; i < vtEntryCandidates.size(); ++i)
 	{
 		PGATE_INFO pstEntryGate = vtEntryCandidates[i];
+		bool bAmbiguousStart = false;			// 아래 참고 (2026-08-25 최정우 추가)
 
 		// 이번 확정(최종) 링크에서 찾은 후보만 위치 검사 — 경유(이미 완전 통과) 링크에서 찾은
 		//   후보는 무조건 확정(위치를 잴 의미가 없음, 위 출구 판정과 동일 원리).
@@ -2887,7 +3450,7 @@ void CRawLogWorker::ProcessClosedRoadCharge(int nThreadId, const sRawLogInfo& st
 
 			if (pstSameLinkExit != nullptr)
 			{
-				POINT stLinkStart, stExitPos;
+				POINT stLinkStart, stExitPos, stEntryPos;
 				stLinkStart.dfX = stMatchLinkInfo.dfStNodeX;
 				stLinkStart.dfY = stMatchLinkInfo.dfStNodeY;
 				stExitPos.dfX = pstSameLinkExit->dfLon;
@@ -2897,6 +3460,26 @@ void CRawLogWorker::ProcessClosedRoadCharge(int nThreadId, const sRawLogInfo& st
 
 				if (dfCurPosOnLink >= (dfExitPosOnLink - 3.0))
 					continue;			// 이미 이 링크의 출구 지점을 지났음 — 재진입 아님
+
+				// 세션에 확정된 직전 링크가 전혀 없는(=이 트립에서 지금까지 얻은 유일한 정보) 상태에서,
+				//   첫 매칭 위치가 입구 지점보다 출구 지점에 더 가까우면 — 지금 막 이 게이트를 지난 게
+				//   아니라 이미 그 전부터(이전 트립 등에서) 구역 안에 있었을 가능성이 높다. 입구
+				//   게이트ID를 이 게이트로 확정해 잘못 귀속시키지 말고 비워둔다 — 아래 bGateAnomaly
+				//   로직이 자동으로 AUDIT(N/3) 처리해준다(실측 000376_20260819140856 — 트립 첫 GPS가
+				//   이미 입구 TG00007로부터 343m·출구 TG00008까지는 23m 남은 지점이었는데 "지금 막
+				//   TG00007 진입"으로 오기록됐었음, 2026-08-25 최정우 추가)
+				stEntryPos.dfX = pstEntryGate->dfLon;
+				stEntryPos.dfY = pstEntryGate->dfLat;
+				double dfEntryPosOnLink = HaversineMeters(stLinkStart, stEntryPos);
+				if ((pstSession->qwLastConfirmedLinkID == 0)
+					&& (dfCurPosOnLink > ((dfEntryPosOnLink + dfExitPosOnLink) / 2.0)))
+				{
+					bAmbiguousStart = true;
+					LOGFMTW("[#%02d] closed road entry ambiguous!device=[%s] trip_id=[%s] road=[%s] "
+						"pos=[%.1fm] entry_gate_pos=[%.1fm] exit_gate_pos=[%.1fm] -> entry left blank",
+						nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID,
+						pstEntryGate->szRoadID, dfCurPosOnLink, dfEntryPosOnLink, dfExitPosOnLink);
+				}
 			}
 		}
 
@@ -2905,17 +3488,51 @@ void CRawLogWorker::ProcessClosedRoadCharge(int nThreadId, const sRawLogInfo& st
 			continue;
 
 		pstSession->bInClosedRoad = true;
-		strncpy(pstSession->szEntryTollgateId, pstEntryGate->szTollgateID, sizeof(pstSession->szEntryTollgateId) - 1);
-		pstSession->szEntryTollgateId[sizeof(pstSession->szEntryTollgateId) - 1] = '\0';
+		pstSession->bClosedEntryAmbiguous = bAmbiguousStart;
+		if (bAmbiguousStart)
+		{
+			pstSession->szEntryTollgateId[0] = '\0';
+			// 진입 게이트 자체가 없으니 "입구 게이트 링크의 from_node"라는 기존 의미가 성립하지
+			//   않음 — 실제 시작 지점(이 트립이 관측된 첫 매칭 좌표)을 대신 담아 나중에 dist_m
+			//   실거리 계산 기준으로 쓴다(사용자 지시, 2026-08-25 최정우 추가)
+			pstSession->dfEntryFromLat = stMatchLinkInfo.dfMatchY;
+			pstSession->dfEntryFromLon = stMatchLinkInfo.dfMatchX;
+		}
+		else
+		{
+			strncpy(pstSession->szEntryTollgateId, pstEntryGate->szTollgateID, sizeof(pstSession->szEntryTollgateId) - 1);
+			pstSession->szEntryTollgateId[sizeof(pstSession->szEntryTollgateId) - 1] = '\0';
+			pstSession->dfEntryFromLat = stMatchLinkInfo.dfStNodeY;
+			pstSession->dfEntryFromLon = stMatchLinkInfo.dfStNodeX;
+		}
 		strncpy(pstSession->szClosedRoadId, pstEntryGate->szRoadID, sizeof(pstSession->szClosedRoadId) - 1);
 		pstSession->szClosedRoadId[sizeof(pstSession->szClosedRoadId) - 1] = '\0';
-		pstSession->dfEntryFromLat = stMatchLinkInfo.dfStNodeY;
-		pstSession->dfEntryFromLon = stMatchLinkInfo.dfStNodeX;
-		pstSession->dtEntryTime = stRawLogInfo.dtGPS;
+		// 진입 게이트 통과 시각 보간 — 진입이 애매하지 않을 때만(실제 게이트 위치가 있어야 보간
+		//   근거가 있음) 직전 확정 tick~이번 tick 사이에서 게이트를 지났을 시각을 추정한다. 직전
+		//   tick 이 없으면(트립 첫 tick) 지금 tick 시각을 그대로 씀(사용자 지시, 2026-08-25 최정우 추가)
+		if (!bAmbiguousStart && pstSession->bHasLastMatch)
+		{
+			pstSession->dtEntryTime = InterpolateGateCrossingTime(
+				pstSession->dfLastMatchX, pstSession->dfLastMatchY, pstSession->dtLastMatchGps,
+				stMatchLinkInfo.dfMatchX, stMatchLinkInfo.dfMatchY, stRawLogInfo.dtGPS,
+				pstEntryGate->dfLon, pstEntryGate->dfLat);
+		}
+		else
+		{
+			pstSession->dtEntryTime = stRawLogInfo.dtGPS;
+		}
+		// 게이트 미확인 이탈 시 실측 dist_m 산출용 — 진입 시점 위치부터 누적 시작 (2026-08-25 최정우 추가)
+		pstSession->dfClosedLastX = stMatchLinkInfo.dfMatchX;
+		pstSession->dfClosedLastY = stMatchLinkInfo.dfMatchY;
+		pstSession->dfClosedAccumDistM = 0.0;
+		// 진입 tick 의 링크 자체가 "구역 안에서 마지막으로 확인된 링크"의 첫 값 — 위 qwClosedLastZoneLinkID
+		//   주석 참고(2026-08-25 최정우 추가)
+		pstSession->qwClosedLastZoneLinkID = stMatchLinkInfo.qwLinkID;
+		pstSession->dtClosedLastZoneTime = stRawLogInfo.dtGPS;
 
 		LOGFMTI("[#%02d] closed road entry!device=[%s] trip_id=[%s] gate=[%s] road=[%s]",
 			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID,
-			pstEntryGate->szTollgateID, pstEntryGate->szRoadID);
+			bAmbiguousStart ? "unknown" : pstEntryGate->szTollgateID, pstEntryGate->szRoadID);
 		break;			// 한 tick 엔 하나만 진입
 	}
 }
@@ -2954,6 +3571,28 @@ void CRawLogWorker::ProcessSpeedZoneCharge(int nThreadId, const sRawLogInfo& stR
 	// 진출 처리 먼저 시도 — ProcessClosedRoadCharge() 와 동일 패턴 (2026-08-13 최정우 재작성)
 	if (pstSession->bInSpeedZone)
 	{
+		// 실시간 누적거리·마지막 위치 갱신 — ProcessClosedRoadCharge() 와 동일 근거·위치(게이트
+		//   확정 여부와 무관하게 매 틱 항상 최신 유지) (2026-08-25 최정우 추가)
+		{
+			POINT stPrevPos, stCurPos;
+			stPrevPos.dfX = pstSession->dfSpeedLastX;  stPrevPos.dfY = pstSession->dfSpeedLastY;
+			stCurPos.dfX = stMatchLinkInfo.dfMatchX;   stCurPos.dfY = stMatchLinkInfo.dfMatchY;
+			pstSession->dfSpeedAccumDistM += HaversineMeters(stPrevPos, stCurPos);
+			pstSession->dfSpeedLastX = stMatchLinkInfo.dfMatchX;
+			pstSession->dfSpeedLastY = stMatchLinkInfo.dfMatchY;
+		}
+
+		// "구역 안에서 마지막으로 확인된 링크/시각" 갱신 — ProcessClosedRoadCharge() 동일 근거·
+		//   위치 참고(2026-08-25 최정우 추가)
+		{
+			PZONE_INFO pstTrackingZoneForUpdate = m_stConfig.pcChargeDataLoader->GetZoneByRoadId(pstSession->szSpeedZoneRoadId);
+			if (IsMatchedLinkInZone(pstTrackingZoneForUpdate, stMatchLinkInfo))
+			{
+				pstSession->qwSpeedLastZoneLinkID = stMatchLinkInfo.qwLinkID;
+				pstSession->dtSpeedLastZoneTime = stRawLogInfo.dtGPS;
+			}
+		}
+
 		// 경유(이미 완전 통과) 링크들을 먼저 확인 — ProcessClosedRoadCharge() 와 동일 원리
 		//   (2026-08-20 최정우 추가)
 		PGATE_INFO pstExitGate = nullptr;
@@ -2997,19 +3636,33 @@ void CRawLogWorker::ProcessSpeedZoneCharge(int nThreadId, const sRawLogInfo& stR
 		//   이미 다음 링크로 확정 — 게이트를 "지나간 순간"을 찍은 GPS 가 그냥 없었을 뿐 실제로는
 		//   통과함. 이걸 못 잡아 트립종료까지 세션이 안 닫히고 TTL 로 강제마감돼 stay_seconds 에
 		//   이탈 이후 시간까지 섞여 들어감) (2026-08-24 최정우 추가)
+		// 후보 링크 두 개를 순서대로 시도 — ProcessClosedRoadCharge() 동일 근거 참고. qwLastConfirmedLinkID
+		//   가 트립 시작 후보 판정 중이라 0에 머물러 있으면 qwSpeedLastZoneLinkID 로 대체
+		//   (2026-08-25 최정우 추가, 사용자 지시 — "다음 맵매칭 좌표/링크로 진출 확인 가능")
 		bool bExitOnPrevLink = false;
-		if ((pstExitGate == nullptr) && (pstSession->qwLastConfirmedLinkID != 0)
-			&& (pstSession->qwLastConfirmedLinkID != stMatchLinkInfo.qwLinkID))
+		uint64 qwExitPrevLinkID = 0;
+		time_t dtExitPrevLinkTime = 0;
+		if (pstExitGate == nullptr)
 		{
-			vector<PGATE_INFO> vtPrevExit;
-			CollectGateCandidates(m_stConfig.pcChargeDataLoader, pstSession->qwLastConfirmedLinkID, 'O', &vtPrevExit);
-			for (size_t i = 0; i < vtPrevExit.size(); ++i)
+			const uint64 aqwPrevCand[2] = { pstSession->qwLastConfirmedLinkID, pstSession->qwSpeedLastZoneLinkID };
+			const time_t adtPrevCandTime[2] = { pstSession->dtLastConfirmedLinkTime, pstSession->dtSpeedLastZoneTime };
+			for (int c = 0; (c < 2) && (pstExitGate == nullptr); ++c)
 			{
-				if (strcmp(pstSession->szSpeedZoneRoadId, vtPrevExit[i]->szRoadID) == 0)
+				if ((aqwPrevCand[c] == 0) || (aqwPrevCand[c] == stMatchLinkInfo.qwLinkID))
+					continue;
+
+				vector<PGATE_INFO> vtPrevExit;
+				CollectGateCandidates(m_stConfig.pcChargeDataLoader, aqwPrevCand[c], 'O', &vtPrevExit);
+				for (size_t i = 0; i < vtPrevExit.size(); ++i)
 				{
-					pstExitGate = vtPrevExit[i];
-					bExitOnPrevLink = true;
-					break;
+					if (strcmp(pstSession->szSpeedZoneRoadId, vtPrevExit[i]->szRoadID) == 0)
+					{
+						pstExitGate = vtPrevExit[i];
+						bExitOnPrevLink = true;
+						qwExitPrevLinkID = aqwPrevCand[c];
+						dtExitPrevLinkTime = adtPrevCandTime[c];
+						break;
+					}
 				}
 			}
 		}
@@ -3050,17 +3703,36 @@ void CRawLogWorker::ProcessSpeedZoneCharge(int nThreadId, const sRawLogInfo& stR
 			stRow.strFromId = pstSession->szSpeedEntryTollgateId;
 			stRow.strToId = pstExitGate->szTollgateID;
 
+			// 진입 애매(bSpeedEntryAmbiguous — 트립이 이미 구간단속 구역 위에서 시작해 진입 게이트를
+			//   못 잡은 경우)했으면 from_lat/lon·dist_m 모두 "구역 전체를 지났다"는 전제인 구역
+			//   등록값(dfFirstLat/Lon, dfLengthM) 대신 실제 출발 지점 기준으로 계산한다(사용자 지시,
+			//   2026-08-25 최정우 추가) — ProcessClosedRoadCharge() bClosedEntryAmbiguous 동일 근거
 			char szFromLat[32], szFromLon[32], szToLat[32], szToLon[32];
-			if (pstZone != nullptr)
+			double dfLengthM;
+			if (pstSession->bSpeedEntryAmbiguous)
+			{
+				snprintf(szFromLat, sizeof(szFromLat), "%.06lf", pstSession->dfSpeedEntryFromLat);
+				snprintf(szFromLon, sizeof(szFromLon), "%.06lf", pstSession->dfSpeedEntryFromLon);
+				snprintf(szToLat, sizeof(szToLat), "%.06lf", pstExitGate->dfLat);
+				snprintf(szToLon, sizeof(szToLon), "%.06lf", pstExitGate->dfLon);
+
+				POINT stStartPos, stGatePos;
+				stStartPos.dfX = pstSession->dfSpeedEntryFromLon;  stStartPos.dfY = pstSession->dfSpeedEntryFromLat;
+				stGatePos.dfX = pstExitGate->dfLon;                stGatePos.dfY = pstExitGate->dfLat;
+				dfLengthM = HaversineMeters(stStartPos, stGatePos);
+			}
+			else if (pstZone != nullptr)
 			{
 				snprintf(szFromLat, sizeof(szFromLat), "%.06lf", pstZone->dfFirstLat);
 				snprintf(szFromLon, sizeof(szFromLon), "%.06lf", pstZone->dfFirstLon);
 				snprintf(szToLat, sizeof(szToLat), "%.06lf", pstZone->dfLastLat);
 				snprintf(szToLon, sizeof(szToLon), "%.06lf", pstZone->dfLastLon);
+				dfLengthM = pstZone->dfLengthM;
 			}
 			else
 			{
 				szFromLat[0] = szFromLon[0] = szToLat[0] = szToLon[0] = '\0';
+				dfLengthM = 0.0;
 			}
 			stRow.strFromLat = szFromLat;
 			stRow.strFromLon = szFromLon;
@@ -3070,19 +3742,35 @@ void CRawLogWorker::ProcessSpeedZoneCharge(int nThreadId, const sRawLogInfo& stR
 			stRow.strZoneId = pstSession->szSpeedZoneRoadId;
 			stRow.strZoneName = (pstZone != nullptr) ? pstZone->szRoadNm : "";
 
-			double dfLengthM = (pstZone != nullptr) ? pstZone->dfLengthM : 0.0;
 			char szDistM[16];
 			snprintf(szDistM, sizeof(szDistM), "%d", static_cast<int>(dfLengthM + 0.5));
 			stRow.strDistM = szDistM;
 
-			// bExitOnPrevLink 로 확정된 경우 이번 틱은 이미 다른 링크라 그 시각을 그대로 쓰면 실제
-			// 이탈 시점보다 늦게 잡힌다 — ProcessClosedRoadCharge() 동일 로직 주석 참고 (2026-08-24 최정우 추가)
-			time_t dtExitTime = bExitOnPrevLink ? pstSession->dtLastConfirmedLinkTime : stRawLogInfo.dtGPS;
+			// 출구 게이트 통과 시각 보간 — ProcessClosedRoadCharge() 동일 근거·방식 참고
+			//   (2026-08-25 최정우 추가). 직전 tick 이 없으면 예전 방식 그대로(2026-08-24 최정우
+			//   추가, dtExitPrevLinkTime 로 일반화 2026-08-25)
+			time_t dtExitTime;
+			if (pstSession->bHasLastMatch)
+			{
+				dtExitTime = InterpolateGateCrossingTime(
+					pstSession->dfLastMatchX, pstSession->dfLastMatchY, pstSession->dtLastMatchGps,
+					stMatchLinkInfo.dfMatchX, stMatchLinkInfo.dfMatchY, stRawLogInfo.dtGPS,
+					pstExitGate->dfLon, pstExitGate->dfLat);
+			}
+			else
+			{
+				dtExitTime = bExitOnPrevLink ? dtExitPrevLinkTime : stRawLogInfo.dtGPS;
+			}
+			(void)qwExitPrevLinkID;		// 구간단속은 제한속도를 구역 등록값으로만 쓰므로 링크ID 자체는 미사용
+
+			double dfElapsedSec = difftime(dtExitTime, pstSession->dtSpeedEntryTime);
+			// 주행은 실제로 있었으므로 경과시간이 0(또는 반올림 시 0이 되는 소수)으로 남으면 안 됨 —
+			//   최소 1초로 보정(사용자 지시, 2026-08-25 최정우 추가)
+			if (dfElapsedSec < 1.0)
+				dfElapsedSec = 1.0;
 
 			// 평균속도 — 구역 실거리 ÷ 입구~출구 경과시간. 구간단속은 순간속도가 아니라 구간 전체
 			//   평균속도가 제한속도 초과 여부(위반 판정) 기준이기 때문 (2026-08-12 최정우 추가)
-			double dfElapsedSec = difftime(dtExitTime, pstSession->dtSpeedEntryTime);
-			if (dfElapsedSec > 0.0)
 			{
 				double dfAvgSpeedKmh = (dfLengthM / dfElapsedSec) * 3.6;
 				char szSpeedKmh[16];
@@ -3121,9 +3809,15 @@ void CRawLogWorker::ProcessSpeedZoneCharge(int nThreadId, const sRawLogInfo& stR
 			stRow.strUpdDt = stRow.strRegDt;
 
 			// charge_yn/charge_status — 다른 유형과 동일하게 기본 Y/0 (사용자 지시, 2026-08-13 —
-			//   원래는 통행료 파이프라인 비대상이라 위반 여부 무관 항상 N/4 고정이었음, 실측 선례와 달라짐)
-			stRow.strChargeYn = "Y";
-			stRow.strChargeStatus = "0";
+			//   원래는 통행료 파이프라인 비대상이라 위반 여부 무관 항상 N/4 고정이었음, 실측 선례와 달라짐).
+			//   단, 입구 게이트를 확정 못 한(진입 판정이 애매해 비워둔) 경우는 CLOSED_ROAD와 동일하게
+			//   AUDIT(N/3) — "다른 유형과 동일하게"라는 원 지시 취지에 맞춤(2026-08-25 최정우 추가,
+			//   ProcessClosedRoadCharge() bGateAnomaly 참고)
+			bool bGateAnomaly = (pstSession->szSpeedEntryTollgateId[0] == '\0') ||
+				(pstExitGate->szTollgateID[0] == '\0') ||
+				(strcmp(pstSession->szSpeedEntryTollgateId, pstExitGate->szTollgateID) == 0);
+			stRow.strChargeYn = bGateAnomaly ? "N" : "Y";
+			stRow.strChargeStatus = bGateAnomaly ? "3" : "0";
 
 			pvtChargeInserts->push_back(stRow);
 
@@ -3136,6 +3830,107 @@ void CRawLogWorker::ProcessSpeedZoneCharge(int nThreadId, const sRawLogInfo& stR
 			pstSession->szSpeedZoneRoadId[0] = '\0';
 			pstSession->szSpeedEntryTollgateId[0] = '\0';
 			// return 하지 않고 아래 진입 후보 검사로 계속 진행 (2026-08-13 최정우 추가, 폐쇄형과 동일 이유)
+		}
+		else
+		{
+			// 게이트를 못 찾음 — ProcessClosedRoadCharge() 동일 로직·근거 참고: 이 구역(link_ids)을
+			//   완전히 벗어났는지로 "확정 이탈" 판정(실측 누적거리·위치는 위에서 이미 매 틱 갱신됨).
+			//   아직 구역 안이면 계속 대기, 벗어났으면 게이트 미확인 AUDIT(N/3)이지만 dist_m/
+			//   speed_kmh/stay_seconds는 실측값으로 채운다 (2026-08-25 최정우 추가)
+			PZONE_INFO pstTrackingZone = m_stConfig.pcChargeDataLoader->GetZoneByRoadId(pstSession->szSpeedZoneRoadId);
+
+			if (IsMatchedLinkInZone(pstTrackingZone, stMatchLinkInfo))
+				return;			// 아직 구역 안 — 다음 틱 대기
+
+			// 여러 링크 구역은 일시적 이탈로 확정 짓지 않음 — ProcessClosedRoadCharge() 동일 근거
+			//   참고(2026-08-25 최정우 추가, 전체 재맵매칭 회귀검증 중 RL-Z00006 에서 발견)
+			if ((pstTrackingZone != nullptr) && (pstTrackingZone->vtLinkIds.size() > 1))
+				return;			// 여러 링크 구역 — 일시적 이탈일 수 있음, 확정 짓지 않고 계속 대기
+
+			CHARGE_INSERT_ROW stRow;
+			stRow.strTripId = stRawLogInfo.szTripID;
+			stRow.strDeviceKey = stRawLogInfo.szDeviceKey;
+
+			char szSeq[16];
+			snprintf(szSeq, sizeof(szSeq), "%d", pstSession->nChargeSeq);
+			stRow.strChargeSeq = szSeq;
+
+			stRow.strChargeType = "3";							// SPEED
+			stRow.strChargeUnit = "1";
+			stRow.strLinkId = "";
+			stRow.strFromId = pstSession->szSpeedEntryTollgateId;
+			stRow.strToId = "";								// 출구 미확인 — 지어내지 않음
+
+			char szFromLat[32], szFromLon[32], szToLat[32], szToLon[32];
+			if (pstTrackingZone != nullptr)
+			{
+				snprintf(szFromLat, sizeof(szFromLat), "%.06lf", pstTrackingZone->dfFirstLat);
+				snprintf(szFromLon, sizeof(szFromLon), "%.06lf", pstTrackingZone->dfFirstLon);
+			}
+			else
+			{
+				szFromLat[0] = szFromLon[0] = '\0';
+			}
+			snprintf(szToLat, sizeof(szToLat), "%.06lf", stMatchLinkInfo.dfMatchY);
+			snprintf(szToLon, sizeof(szToLon), "%.06lf", stMatchLinkInfo.dfMatchX);
+			stRow.strFromLat = szFromLat;
+			stRow.strFromLon = szFromLon;
+			stRow.strToLat = szToLat;
+			stRow.strToLon = szToLon;
+
+			stRow.strZoneId = pstSession->szSpeedZoneRoadId;
+			stRow.strZoneName = (pstTrackingZone != nullptr) ? pstTrackingZone->szRoadNm : "";
+
+			char szDistM[16];
+			snprintf(szDistM, sizeof(szDistM), "%d", static_cast<int>(pstSession->dfSpeedAccumDistM + 0.5));
+			stRow.strDistM = szDistM;
+
+			double dfElapsedSec = difftime(stRawLogInfo.dtGPS, pstSession->dtSpeedEntryTime);
+			if (dfElapsedSec > 0.0)
+			{
+				double dfAvgSpeedKmh = (pstSession->dfSpeedAccumDistM / dfElapsedSec) * 3.6;
+				char szSpeedKmh[16];
+				snprintf(szSpeedKmh, sizeof(szSpeedKmh), "%d", static_cast<int>(dfAvgSpeedKmh + 0.5));
+				stRow.strSpeedKmh = szSpeedKmh;
+			}
+			if (pstTrackingZone != nullptr)
+			{
+				char szSpeedLimit[8];
+				snprintf(szSpeedLimit, sizeof(szSpeedLimit), "%d", static_cast<int>(pstTrackingZone->dfSpeedLimitKmh + 0.5));
+				stRow.strSpeedLimitKmh = szSpeedLimit;
+			}
+
+			char szStaySeconds[16];
+			snprintf(szStaySeconds, sizeof(szStaySeconds), "%d", static_cast<int>(dfElapsedSec + 0.5));
+			stRow.strStaySeconds = szStaySeconds;
+
+			stRow.strOccurDt = FormatDateTime14(pstSession->dtSpeedEntryTime);
+
+			const char *pszTripStartDt = ExtractTripStartDt(stRawLogInfo.szTripID);
+			stRow.strTripStartDt = (pszTripStartDt != nullptr) ? pszTripStartDt : stRow.strOccurDt;
+
+			stRow.strTollgateId = "";
+			stRow.strEntryTollgateId = pstSession->szSpeedEntryTollgateId;
+			stRow.strExitTollgateId = "";
+
+			stRow.strRegDt = FormatDateTime14(time(nullptr));
+			stRow.strUpdDt = stRow.strRegDt;
+
+			stRow.strChargeYn = "N";							// 출구 게이트 미확인 — 항상 AUDIT
+			stRow.strChargeStatus = "3";
+
+			pvtChargeInserts->push_back(stRow);
+
+			LOGFMTW("[#%02d] speed zone exit unconfirmed(zone left)!device=[%s] trip_id=[%s] seq=[%d] "
+				"entry=[%s] road=[%s] dist_m=[%s]",
+				nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstSession->nChargeSeq,
+				pstSession->szSpeedEntryTollgateId, pstSession->szSpeedZoneRoadId, szDistM);
+
+			pstSession->nChargeSeq += 1;
+			pstSession->bInSpeedZone = false;
+			pstSession->szSpeedZoneRoadId[0] = '\0';
+			pstSession->szSpeedEntryTollgateId[0] = '\0';
+			// return 하지 않고 아래 진입 후보 검사로 계속 진행 — 게이트 확정 이탈과 동일 관례
 		}
 	}
 
@@ -3165,6 +3960,7 @@ void CRawLogWorker::ProcessSpeedZoneCharge(int nThreadId, const sRawLogInfo& stR
 	for (size_t i = 0; i < vtEntryCandidates.size(); ++i)
 	{
 		PGATE_INFO pstEntryGate = vtEntryCandidates[i];
+		bool bAmbiguousStart = false;			// ProcessClosedRoadCharge() 동일 로직 참고 (2026-08-25 최정우 추가)
 
 		// 이번 확정(최종) 링크에서 찾은 후보만 위치 검사 — ProcessClosedRoadCharge() 와 동일 원리
 		//   (2026-08-20 최정우 수정, 상세 근거는 그 함수의 동일 블록 주석 참고)
@@ -3185,7 +3981,7 @@ void CRawLogWorker::ProcessSpeedZoneCharge(int nThreadId, const sRawLogInfo& stR
 
 			if (pstSameLinkExit != nullptr)
 			{
-				POINT stLinkStart, stExitPos;
+				POINT stLinkStart, stExitPos, stEntryPos;
 				stLinkStart.dfX = stMatchLinkInfo.dfStNodeX;
 				stLinkStart.dfY = stMatchLinkInfo.dfStNodeY;
 				stExitPos.dfX = pstSameLinkExit->dfLon;
@@ -3195,6 +3991,20 @@ void CRawLogWorker::ProcessSpeedZoneCharge(int nThreadId, const sRawLogInfo& stR
 
 				if (dfCurPosOnLink >= (dfExitPosOnLink - 3.0))
 					continue;			// 이미 이 링크의 출구 지점을 지났음 — 재진입 아님
+
+				// ProcessClosedRoadCharge() 동일 로직·근거 참고 (2026-08-25 최정우 추가)
+				stEntryPos.dfX = pstEntryGate->dfLon;
+				stEntryPos.dfY = pstEntryGate->dfLat;
+				double dfEntryPosOnLink = HaversineMeters(stLinkStart, stEntryPos);
+				if ((pstSession->qwLastConfirmedLinkID == 0)
+					&& (dfCurPosOnLink > ((dfEntryPosOnLink + dfExitPosOnLink) / 2.0)))
+				{
+					bAmbiguousStart = true;
+					LOGFMTW("[#%02d] speed zone entry ambiguous!device=[%s] trip_id=[%s] road=[%s] "
+						"pos=[%.1fm] entry_gate_pos=[%.1fm] exit_gate_pos=[%.1fm] -> entry left blank",
+						nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID,
+						pstEntryGate->szRoadID, dfCurPosOnLink, dfEntryPosOnLink, dfExitPosOnLink);
+				}
 			}
 		}
 
@@ -3203,15 +4013,45 @@ void CRawLogWorker::ProcessSpeedZoneCharge(int nThreadId, const sRawLogInfo& stR
 			continue;
 
 		pstSession->bInSpeedZone = true;
+		pstSession->bSpeedEntryAmbiguous = bAmbiguousStart;
+		if (bAmbiguousStart)
+		{
+			pstSession->szSpeedEntryTollgateId[0] = '\0';
+			// ProcessClosedRoadCharge() bClosedEntryAmbiguous 동일 근거 참고 — 실제 시작 지점을
+			//   담아 나중에 dist_m 실거리 계산 기준으로 씀(2026-08-25 최정우 추가)
+			pstSession->dfSpeedEntryFromLat = stMatchLinkInfo.dfMatchY;
+			pstSession->dfSpeedEntryFromLon = stMatchLinkInfo.dfMatchX;
+		}
+		else
+		{
+			strncpy(pstSession->szSpeedEntryTollgateId, pstEntryGate->szTollgateID, sizeof(pstSession->szSpeedEntryTollgateId) - 1);
+			pstSession->szSpeedEntryTollgateId[sizeof(pstSession->szSpeedEntryTollgateId) - 1] = '\0';
+		}
 		strncpy(pstSession->szSpeedZoneRoadId, pstEntryGate->szRoadID, sizeof(pstSession->szSpeedZoneRoadId) - 1);
 		pstSession->szSpeedZoneRoadId[sizeof(pstSession->szSpeedZoneRoadId) - 1] = '\0';
-		strncpy(pstSession->szSpeedEntryTollgateId, pstEntryGate->szTollgateID, sizeof(pstSession->szSpeedEntryTollgateId) - 1);
-		pstSession->szSpeedEntryTollgateId[sizeof(pstSession->szSpeedEntryTollgateId) - 1] = '\0';
-		pstSession->dtSpeedEntryTime = stRawLogInfo.dtGPS;
+		// ProcessClosedRoadCharge() 동일 근거 참고 — 진입 게이트 통과 시각 보간 (2026-08-25 최정우 추가)
+		if (!bAmbiguousStart && pstSession->bHasLastMatch)
+		{
+			pstSession->dtSpeedEntryTime = InterpolateGateCrossingTime(
+				pstSession->dfLastMatchX, pstSession->dfLastMatchY, pstSession->dtLastMatchGps,
+				stMatchLinkInfo.dfMatchX, stMatchLinkInfo.dfMatchY, stRawLogInfo.dtGPS,
+				pstEntryGate->dfLon, pstEntryGate->dfLat);
+		}
+		else
+		{
+			pstSession->dtSpeedEntryTime = stRawLogInfo.dtGPS;
+		}
+		// 게이트 미확인 이탈 시 실측 dist_m 산출용 (2026-08-25 최정우 추가, ProcessClosedRoadCharge() 동일)
+		pstSession->dfSpeedLastX = stMatchLinkInfo.dfMatchX;
+		pstSession->dfSpeedLastY = stMatchLinkInfo.dfMatchY;
+		pstSession->dfSpeedAccumDistM = 0.0;
+		// ProcessClosedRoadCharge() 동일 근거 참고 (2026-08-25 최정우 추가)
+		pstSession->qwSpeedLastZoneLinkID = stMatchLinkInfo.qwLinkID;
+		pstSession->dtSpeedLastZoneTime = stRawLogInfo.dtGPS;
 
 		LOGFMTI("[#%02d] speed zone entry!device=[%s] trip_id=[%s] gate=[%s] road=[%s]",
 			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID,
-			pstEntryGate->szTollgateID, pstEntryGate->szRoadID);
+			bAmbiguousStart ? "unknown" : pstEntryGate->szTollgateID, pstEntryGate->szRoadID);
 		break;			// 한 tick 엔 하나만 진입
 	}
 }
@@ -3419,8 +4259,12 @@ void CRawLogWorker::CheckSpeedZoneExitByRawGps(int nThreadId, const sRawLogInfo&
 	stRow.strRegDt = FormatDateTime14(time(nullptr));
 	stRow.strUpdDt = stRow.strRegDt;
 
-	stRow.strChargeYn = "Y";
-	stRow.strChargeStatus = "0";
+	// ProcessSpeedZoneCharge() 와 동일 근거 — 입구 게이트 미확정 시 AUDIT(N/3) (2026-08-25 최정우 추가)
+	bool bGateAnomaly = (pstSession->szSpeedEntryTollgateId[0] == '\0') ||
+		(pstExitGate->szTollgateID[0] == '\0') ||
+		(strcmp(pstSession->szSpeedEntryTollgateId, pstExitGate->szTollgateID) == 0);
+	stRow.strChargeYn = bGateAnomaly ? "N" : "Y";
+	stRow.strChargeStatus = bGateAnomaly ? "3" : "0";
 
 	pvtChargeInserts->push_back(stRow);
 
@@ -3449,7 +4293,7 @@ void CRawLogWorker::CheckSpeedZoneExitByRawGps(int nThreadId, const sRawLogInfo&
 
 void CRawLogWorker::ProcessExemptZoneCharge(int nThreadId, const sRawLogInfo& stRawLogInfo,
 		const MATCH_LINK_INFO& stMatchLinkInfo, VEHICLE_TRIP_SESSION *pstSession,
-		vector<CHARGE_INSERT_ROW> *pvtChargeInserts)
+		vector<CHARGE_INSERT_ROW> *pvtChargeInserts, bool bTrustedTripEnd)
 {
 	if ((m_stConfig.pcChargeDataLoader == nullptr) || m_stConfig.strChargeInsertSQL.empty())
 		return;
@@ -3480,7 +4324,7 @@ void CRawLogWorker::ProcessExemptZoneCharge(int nThreadId, const sRawLogInfo& st
 		}
 	}
 
-	const bool bTripEnding = (stRawLogInfo.nTripEvent == TRIP_EVENT_END);
+	const bool bTripEnding = bTrustedTripEnd;
 
 	// ── ① 진행 중인 구역 세션 갱신·마감 ───────────────────────────────────────
 	for (size_t si = 0; si < pstSession->vtExemptRuns.size(); )
@@ -3585,7 +4429,7 @@ void CRawLogWorker::ProcessExemptZoneCharge(int nThreadId, const sRawLogInfo& st
 */
 void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRawLogInfo,
 		const MATCH_LINK_INFO& stMatchLinkInfo, VEHICLE_TRIP_SESSION *pstSession,
-		vector<CHARGE_INSERT_ROW> *pvtChargeInserts)
+		vector<CHARGE_INSERT_ROW> *pvtChargeInserts, bool bTrustedTripEnd)
 {
 	if ((m_stConfig.pcChargeDataLoader == nullptr) || m_stConfig.strChargeInsertSQL.empty())
 		return;
@@ -3615,8 +4459,10 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 		}
 	}
 
-	// 트립 종료(TRIP_EVENT=2) — 구역 위인 채로 끝나면 "이탈" 신호가 영영 안 옴, 즉시 강제 마감
-	const bool bTripEnding = (stRawLogInfo.nTripEvent == TRIP_EVENT_END);
+	// 트립 종료(TRIP_EVENT=2) — 구역 위인 채로 끝나면 "이탈" 신호가 영영 안 옴, 즉시 강제 마감.
+	//   ProcessRawLog() 가 스퓨리어스(순서역전) END 검사까지 마친 bTrustedTripEnd 를 그대로 씀
+	//   (2026-08-25 최정우 수정)
+	const bool bTripEnding = bTrustedTripEnd;
 
 	// ── ① 진행 중인 구역 세션 갱신·마감 ───────────────────────────────────────
 	for (size_t si = 0; si < pstSession->vtNodeStepRuns.size(); )
@@ -3641,6 +4487,15 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 			stRun.dfLastY = stMatchLinkInfo.dfMatchY;
 			stRun.qwLastLinkID = stMatchLinkInfo.qwLinkID;
 			stRun.dtLastInZoneTime = stRawLogInfo.dtGPS;
+		}
+		else if (stRun.nExitTicks == 0)
+		{
+			// 이탈 디바운스 스트릭의 첫 "밖" tick — 디바운스가 확정되는 마지막 tick(이미 구역에서
+			//   한참 멀어진 지점)이 아니라 이 tick을 나중에 경계 노드 통과시각 보간의 "밖" 기준점으로
+			//   써야 한다(위 dfFirstOutX/Y 필드 주석 참고, 2026-08-25 최정우 추가)
+			stRun.dfFirstOutX = stMatchLinkInfo.dfMatchX;
+			stRun.dfFirstOutY = stMatchLinkInfo.dfMatchY;
+			stRun.dtFirstOut = stRawLogInfo.dtGPS;
 		}
 
 		if (bSameZone && !bTripEnding) { ++si; continue; }	// 계속 진행 중
@@ -3683,16 +4538,30 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 						static_cast<unsigned long long>(stRun.qwLastLinkID),
 						dfTail, stRun.dfAccumDistM);
 				}
+
+				// 종료 노드 통과 시각 보간 — ProcessOpenGateCharge()/ProcessClosedRoadCharge() 동일
+				//   근거(InterpolateGateCrossingTime() 참고, 목표점만 게이트 대신 이 노드). "밖" 기준점은
+				//   세션 범용 직전tick(dfLastMatchX/Y)이 아니라 dfFirstOutX/Y 를 써야 한다 — node_exitcnt
+				//   디바운스로 이탈 확정이 몇 틱 뒤에 일어나므로, 세션 범용 직전tick은 이미 그 디바운스
+				//   구간 안의 tick(구역에서 한참 멀어진 지점)이라 엉뚱한 보간이 나온다(2026-08-25
+				//   최정우 추가, 사용자 지시 — dfFirstOutX/Y 필드 주석 참고)
+				if (stRun.dtFirstOut != 0)
+				{
+					stRun.dtLastInZoneTime = InterpolateGateCrossingTime(
+						stFrom.dfX, stFrom.dfY, stRun.dtLastInZoneTime,
+						stRun.dfFirstOutX, stRun.dfFirstOutY, stRun.dtFirstOut,
+						stNode.dfX, stNode.dfY);
+				}
 			}
 		}
 
 		// node_exitcnt 디바운스로 이탈 확정이 몇 틱 늦게 일어나므로(이미 다른 구역에 들어가 있을 수
 		//   있음), occur_dt·stay_seconds 는 이번 틱(dtGPS)이 아니라 구역 안에서 실제로 마지막 확정
-		//   매칭됐던 시각(dtLastInZoneTime)을 써야 한다 — 안 그러면 디바운스 대기 시간이 stay_seconds
-		//   에 섞여 다음 구역 범위와 겹친다(실측 000376_20260819094414 — 실제 마지막 확정은 seq38
-		//   인데 디바운스 대기 중 seq42~44 는 이미 RL-Z00003 로 넘어가 있어 occur_dt 를 그대로 쓰면
-		//   두 구역 G범위가 겹쳐 보임). 세션이 진입 즉시 이 값을 채우므로 0 은 실질적으로 없지만
-		//   방어적으로 폴백 유지 (2026-08-24 최정우 추가)
+		//   매칭됐던 시각(dtLastInZoneTime, 위에서 보간됐으면 그 값)을 써야 한다 — 안 그러면 디바운스
+		//   대기 시간이 stay_seconds 에 섞여 다음 구역 범위와 겹친다(실측 000376_20260819094414 —
+		//   실제 마지막 확정은 seq38인데 디바운스 대기 중 seq42~44 는 이미 RL-Z00003 로 넘어가 있어
+		//   occur_dt 를 그대로 쓰면 두 구역 G범위가 겹쳐 보임). 세션이 진입 즉시 이 값을 채우므로
+		//   0 은 실질적으로 없지만 방어적으로 폴백 유지 (2026-08-24 최정우 추가)
 		time_t dtNodeStepExitTime = (stRun.dtLastInZoneTime != 0) ? stRun.dtLastInZoneTime : stRawLogInfo.dtGPS;
 
 		CHARGE_INSERT_ROW stRow;
@@ -3727,7 +4596,20 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 		ZONE_RUN_SESSION stRun;
 		strncpy(stRun.szRoadID, vtZones[e]->szRoadID, sizeof(stRun.szRoadID) - 1);
 		stRun.szRoadID[sizeof(stRun.szRoadID) - 1] = '\0';
-		stRun.dtEntryTime = stRawLogInfo.dtGPS;
+		// 진입 경계(구역에 들어온 링크의 시작 노드) 통과 시각 보간 — ProcessOpenGateCharge() 동일
+		//   근거 참고. 직전 tick 이 없으면(트립 첫 tick) 그대로 원시 시각 사용
+		//   (2026-08-25 최정우 추가, 사용자 지시)
+		if (pstSession->bHasLastMatch)
+		{
+			stRun.dtEntryTime = InterpolateGateCrossingTime(
+				pstSession->dfLastMatchX, pstSession->dfLastMatchY, pstSession->dtLastMatchGps,
+				stMatchLinkInfo.dfMatchX, stMatchLinkInfo.dfMatchY, stRawLogInfo.dtGPS,
+				stMatchLinkInfo.dfStNodeX, stMatchLinkInfo.dfStNodeY);
+		}
+		else
+		{
+			stRun.dtEntryTime = stRawLogInfo.dtGPS;
+		}
 		stRun.dfEntryX = stMatchLinkInfo.dfMatchX;
 		stRun.dfEntryY = stMatchLinkInfo.dfMatchY;
 		stRun.dfAccumDistM = 0.0;
@@ -3759,7 +4641,7 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 */
 void CRawLogWorker::ProcessParkingCharge(int nThreadId, const sRawLogInfo& stRawLogInfo,
 		VEHICLE_TRIP_SESSION *pstSession, vector<CHARGE_INSERT_ROW> *pvtChargeInserts,
-		bool bMatchTrusted, double dfMatchX, double dfMatchY)
+		bool bTrustedTripEnd, bool bMatchTrusted, double dfMatchX, double dfMatchY)
 {
 	if ((m_stConfig.pcChargeDataLoader == nullptr) || m_stConfig.strChargeInsertSQL.empty())
 		return;
@@ -3813,16 +4695,28 @@ void CRawLogWorker::ProcessParkingCharge(int nThreadId, const sRawLogInfo& stRaw
 	if ((stRawLogInfo.nAccuracyM >= 0) && (static_cast<double>(stRawLogInfo.nAccuracyM) < dfBufM))
 		dfBufM = static_cast<double>(stRawLogInfo.nAccuracyM);
 
-	// ── 판정 규칙 (2026-08-22 재작성 → 2026-08-23 복수 구역 지원) ──────────────────
+	// ── 판정 규칙 (2026-08-22 재작성 → 2026-08-23 복수 구역 지원 → 2026-08-25 규칙4 정지 예외) ──
 	//   규칙1  원시 좌표가 폴리곤 내 + 맵매칭 실패                    → 주정차
 	//   규칙2  원시 좌표가 폴리곤 내 + 매칭 성공 + 매칭 좌표도 같은 폴리곤 내 → 주정차
 	//   규칙4  원시 좌표는 폴리곤 내인데 매칭 좌표는 그 폴리곤 밖     → 통과 중이므로 제외
 	//   폴리곤이 겹쳐 설정될 수 있어(시간대별 규제가 다른 구역 등) 포함하는 구역을 전부 다룬다.
+	//
+	//   규칙4는 "매칭 좌표가 raw 좌표보다 신뢰할 만하다"는 전제인데, 이 전제는 차량이 실제로
+	//   움직여야(방위각·궤적으로 후보 링크를 구분) 성립한다. 정지 상태(SPEED_KMH<1)에서는 그
+	//   구분 신호 자체가 없어 근처 아무 링크에나 확신 있게(bReverseSkip/bClampLowConf/
+	//   bAmbiguousReverse 어디에도 안 걸리는 채로) 잘못 스냅될 수 있다 — 실측
+	//   000370_20260819093236 seq29~71(2분 9초, DRIVE_STATUS=PARKED·SPEED_KMH=0 내내, raw
+	//   좌표는 RL-Z00001 폴리곤 안 그대로)에서 매칭이 인접 링크에 확신 있게 스냅되는 바람에
+	//   규칙4가 전체 구간을 "통과 중"으로 오판 → PARKING 레코드가 한 건도 안 남음(진입
+	//   후보(park_entrycnt)조차 못 쌓임) 확인. 정지 중엔 규칙4를 적용하지 않고 규칙1/2(raw
+	//   기준)로만 판정한다 (2026-08-25 최정우 추가).
+	const bool bLikelyStationary = (stRawLogInfo.fSpeed >= 0.0f) && (stRawLogInfo.fSpeed < 1.0f);
+
 	vector<PZONE_INFO> vtZones;
 	m_stConfig.pcChargeDataLoader->GetParkingZonesContaining(
 		stRawLogInfo.dfX, stRawLogInfo.dfY, dfBufM, &vtZones);
 
-	if (bMatchTrusted && !vtZones.empty())
+	if (bMatchTrusted && !bLikelyStationary && !vtZones.empty())
 	{
 		vector<PZONE_INFO> vtMatch;
 		m_stConfig.pcChargeDataLoader->GetParkingZonesContaining(dfMatchX, dfMatchY, 0.0, &vtMatch);
@@ -3847,7 +4741,9 @@ void CRawLogWorker::ProcessParkingCharge(int nThreadId, const sRawLogInfo& stRaw
 	if (!bSlowEnough)
 		vtZones.clear();
 
-	const bool bTripEnding = (stRawLogInfo.nTripEvent == TRIP_EVENT_END);
+	// ProcessRawLog() 가 스퓨리어스(순서역전) END 검사까지 마친 bTrustedTripEnd 를 그대로 씀
+	//   (2026-08-25 최정우 수정)
+	const bool bTripEnding = bTrustedTripEnd;
 	const bool bThisRowTrusted = stRawLogInfo.bRawVldKnown && stRawLogInfo.bRawVld;
 	// DRIVE_STATUS=PARKED + 속도 0 이면 좌표 변화는 GPS 튐이다 — 거리로 세지 않고 체류만 연장
 	const bool bParkedStill = (stRawLogInfo.nDriveStatus == DRIVE_STATUS_PARKED)

@@ -23,6 +23,37 @@ double HaversineMetersDeg(const double dfLon1, const double dfLat1,
 	return 2.0 * dfR * asin(sqrt(dfA));
 }
 
+// 좌표정수(도×360000) 두 점 사이 방위각(도, 0=북 시계방향) — 경도축(dfX)에 cos(위도) 보정을
+//   곱하지 않으면 고위도·동서방향 세그먼트일수록 각도가 부정확해짐(실측 000376_20260826160622
+//   seq102: 저장된 wDirAng=248 vs 실제 243.26, 오차 4.74도가 154m 세그먼트에서 11.9m 옆으로
+//   밀림 — GetDirAngle()/GetDirAngleDegree() 둘 다 이 보정이 빠져 있었음) (2026-08-26 최정우 추가)
+double BearingDegScaled(const double dfX1Scaled, const double dfY1Scaled,
+		const double dfX2Scaled, const double dfY2Scaled)
+{
+	const double dfLatRad = RAD(((dfY1Scaled + dfY2Scaled) / 2.0) / 360000.0);
+	const double dfDx = (dfX2Scaled - dfX1Scaled) * cos(dfLatRad);
+	const double dfDy = dfY2Scaled - dfY1Scaled;
+	double dfAngle = DEG(atan2(dfDx, dfDy));
+	if (dfAngle < 0) dfAngle += 360.0;
+	else if (dfAngle >= 360.0) dfAngle -= 360.0;
+	return dfAngle;
+}
+
+// 좌표정수(도×360000) 지점에서 방위각(dfBearingDeg)·실거리(dfMeters, m)만큼 이동한 좌표정수 반환.
+//   평면(등장방형) 근사 — 세그먼트 길이(최대 수백m) 범위에서 오차 무시 가능. 경도축은 cos(위도)
+//   보정 필수(안 하면 SgmtMatch() 의 옛 dfVertexDistance 처럼 부풀림/왜곡 발생) (2026-08-26 최정우 추가)
+void OffsetScaledCoordByMeters(const double dfXScaled, const double dfYScaled,
+		const double dfBearingDeg, const double dfMeters, double *pdfXScaled, double *pdfYScaled)
+{
+	const double dfR = 6378137.0;
+	const double dfMetersPerDeg = dfR * RAD(1.0);
+	const double dfLatRad = RAD(dfYScaled / 360000.0);
+	const double dfDLatDeg = (dfMeters * cos(RAD(dfBearingDeg))) / dfMetersPerDeg;
+	const double dfDLonDeg = (dfMeters * sin(RAD(dfBearingDeg))) / (dfMetersPerDeg * cos(dfLatRad));
+	*pdfXScaled = dfXScaled + dfDLonDeg * 360000.0;
+	*pdfYScaled = dfYScaled + dfDLatDeg * 360000.0;
+}
+
 } // namespace
 
 /**
@@ -367,7 +398,16 @@ bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtIn
 	bool bReverseFit = false;
 	// bIgnoreHeading=true(BEGIN 매칭 각도 미참조 실험용, 2026-08-19 최정우 임시 추가)면 heading
 	//   있어도 없는 것처럼 취급 — 하드컷(MM_DIR_MAX_DEG)·소프트 비용 전부 미적용, 거리만으로 판정
-	bool bHasHeading = (!bIgnoreHeading) && (stSgmtMatchInput.nDirAng != NO_ANGLE);
+	// 저속(MM_SPEED_LOW_KMH 이하)이면 heading 도 없는 것처럼 취급 — 정차 중엔 실제 진행방향을
+	//   계산할 수 없어 GPS/OBD 가 관례적으로 0(정북) 등 부정확한 값을 채워 넣는 경우가 흔한데,
+	//   이 값을 그대로 믿고 bReverseFit(역방향 적합) 판정에 쓰면 우연히 세그먼트 역방향과 맞아떨어져
+	//   정차 중 GPS 노이즈를 "역행 의심"으로 오판, reverse_confirm 스트릭을 채워 SKIP 남발 —
+	//   실측 900376_20260826160622 seq123/124/131/132(정차, speed=0, heading=0)로 확인
+	//   (2026-08-26 최정우 추가). 저속일 때 heading 을 안 믿는다는 원칙 자체는 아래 dfAnglePenalty
+	//   가중치(w_a=0)에 이미 있었으나 이 bReverseFit 판정 경로엔 빠져 있었음 — 동일 임계 재사용
+	//   (nSpeed<0=NO_SPEED 는 그대로 heading 신뢰, ContinueMapMatch.cpp:623 브릿지 판정과 동일 관례)
+	bool bHasHeading = (!bIgnoreHeading) && (stSgmtMatchInput.nDirAng != NO_ANGLE)
+		&& ((stSgmtMatchInput.nSpeed < 0) || (stSgmtMatchInput.nSpeed > MM_SPEED_LOW_KMH));
 	if (bHasHeading)
 	{
 		// 양방향 단일 링크 대응: 세그먼트 F→T 방위각과 그 반대(T→F=+180°) 둘 다 비교해
@@ -393,16 +433,20 @@ bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtIn
 	// 진행 각도 차이
 	sint16 nDirAngleDiff = GetAngleDiff(stSgmtInfo.nDirAng, nDirAngle);
 
-	// 요청 좌표(GPS)와 세그먼트 시작점 사이 거리
-	double dfVertexDistance = sqrt(pow(stSgmtMatchInput.stPoint.dfX - stSgmtInfo.stPoint.dfX, 2.0) + pow(stSgmtMatchInput.stPoint.dfY - stSgmtInfo.stPoint.dfY, 2.0));
+	// 요청 좌표(GPS)와 세그먼트 시작점 사이 거리(m) — 예전엔 좌표정수(도×360000) 그대로 Euclidean
+	//   계산해 "좌표정수단위" 값을 썼는데, wLenSgmt(dfSegLenCoord)가 2026-08-24 실제 미터로 수정되면서
+	//   양쪽 단위가 어긋나 클램프(bSgmtClamped)가 남발되는 회귀가 생겼다 — 실측 000376_20260819094414
+	//   seq39~41(세그먼트 22~76% 지점인데 클램프로 SKIP). GetDistanceGEO1 로 실제 GEO 거리(m)로 통일
+	//   (2026-08-26 최정우 수정)
+	double dfVertexDistance = GetDistanceGEO1(stSgmtMatchInput.stPoint, stSgmtInfo.stPoint);
 
 	// ── INTERSECT_LEN (dfIntersectLenSgmt) — GPS 좌표와 세그먼트 교차점 거리(m) (2026-07-11 최정우 수정)
 	//   stSgmtMatchInput.stPoint = GPS(요청) 좌표, stIntersect = 세그먼트 위 교차점(수선의 발 또는 끝점 snap)
 	//   1) nDirAngle     = 세그먼트 시작점 → GPS 방향각
 	//   2) nDirAngleDiff = 세그먼트 방위각 − nDirAngle
-	//   3) dfIntersectSgmtDistance = dfVertexDistance × cos(nDirAngleDiff)   // 좌표 정수단위 투영 길이
-	//   3b) dfSegLenCoord = stSgmtInfo.dfLen  (wLenSgmt, 좌표정수 단위 — dfVertexDistance 와 동일 단위)
-	//   4) stIntersect   = 세그먼트 시작점 + 방위각 × dfIntersectSgmtDistance (범위 밖이면 끝점 snap)
+	//   3) dfIntersectSgmtDistance = dfVertexDistance × cos(nDirAngleDiff)   // 세그먼트 위 투영 길이(m)
+	//   3b) dfSegLenCoord = stSgmtInfo.dfLen  (wLenSgmt, 실제 미터 — dfVertexDistance 와 동일 단위, 2026-08-26 수정)
+	//   4) stIntersect   = 세그먼트 시작점에서 방위각 방향으로 dfIntersectSgmtDistance(m) 이동 (범위 밖이면 끝점 snap)
 	//   5) dfIntersectLenSgmt = GetDistanceGEO1(GPS, stIntersect)             // 최종 GPS↔교차점 거리(m)
 	//   ※ DB INTERSECT_LEN = (int)(dfIntersectLenSgmt + 0.5)
 	double dfIntersectLenSgmt = 0;
@@ -415,18 +459,20 @@ bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtIn
 
 	if ((dfIntersectSgmtDistance <= dfSegLenCoord) && (dfIntersectSgmtDistance >= 0))		// 수선의 발이 세그먼트 위
 	{
-		stIntersect.dfX = stSgmtInfo.stPoint.dfX + fabs(dfIntersectSgmtDistance) * sin(RAD(static_cast<double>(stSgmtInfo.nDirAng)));
-		stIntersect.dfY = stSgmtInfo.stPoint.dfY + fabs(dfIntersectSgmtDistance) * cos(RAD(static_cast<double>(stSgmtInfo.nDirAng)));
+		// 세그먼트 시작점에서 세그먼트 방위각 방향으로 dfIntersectSgmtDistance(m) 이동 — 좌표정수 반환
+		//   (2026-08-26 최정우 수정, dfIntersectSgmtDistance 실제 미터화에 맞춤)
+		OffsetScaledCoordByMeters(stSgmtInfo.stPoint.dfX, stSgmtInfo.stPoint.dfY,
+			static_cast<double>(stSgmtInfo.nDirAng), fabs(dfIntersectSgmtDistance),
+			&stIntersect.dfX, &stIntersect.dfY);
 	}
 	else
 	{
 		// 수선 발이 세그먼트 밖이면 가까운 끝점으로 snap (#C-2)
 		if (dfIntersectSgmtDistance > dfSegLenCoord)
 		{
-			stIntersect.dfX = stSgmtInfo.stPoint.dfX
-				+ dfSegLenCoord * sin(RAD(static_cast<double>(stSgmtInfo.nDirAng)));
-			stIntersect.dfY = stSgmtInfo.stPoint.dfY
-				+ dfSegLenCoord * cos(RAD(static_cast<double>(stSgmtInfo.nDirAng)));
+			OffsetScaledCoordByMeters(stSgmtInfo.stPoint.dfX, stSgmtInfo.stPoint.dfY,
+				static_cast<double>(stSgmtInfo.nDirAng), dfSegLenCoord,
+				&stIntersect.dfX, &stIntersect.dfY);
 		}
 		else
 		{
@@ -631,20 +677,11 @@ sint16 CGISUtil::GetAngleDiff(sint16& nAngle1, sint16& nAngle2)
 */
 bool CGISUtil::GetDirAngle(POINT& stSgmtPoint, POINT& stPoint, sint16 *pnDirAngle)
 {
-	if ((stPoint.dfY - stSgmtPoint.dfY) > 0)
-		*pnDirAngle = DEG(atan((stPoint.dfX - stSgmtPoint.dfX) / (stPoint.dfY - stSgmtPoint.dfY)));
-	else if (((stPoint.dfY - stSgmtPoint.dfY) < 0) && ((stPoint.dfX - stSgmtPoint.dfX) > 0))
-		*pnDirAngle = DEG(atan((stPoint.dfX - stSgmtPoint.dfX) / (stPoint.dfY - stSgmtPoint.dfY))) + 180;
-	else if (((stPoint.dfY - stSgmtPoint.dfY) < 0) && ((stPoint.dfX - stSgmtPoint.dfX) < 0))
-		*pnDirAngle = DEG(atan((stPoint.dfX - stSgmtPoint.dfX) / (stPoint.dfY - stSgmtPoint.dfY))) - 180;
-	else if (((stPoint.dfY - stSgmtPoint.dfY) < 0) && (stPoint.dfX == stSgmtPoint.dfX))
-		*pnDirAngle = 180;
-	else if ((stPoint.dfY == stSgmtPoint.dfY) && ((stPoint.dfX - stSgmtPoint.dfX) > 0))
-		*pnDirAngle = 90;
-	else if ((stPoint.dfY == stSgmtPoint.dfY) && ((stPoint.dfX - stSgmtPoint.dfX) < 0))
-		*pnDirAngle = -90;
-	else
+	if ((stPoint.dfX == stSgmtPoint.dfX) && (stPoint.dfY == stSgmtPoint.dfY))
 		return false;
+
+	*pnDirAngle = static_cast<sint16>(round(
+		BearingDegScaled(stSgmtPoint.dfX, stSgmtPoint.dfY, stPoint.dfX, stPoint.dfY)));
 
 	return true;
 }
@@ -657,14 +694,8 @@ bool CGISUtil::GetDirAngle(POINT& stSgmtPoint, POINT& stPoint, sint16 *pnDirAngl
 */
 const sint16 CGISUtil::GetDirAngleDegree(POINT& stPoint1, POINT& stPoint2)
 {
-	sint16 nDirAngle = round(DEG(atan2(stPoint2.dfX - stPoint1.dfX, stPoint2.dfY - stPoint1.dfY)));
-
-	if (nDirAngle < 0)
-		nDirAngle += 360;
-	else if (nDirAngle >= 360)
-		nDirAngle -= 360;
-
-	return nDirAngle;
+	return static_cast<sint16>(round(
+		BearingDegScaled(stPoint1.dfX, stPoint1.dfY, stPoint2.dfX, stPoint2.dfY)));
 }
 
 /**

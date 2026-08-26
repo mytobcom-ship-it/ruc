@@ -403,8 +403,15 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
 					// 반대방향(왕복분리) 짝 링크가 있으면 추가 후보로 평가 — 그래프(TURNINFO)상
 					//   연결 안 된 물리적 짝 링크를 후보에 끌어와, 비용이 더 낮으면(정방향 적합)
 					//   listAllEntryList 정렬(operator<)로 자연스럽게 우선 선택되게 한다 (2026-08-19 최정우 추가)
+					//   공식 짝이 없으면(CreateData 페어링 실패) 같은 도로명 인접 링크로 대체 탐색
+					//   (2026-08-26 최정우 추가)
 					if (bAllowOppositeCheck)
-						TryOppositeLinkCandidate(stSgmtMatchInput, pstLinkInfo->qwOppositeLinkID, plistMatchEntryList);
+					{
+						if (pstLinkInfo->qwOppositeLinkID != 0)
+							TryOppositeLinkCandidate(stSgmtMatchInput, pstLinkInfo->qwOppositeLinkID, plistMatchEntryList);
+						else
+							TryNearbyRoadNameCandidate(stSgmtMatchInput, pstLinkInfo, stSgmtInfo.qwLinkID, plistMatchEntryList);
+					}
 				}
 				else if (dfBackward > MM_REVERSE_SUSPECT_EPS)
 				{
@@ -475,6 +482,15 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
 					}
 				}
 			}
+			else if ((pstLinkInfo->szRoadName[0] != '\0') && bAllowOppositeCheck
+				&& ((stSgmtMatchInput.nSpeed < 0) || (stSgmtMatchInput.nSpeed > MM_SPEED_LOW_KMH))
+				&& (stMatchEntry.dfIntersectLenSgmt > MM_ROADNAME_SEARCH_MIN_M))
+			{
+				// 뒤로 가지 않는 정상 전진인데도 GPS와 거리가 큼 — 세션이 앵커링된 채 더 가까운
+				//   평행 링크(왕복분리 등)를 놓치고 있을 가능성. 도로명 기준 인접 탐색으로 보완
+				//   (2026-08-26 최정우 추가, MM_ROADNAME_SEARCH_MIN_M 주석 근거)
+				TryNearbyRoadNameCandidate(stSgmtMatchInput, pstLinkInfo, stSgmtInfo.qwLinkID, plistMatchEntryList);
+			}
 		}
 		// 링크가 바뀌는 후보 — 진입/진출 노드 판정 (2026-07-21 최정우 추가 — 진입링크 역행 감지)
 		//   위 역행 페널티/의심 판정은 "같은 링크 위에서 뒤로 감"만 잡아서, 후보 링크 자체가
@@ -496,9 +512,15 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
 			//   방향(진입)이라는 뜻 — heading/거리와 무관하게 표시한다 (2026-07-22 최정우 추가)
 			stMatchEntry.bReverseSuspect = true;
 
-			// 반대방향(왕복분리) 짝 링크가 있으면 추가 후보로 평가 (2026-08-19 최정우 추가)
+			// 반대방향(왕복분리) 짝 링크가 있으면 추가 후보로 평가 — 없으면 같은 도로명 인접
+			//   링크로 대체 탐색 (2026-08-19 최정우 추가, 2026-08-26 최정우 대체탐색 추가)
 			if (bAllowOppositeCheck)
-				TryOppositeLinkCandidate(stSgmtMatchInput, pstLinkInfo->qwOppositeLinkID, plistMatchEntryList);
+			{
+				if (pstLinkInfo->qwOppositeLinkID != 0)
+					TryOppositeLinkCandidate(stSgmtMatchInput, pstLinkInfo->qwOppositeLinkID, plistMatchEntryList);
+				else
+					TryNearbyRoadNameCandidate(stSgmtMatchInput, pstLinkInfo, stSgmtInfo.qwLinkID, plistMatchEntryList);
+			}
 		}
 
 		plistMatchEntryList->push_back(stMatchEntry);
@@ -537,6 +559,97 @@ void CContinueMapMatch::TryOppositeLinkCandidate(SGMT_MATCH_INPUT& stSgmtMatchIn
 	stOppDepthInfo.dwEndSgmtOffset = stOppDepthInfo.dwStartSgmtOffset + pstOppLinkInfo->wSgmtCount;
 
 	LinkSgmtMapMatch(stSgmtMatchInput, stOppDepthInfo, plistMatchEntryList, false);
+}
+
+/**
+ * @brief TryOppositeLinkCandidate 의 대상이 없을 때(공식 짝 링크 미등록) GPS 주변에서 같은
+ *   도로명의 다른 링크를 찾아 추가 후보로 평가
+ * @param[in] stSgmtMatchInput 세그먼트 매칭 입력 정보
+ * @param[in] pstCurLinkInfo 현재(역행 의심) 링크 정보 — 도로명 비교 기준
+ * @param[in] qwCurLinkID 현재 링크 ID — 자기 자신 제외용
+ * @param[out] plistMatchEntryList 검색 정보 목록 — 찾은 후보들의 매칭 결과를 추가로 append
+ * @return void
+ * @remark BridgeNearbyLinkStarts 와 동일한 그리드 반경 탐색(GetNearGridID)을 쓰지만, "막다른
+ *   링크 끝점 근처"가 아니라 "지금 GPS 위치 근처"에서 찾고, 도로명이 같은 링크만 후보로 인정한다.
+ *   찾은 후보는 bGeometricBridge=true 로 표시해 위상(TURNINFO) 연결 후보보다 근소한 차이로는
+ *   못 이기게 한다(MM_GEOM_BRIDGE_PENALTY, LinkSgmtMapMatch 재사용) (2026-08-26 최정우 추가)
+*/
+void CContinueMapMatch::TryNearbyRoadNameCandidate(SGMT_MATCH_INPUT& stSgmtMatchInput,
+		PLINK_INFO pstCurLinkInfo, const uint64& qwCurLinkID, list<MATCH_ENTRY> *plistMatchEntryList)
+{
+	if ((pstCurLinkInfo == nullptr) || (pstCurLinkInfo->szRoadName[0] == '\0'))
+		return;
+
+	double dfRawX = stSgmtMatchInput.stPoint.dfX / 360000.0;
+	double dfRawY = stSgmtMatchInput.stPoint.dfY / 360000.0;
+
+	uint32 dwGridID = m_cGISUtil.GetGridID(dfRawX, dfRawY);
+	if (dwGridID == static_cast<uint32>(INVALID_GRID_ID))
+		return;
+
+	vector<uint32> vtNearGridIDList;
+	vtNearGridIDList.push_back(dwGridID);
+	m_cGISUtil.GetNearGridID(dwGridID, stSgmtMatchInput, vtNearGridIDList);
+
+	set<uint64> setTried;
+	setTried.insert(qwCurLinkID);
+
+	for (size_t g = 0; g < vtNearGridIDList.size(); ++g)
+	{
+		PGRID_INFO pstGridInfo = m_pcDataLoader->GetGridInfo(vtNearGridIDList[g]);
+		if (!pstGridInfo)
+			continue;
+
+		uint32 dwStart = pstGridInfo->dwSgmtOffset;
+		uint32 dwEnd = dwStart + pstGridInfo->wSgmtCount;
+
+		for (uint32 s = dwStart; s < dwEnd; ++s)
+		{
+			PGRID_SGMT_INFO pstSgmt = m_pcDataLoader->GetGridSgmtInfo(s);
+			if (!pstSgmt)
+				continue;
+			if (setTried.find(pstSgmt->qwLinkID) != setTried.end())
+				continue;
+
+			PLINK_INFO pstCandInfo = m_pcDataLoader->GetLinkInfo(pstSgmt->qwLinkID);
+			if (!pstCandInfo)
+				continue;
+			if (strncmp(pstCandInfo->szRoadName, pstCurLinkInfo->szRoadName, sizeof(pstCandInfo->szRoadName)) != 0)
+				continue;
+
+			// 위상 미연결 후보 배제 — 도로명만 같다고 무조건 받아들이면, 교차로·인터체인지
+			//   밀집구간에서 실제로는 경로와 무관한 다른 구간이 우연히 가까워서 끼어들 수 있다
+			//   (실측 000376_20260826152113 M260: 2520178704 — 직전/직후 링크 어느 쪽과도 위상
+			//   연결이 없는데 1m 이내로 가까워 채택됨). CreateData::ComputeOppositeLinkPairs() 와
+			//   동일한 원리로 "현재 링크 끝점↔후보 시작점"·"현재 링크 시작점↔후보 끝점"이 서로
+			//   가까운(뒤집힌 왕복분리 형태) 경우만 인정한다 (2026-08-26 최정우 추가)
+			POINT stCurSt, stCurEd, stCandSt, stCandEd;
+			stCurSt.dfX = static_cast<double>(pstCurLinkInfo->dwStNodeX);
+			stCurSt.dfY = static_cast<double>(pstCurLinkInfo->dwStNodeY);
+			stCurEd.dfX = static_cast<double>(pstCurLinkInfo->dwEdNodeX);
+			stCurEd.dfY = static_cast<double>(pstCurLinkInfo->dwEdNodeY);
+			stCandSt.dfX = static_cast<double>(pstCandInfo->dwStNodeX);
+			stCandSt.dfY = static_cast<double>(pstCandInfo->dwStNodeY);
+			stCandEd.dfX = static_cast<double>(pstCandInfo->dwEdNodeX);
+			stCandEd.dfY = static_cast<double>(pstCandInfo->dwEdNodeY);
+
+			if ((m_cGISUtil.GetDistanceGEO1(stCurSt, stCandEd) > MM_NODE_BRIDGE_MAX_M)
+				|| (m_cGISUtil.GetDistanceGEO1(stCurEd, stCandSt) > MM_NODE_BRIDGE_MAX_M))
+				continue;
+
+			setTried.insert(pstSgmt->qwLinkID);
+
+			DEPTH_LINK_INFO_DATA stDepthInfo;
+			stDepthInfo.qwLinkID = pstSgmt->qwLinkID;
+			stDepthInfo.dwStartTurnOffset = pstCandInfo->dwTurnOffset;
+			stDepthInfo.dwEndTurnOffset = stDepthInfo.dwStartTurnOffset + pstCandInfo->nTurnCount;
+			stDepthInfo.dwStartSgmtOffset = pstCandInfo->dwSgmtOffset;
+			stDepthInfo.dwEndSgmtOffset = stDepthInfo.dwStartSgmtOffset + pstCandInfo->wSgmtCount;
+			stDepthInfo.bGeometricBridge = true;
+
+			LinkSgmtMapMatch(stSgmtMatchInput, stDepthInfo, plistMatchEntryList, false);
+		}
+	}
 }
 
 /**

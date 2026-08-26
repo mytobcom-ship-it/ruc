@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
 RUC 맵매칭 GPS 시각화 API 서버 (2026-07-10 최정우)
-  - 주변 도로: roadnet.prim_link_info (PSF WGS84, 임시) + prim_rawgps 점/매칭 결과
-  - 레거시: network.moct_link (/api/roads, /api/trip/.../roads)
+  - 주변 도로: ruc.road_link + ruc.prim_rawgps 점/매칭 결과 (2026-08-26 최정우 수정 —
+    roadnet DB(roadnet.prim_link_info, network.moct_link) 참조 전부 제거, 사용자 지시:
+    웹뷰어는 ruc 스키마만 참조. 미사용 레거시 라우트(/api/roads, /api/trip/.../roads)도
+    같이 삭제)
 """
 import configparser
 import json
@@ -57,17 +59,6 @@ def load_config():
     }
 
 
-def get_conn():
-    c = load_config()
-    return psycopg2.connect(
-        host=c["host"],
-        port=c["port"],
-        dbname=c["name"],
-        user=c["userid"],
-        password=c["password"],
-    )
-
-
 def get_conn_points():
     """GPS/매칭 점(prim_rawgps) 전용 연결 — Simulator/MapMatchSvr 가 2026-08-11
     ruc DB(schema: ruc)로 전환해 도로망(roadnet DB)과 분리됨 (2026-08-12 최정우 추가)"""
@@ -98,14 +89,6 @@ def get_conn_remote():
         password=r["password"],
         options="-c default_transaction_read_only=on",
     )
-
-
-def get_link_srid(cur):
-    cur.execute(
-        "SELECT ST_SRID(geom) FROM network.moct_link WHERE geom IS NOT NULL LIMIT 1"
-    )
-    row = cur.fetchone()
-    return int(row[0]) if row and row[0] else 5186
 
 
 @app.route("/app.js")
@@ -565,7 +548,7 @@ def _query_trip_charges_postgis(conn, trip_id, line_buf_m):
             --   폴백한다 (2026-08-22 최정우 추가, 2026-08-24 최정우 수정 — POLY 전용에서 전체 확장
             --   + 과금유형별 진입/진출 방향 반영)
             t_win AS (
-                SELECT ch.trip_seq,
+                SELECT ch.trip_seq, ch.zone_id,
                        CASE WHEN ch.charge_type IN (0, 5)
                             THEN to_timestamp(ch.occur_dt, 'YYYYMMDDHH24MISS')
                                  - (COALESCE(ch.stay_seconds, 0) || ' seconds')::interval
@@ -587,27 +570,43 @@ def _query_trip_charges_postgis(conn, trip_id, line_buf_m):
                 FROM ch WHERE ch.occur_dt IS NOT NULL
                   AND NOT (ch.charge_type IN (2, 3) AND ch.exit_tollgate_id IS NULL)
             ),
+            -- t_rng 원래 범위(s_all/e_all)는 시간창 안의 GPS 전부를 잡아, 게이트 통과시각 보간이
+            --   두 tick 사이 직선거리로 못 가르는 경우(비율이 0~1 밖으로 나가 dtPrev/dtCur 로 클램프,
+            --   InterpolateGateCrossingTime() 참고) 시간창 끝이 "실제로는 구역 밖인" 경계 참조용 tick과
+            --   정확히 같은 시각이 되어 그 tick까지 범위에 끌려들어온다(실측 000376_20260819094414
+            --   RL-Z00002 trip_seq=1 — 실제 소속은 M25~42인데 G/M43까지로 표출됐었음). s_g/e_g·
+            --   s_m/e_m 은 그 안에서 "실제 구역 소속(g_hit/m_hit)"인 tick으로만 다시 좁힌 값 — 시간창
+            --   내부의 SKIP 갭은 여전히 안 끊기고(MIN/MAX라 중간 결측은 무시), 경계의 비소속 tick만
+            --   깎여나간다. 소속 tick이 시간창 안에 하나도 없으면(예외) s_all/e_all 로 폴백
+            --   (2026-08-26 최정우 추가)
             t_rng AS (
-                SELECT w.trip_seq, MIN(p.gps_seq) AS s, MAX(p.gps_seq) AS e
+                SELECT w.trip_seq,
+                       MIN(p.gps_seq) AS s_all, MAX(p.gps_seq) AS e_all,
+                       MIN(p.gps_seq) FILTER (WHERE gh.gps_seq IS NOT NULL) AS s_g,
+                       MAX(p.gps_seq) FILTER (WHERE gh.gps_seq IS NOT NULL) AS e_g,
+                       MIN(p.gps_seq) FILTER (WHERE mh.gps_seq IS NOT NULL) AS s_m,
+                       MAX(p.gps_seq) FILTER (WHERE mh.gps_seq IS NOT NULL) AS e_m
                 FROM t_win w
                 JOIN gps p ON to_timestamp(p.gps_dt, 'YYYYMMDDHH24MISS') BETWEEN w.dt_from AND w.dt_to
+                LEFT JOIN g_hit gh ON gh.road_id = w.zone_id AND gh.gps_seq = p.gps_seq
+                LEFT JOIN m_hit mh ON mh.road_id = w.zone_id AND mh.gps_seq = p.gps_seq
                 GROUP BY w.trip_seq
             )
             SELECT ch.trip_seq, ch.charge_type, ch.zone_id, ch.zone_name,
                    ch.tollgate_id, ch.entry_tollgate_id, ch.exit_tollgate_id,
                    ch.dist_m, ch.speed_kmh, ch.speed_limit_kmh, ch.stay_seconds,
                    ch.occur_dt, ch.charge_yn,
-                   COALESCE(t_rng.s, g_rng.s) AS g_from,
-                   COALESCE(t_rng.e, g_rng.e) AS g_to,
-                   COALESCE(t_rng.s, m_rng.s) AS m_from,
-                   COALESCE(t_rng.e, m_rng.e) AS m_to
+                   COALESCE(t_rng.s_g, t_rng.s_all, g_rng.s) AS g_from,
+                   COALESCE(t_rng.e_g, t_rng.e_all, g_rng.e) AS g_to,
+                   COALESCE(t_rng.s_m, t_rng.s_all, m_rng.s) AS m_from,
+                   COALESCE(t_rng.e_m, t_rng.e_all, m_rng.e) AS m_to
             FROM ch
             LEFT JOIN t_rng ON t_rng.trip_seq = ch.trip_seq
             LEFT JOIN g_rng ON g_rng.road_id = ch.zone_id AND g_rng.rn = ch.zone_rn
             LEFT JOIN m_rng ON m_rng.road_id = ch.zone_id AND m_rng.rn = ch.zone_rn
             -- G 순번(주행 순서) 오름차순. 구역 형상이 없어 G 를 못 구한 행은 뒤로 보내고
             --   그 안에서는 trip_seq 순 (2026-08-22 최정우 수정)
-            ORDER BY COALESCE(t_rng.s, g_rng.s) ASC NULLS LAST, ch.trip_seq
+            ORDER BY COALESCE(t_rng.s_g, t_rng.s_all, g_rng.s) ASC NULLS LAST, ch.trip_seq
             """,
             {"tid": trip_id, "buf": line_buf_m},
         )
@@ -857,99 +856,98 @@ def api_trips_points():
     return jsonify(result)
 
 
-def prim_link_feature(link_id, geojson_text, extra=None):
-    props = {"link_id": link_id}
-    if extra:
-        props.update(extra)
+def _road_link_feature(link_id, road_name, length_m, f_node, t_node, road_type, coords):
+    """ruc.road_link 1행 → GeoJSON Feature. coords 는 jsonb `[[[lon,lat],...]]` — PostGIS
+    geometry 가 아니라 좌표 배열 그대로라 ST_AsGeoJSON 없이 직접 조립한다. 노드 이름
+    (st_nd_name/ed_nd_name)은 ruc 스키마에 별도 노드 테이블이 없어 항상 None — roadnet DB
+    참조를 없애며 감수한 손실(사용자 확인, 2026-08-26 최정우 추가)"""
+    line = coords[0] if coords else []
     return {
         "type": "Feature",
-        "properties": props,
-        "geometry": json.loads(geojson_text),
+        "properties": {
+            "link_id": link_id,
+            "name": road_name,
+            "len": float(length_m) if length_m is not None else None,
+            "st_nd_id": f_node,
+            "st_nd_name": None,
+            "ed_nd_id": t_node,
+            "ed_nd_name": None,
+            # 도로 유형 000:일반 001:교량 002:터널 003:고가 004:지하 (MOCT_LINK.ROAD_TYPE,
+            #   road_link 는 zero-padded 문자열 — int 로 캐스팅 (2026-07-21/2026-08-26 최정우)
+            "road_type": int(road_type) if road_type is not None else None,
+        },
+        "geometry": {"type": "LineString", "coordinates": line},
     }
+
+
+def _meters_to_deg_buffer(lats, buffer_m):
+    """buffer_m(미터)를 위경도 버퍼(도)로 근사 변환. road_link 는 PostGIS geometry 컬럼이
+    없어(coords jsonb) ST_Buffer 를 못 쓰므로, min/max_lon/lat bbox 인덱스(idx_road_link_bbox)
+    기반 사각형 필터로 근사한다 — 경도는 평균위도의 cos 보정 (2026-08-26 최정우 추가)"""
+    avg_lat = (sum(lats) / len(lats)) if lats else 37.5
+    lat_buf = buffer_m / 111320.0
+    lon_buf = buffer_m / (111320.0 * max(math.cos(math.radians(avg_lat)), 0.01))
+    return lon_buf, lat_buf
+
+
+def _query_ruc_roads_near_points(conn, lons, lats, buffer_m):
+    """좌표 배열 주변 도로망(ruc.road_link) 조회 — 호출측이 이미 연 커넥션(로컬/원격 ruc DB
+    무관)을 그대로 받아 쓴다. roadnet DB 참조 제거(사용자 지시, 2026-08-26 최정우 추가)"""
+    if not lons:
+        return []
+    lon_buf, lat_buf = _meters_to_deg_buffer(lats, buffer_m)
+    min_lon, max_lon = min(lons) - lon_buf, max(lons) + lon_buf
+    min_lat, max_lat = min(lats) - lat_buf, max(lats) + lat_buf
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT link_id, road_name, length_m, f_node, t_node, road_type, coords
+            FROM ruc.road_link
+            WHERE min_lon <= %s AND max_lon >= %s
+              AND min_lat <= %s AND max_lat >= %s
+            LIMIT 8000
+            """,
+            (max_lon, min_lon, max_lat, min_lat),
+        )
+        return [_road_link_feature(*row) for row in cur.fetchall()]
 
 
 @app.route("/api/prim/info")
 def api_prim_info():
-    with get_conn() as conn:
+    with get_conn_points() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM roadnet.prim_link_info")
+            cur.execute("SELECT COUNT(*) FROM ruc.road_link")
             cnt = int(cur.fetchone()[0])
-    return jsonify({"table": "roadnet.prim_link_info", "count": cnt})
-
-
-def _query_prim_roads_near_points(lons, lats, buffer_m):
-    """좌표 배열 주변 도로망(roadnet.prim_link_info) 조회 — roadnet DB 커넥션 전용.
-    트립 GPS 좌표는 호출측이 (로컬 ruc DB든 원격 ruc DB든) 이미 조회해서 넘겨준다 —
-    roadnet DB 커넥션 하나로는 다른 DB(ruc)를 직접 조인할 수 없어서 이렇게 분리한다
-    (2026-08-19 최정우 추가)"""
-    if not lons:
-        return []
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                WITH pts AS (
-                    SELECT ST_SetSRID(ST_MakePoint(lon, lat), 4326) AS g
-                    FROM unnest(%s::float8[], %s::float8[]) AS u(lon, lat)
-                ),
-                env AS (
-                    SELECT ST_Buffer(ST_Collect(g)::geography, %s)::geometry AS geom4326
-                    FROM pts
-                )
-                SELECT l.link_id, l.name, l.len,
-                       l.st_nd_id, l.st_nd_name, l.ed_nd_id, l.ed_nd_name,
-                       ST_AsGeoJSON(l.geom) AS geojson, l.road_type
-                FROM roadnet.prim_link_info l
-                CROSS JOIN env e
-                WHERE l.geom IS NOT NULL
-                  AND l.geom && e.geom4326
-                  AND ST_Intersects(l.geom, e.geom4326)
-                LIMIT 8000
-                """,
-                (lons, lats, buffer_m),
-            )
-            features = []
-            for row in cur.fetchall():
-                features.append(prim_link_feature(row[0], row[7], {
-                    "name": row[1],
-                    "len": float(row[2]) if row[2] is not None else None,
-                    "st_nd_id": row[3],
-                    "st_nd_name": row[4],
-                    "ed_nd_id": row[5],
-                    "ed_nd_name": row[6],
-                    # 시설 유형 (0=일반, 1=교량, 2=터널, 3=고가, 4=지하) — hover 표시용 (2026-07-21 최정우 추가)
-                    "road_type": int(row[8]) if row[8] is not None else None,
-                }))
-            return features
+    return jsonify({"table": "ruc.road_link", "count": cnt})
 
 
 @app.route("/api/trip/<path:trip_id>/prim-roads")
 def api_trip_prim_roads(trip_id):
-    """트립 주변 도로망 조회 — 로컬 ruc DB(ruc.prim_rawgps) 기준 (2026-08-19 최정우 수정
-    — 기존 코드가 roadnet.prim_rawgps 를 참조해 2026-08-11 ruc DB 전환 이후 트립은 항상
-    0건이었음)"""
+    """트립 주변 도로망 조회 — ruc.road_link 기준 (2026-08-26 최정우 수정 — roadnet DB
+    참조 제거, 사용자 지시: 웹뷰어는 ruc 스키마 테이블만 참조)"""
     cfg = load_config()
     buffer_m = int(request.args.get("buffer", cfg["road_buffer_m"]))
-    with get_conn_points() as pconn:
-        with pconn.cursor() as pcur:
-            pcur.execute(
+    with get_conn_points() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
                 """
                 SELECT gps_lon, gps_lat FROM ruc.prim_rawgps
                 WHERE trip_id = %s AND gps_lat IS NOT NULL AND gps_lon IS NOT NULL
                 """,
                 (trip_id,),
             )
-            rows = pcur.fetchall()
-    lons = [float(r[0]) for r in rows]
-    lats = [float(r[1]) for r in rows]
-    features = _query_prim_roads_near_points(lons, lats, buffer_m)
+            rows = cur.fetchall()
+        lons = [float(r[0]) for r in rows]
+        lats = [float(r[1]) for r in rows]
+        features = _query_ruc_roads_near_points(conn, lons, lats, buffer_m)
     return jsonify({"type": "FeatureCollection", "features": features})
 
 
 @app.route("/api/remote/trip/<path:trip_id>/prim-roads")
 def api_remote_trip_prim_roads(trip_id):
-    """트립 주변 도로망 조회 — 원격 ruc DB(실서비스 DB) 기준, 읽기전용 연결
-    (2026-08-19 최정우 추가)"""
+    """트립 주변 도로망 조회 — 원격 ruc DB(실서비스 DB) 기준, 읽기전용 연결. 도로망도 같은
+    원격 커넥션의 ruc.road_link 로 조회(2026-08-26 최정우 수정 — roadnet DB 참조 제거,
+    기존엔 점만 원격이고 도로망은 로컬 roadnet DB를 섞어 썼음) (2026-08-19 최정우 추가)"""
     cfg = load_config()
     buffer_m = int(request.args.get("buffer", cfg["road_buffer_m"]))
     conn = get_conn_remote()
@@ -965,62 +963,36 @@ def api_remote_trip_prim_roads(trip_id):
                 (trip_id,),
             )
             rows = cur.fetchall()
-    lons = [float(r[0]) for r in rows]
-    lats = [float(r[1]) for r in rows]
-    features = _query_prim_roads_near_points(lons, lats, buffer_m)
+        lons = [float(r[0]) for r in rows]
+        lats = [float(r[1]) for r in rows]
+        features = _query_ruc_roads_near_points(conn, lons, lats, buffer_m)
     return jsonify({"type": "FeatureCollection", "features": features})
 
 
 @app.route("/api/trips/prim-roads")
 def api_trips_prim_roads():
     """여러 trip 의 주변 도로를 한 번에 조회 — 다중 차량 동시 지도 표시용 (2026-07-23 최정우 추가).
-    /api/trip/<id>/prim-roads 와 동일 패턴이나 envelope 를 여러 trip 점의 union 으로 계산 —
-    ST_Buffer(ST_Collect(...))는 점들의 union 을 버퍼링하는 것이라 trip 마다 각각 버퍼링해
-    합친 것과 동일한 "경로를 따라가는 회랑" 모양이 됨(지리적으로 먼 차량이어도 그 사이
-    거대한 영역이 딸려오지 않음). link_id 기준 자연 중복제거된 단일 FeatureCollection 반환."""
+    ruc.road_link 기준으로 전환(2026-08-26 최정우 수정 — roadnet DB 참조 제거. 기존엔
+    roadnet.prim_rawgps 를 참조해 2026-08-11 ruc DB 전환 이후 항상 0건이었음 — 같은 원인으로
+    이미 고쳤던 /api/trip/<id>/prim-roads 와 동일 버그)."""
     trip_ids = [t for t in request.args.get("trip_ids", "").split(",") if t]
     if not trip_ids:
         return jsonify({"error": "trip_ids required"}), 400
     cfg = load_config()
     buffer_m = int(request.args.get("buffer", cfg["road_buffer_m"]))
-    with get_conn() as conn:
+    with get_conn_points() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                WITH pts AS (
-                    SELECT ST_SetSRID(ST_MakePoint(gps_lon::float8, gps_lat::float8), 4326) AS g
-                    FROM roadnet.prim_rawgps
-                    WHERE trip_id = ANY(%s)
-                      AND gps_lat IS NOT NULL
-                      AND gps_lon IS NOT NULL
-                ),
-                env AS (
-                    SELECT ST_Buffer(ST_Collect(g)::geography, %s)::geometry AS geom4326
-                    FROM pts
-                )
-                SELECT l.link_id, l.name, l.len,
-                       l.st_nd_id, l.st_nd_name, l.ed_nd_id, l.ed_nd_name,
-                       ST_AsGeoJSON(l.geom) AS geojson, l.road_type
-                FROM roadnet.prim_link_info l
-                CROSS JOIN env e
-                WHERE l.geom IS NOT NULL
-                  AND l.geom && e.geom4326
-                  AND ST_Intersects(l.geom, e.geom4326)
-                LIMIT 8000
+                SELECT gps_lon, gps_lat FROM ruc.prim_rawgps
+                WHERE trip_id = ANY(%s) AND gps_lat IS NOT NULL AND gps_lon IS NOT NULL
                 """,
-                (trip_ids, buffer_m),
+                (trip_ids,),
             )
-            features = []
-            for row in cur.fetchall():
-                features.append(prim_link_feature(row[0], row[7], {
-                    "name": row[1],
-                    "len": float(row[2]) if row[2] is not None else None,
-                    "st_nd_id": row[3],
-                    "st_nd_name": row[4],
-                    "ed_nd_id": row[5],
-                    "ed_nd_name": row[6],
-                    "road_type": int(row[8]) if row[8] is not None else None,
-                }))
+            rows = cur.fetchall()
+        lons = [float(r[0]) for r in rows]
+        lats = [float(r[1]) for r in rows]
+        features = _query_ruc_roads_near_points(conn, lons, lats, buffer_m)
     return jsonify({"type": "FeatureCollection", "features": features})
 
 
@@ -1034,79 +1006,27 @@ def api_prim_roads_bbox():
     except (KeyError, ValueError):
         return jsonify({"error": "min_lon,min_lat,max_lon,max_lat required"}), 400
 
-    with get_conn() as conn:
+    with get_conn_points() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT l.link_id, l.name, l.len,
-                       l.st_nd_id, l.st_nd_name, l.ed_nd_id, l.ed_nd_name,
-                       ST_AsGeoJSON(l.geom) AS geojson, l.road_type
-                FROM roadnet.prim_link_info l
-                WHERE l.geom IS NOT NULL
-                  AND l.geom && ST_MakeEnvelope(%s, %s, %s, %s, 4326)
-                  AND ST_Intersects(l.geom, ST_MakeEnvelope(%s, %s, %s, %s, 4326))
+                SELECT link_id, road_name, length_m, f_node, t_node, road_type, coords
+                FROM ruc.road_link
+                WHERE min_lon <= %s AND max_lon >= %s
+                  AND min_lat <= %s AND max_lat >= %s
                 LIMIT 8000
                 """,
-                (min_lon, min_lat, max_lon, max_lat, min_lon, min_lat, max_lon, max_lat),
+                (max_lon, min_lon, max_lat, min_lat),
             )
-            features = []
-            for row in cur.fetchall():
-                features.append(prim_link_feature(row[0], row[7], {
-                    "name": row[1],
-                    "len": float(row[2]) if row[2] is not None else None,
-                    "st_nd_id": row[3],
-                    "st_nd_name": row[4],
-                    "ed_nd_id": row[5],
-                    "ed_nd_name": row[6],
-                    "road_type": int(row[8]) if row[8] is not None else None,
-                }))
+            features = [_road_link_feature(*row) for row in cur.fetchall()]
     return jsonify({"type": "FeatureCollection", "features": features})
 
 
-@app.route("/api/trip/<path:trip_id>/roads")
-def api_trip_roads(trip_id):
-    cfg = load_config()
-    buffer_m = int(request.args.get("buffer", cfg["road_buffer_m"]))
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            link_srid = get_link_srid(cur)
-            cur.execute(
-                """
-                WITH pts AS (
-                    SELECT ST_SetSRID(ST_MakePoint(gps_lon::float8, gps_lat::float8), 4326) AS g
-                    FROM roadnet.prim_rawgps
-                    WHERE trip_id = %s
-                      AND gps_lat IS NOT NULL
-                      AND gps_lon IS NOT NULL
-                ),
-                env AS (
-                    SELECT ST_Buffer(ST_Collect(g)::geography, %s)::geometry AS geom4326
-                    FROM pts
-                )
-                SELECT l.link_id,
-                       ST_AsGeoJSON(ST_Transform(l.geom, 4326)) AS geojson
-                FROM network.moct_link l
-                CROSS JOIN env e
-                WHERE l.geom IS NOT NULL
-                  AND l.geom && ST_Transform(e.geom4326, %s)
-                  AND ST_Intersects(l.geom, ST_Transform(e.geom4326, %s))
-                """,
-                (trip_id, buffer_m, link_srid, link_srid),
-            )
-            features = []
-            for link_id, geojson_text in cur.fetchall():
-                geom = json.loads(geojson_text)
-                features.append({
-                    "type": "Feature",
-                    "properties": {"link_id": link_id},
-                    "geometry": geom,
-                })
-    return jsonify({"type": "FeatureCollection", "features": features})
-
-
-@app.route("/api/roads")
-def api_roads_bbox():
-    """지도 pan/zoom 시 화면 bbox 도로망 (선택) (2026-07-10 최정우)"""
+@app.route("/api/remote/prim/roads")
+def api_remote_prim_roads_bbox():
+    """지도 pan/zoom 시 화면 bbox 도로망 — 원격 ruc DB 기준 (2026-08-26 최정우 추가,
+    /api/prim/roads 의 원격 버전 — 뷰어가 지도를 이동할 때마다 그 영역 도로를 동적으로
+    불러오기 위함, 사용자 지시)"""
     try:
         min_lon = float(request.args["min_lon"])
         min_lat = float(request.args["min_lat"])
@@ -1115,33 +1035,22 @@ def api_roads_bbox():
     except (KeyError, ValueError):
         return jsonify({"error": "min_lon,min_lat,max_lon,max_lat required"}), 400
 
-    with get_conn() as conn:
+    conn = get_conn_remote()
+    if conn is None:
+        return jsonify({"error": "remote_database 설정 없음 (config.ini [remote_database])"}), 404
+    with conn:
         with conn.cursor() as cur:
-            link_srid = get_link_srid(cur)
             cur.execute(
                 """
-                SELECT l.link_id,
-                       ST_AsGeoJSON(ST_Transform(l.geom, 4326)) AS geojson
-                FROM network.moct_link l
-                WHERE l.geom IS NOT NULL
-                  AND l.geom && ST_Transform(
-                        ST_MakeEnvelope(%s, %s, %s, %s, 4326), %s)
-                  AND ST_Intersects(l.geom, ST_Transform(
-                        ST_MakeEnvelope(%s, %s, %s, %s, 4326), %s))
+                SELECT link_id, road_name, length_m, f_node, t_node, road_type, coords
+                FROM ruc.road_link
+                WHERE min_lon <= %s AND max_lon >= %s
+                  AND min_lat <= %s AND max_lat >= %s
                 LIMIT 8000
                 """,
-                (
-                    min_lon, min_lat, max_lon, max_lat, link_srid,
-                    min_lon, min_lat, max_lon, max_lat, link_srid,
-                ),
+                (max_lon, min_lon, max_lat, min_lat),
             )
-            features = []
-            for link_id, geojson_text in cur.fetchall():
-                features.append({
-                    "type": "Feature",
-                    "properties": {"link_id": link_id},
-                    "geometry": json.loads(geojson_text),
-                })
+            features = [_road_link_feature(*row) for row in cur.fetchall()]
     return jsonify({"type": "FeatureCollection", "features": features})
 
 

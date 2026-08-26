@@ -332,7 +332,13 @@
 const DATA = JSON.parse(document.getElementById('geumto-data').textContent);
 
 // canvas 렌더러 — 좌표 점이 많을 때 SVG 대비 확대/축소가 훨씬 가벼움 (2026-08-19 최정우 추가)
-const map = L.map('map', { zoomControl: true, renderer: L.canvas() }).setView(DATA.center, 16);
+// doubleClickZoom 기본 동작(현재 줌에서 1단계만 확대, 클릭 지점으로 정확히 이동은 안 함)
+//   대신, 클릭 지점을 정확히 중심으로 잡고 최초 로딩 줌 레벨까지 이동하는 커스텀 동작을 쓴다
+//   (2026-08-26 최정우 수정, 사용자 지시) — 아래 dblclick 핸들러 참고
+const INITIAL_ZOOM = 16;
+const map = L.map('map', { zoomControl: true, renderer: L.canvas(), doubleClickZoom: false })
+  .setView(DATA.center, INITIAL_ZOOM);
+map.on('dblclick', function (e) { map.setView(e.latlng, INITIAL_ZOOM); });
 
 // 출발·도착 마커 전용 계층 — 확대하면 G/M 순번 라벨에 가려지던 문제 해결 (2026-08-23 최정우 추가).
 //   Leaflet 기본 z-index 는 overlayPane 400 < markerPane 600 < tooltipPane 650 < popupPane 700 이다.
@@ -468,9 +474,13 @@ function renderZones(zones) {
 
     (z.gates || []).forEach(function (g) {
       if (g.lon == null || g.lat == null) return;
+      // 반대방향 짝 구역(예: 강릉 상행/하행)은 게이트가 같은 지점에 겹쳐서, gate_div 만 보고
+      //   좌/우로 라벨을 갈랐더니 서로 다른 구역의 게이트인데 마치 한 화살표의 양끝(반대
+      //   방향을 가리키는 것)처럼 보여 오인하기 쉬웠다 — 라벨에 소속 구역(road_id)을 명시해
+      //   좌/우 배치와 무관하게 바로 구분되게 함 (2026-08-26 최정우 수정, 사용자 지적)
       const m = L.circleMarker([g.lat, g.lon], gateStyle(z.road_id, map.getZoom()))
         .bindTooltip(
-          g.tollgate_id + '(' + gateDivShort(g.gate_div) + ')',
+          g.tollgate_id + ' ' + z.road_id + '(' + gateDivShort(g.gate_div) + ')',
           { permanent: true,
             direction: g.gate_div === 'I' ? 'left' : 'right',
             offset: [g.gate_div === 'I' ? -10 : 10, 0], className: 'link-label' }
@@ -520,6 +530,48 @@ function weightFor(link) { return 3; }
 
 const linkLayer = L.layerGroup().addTo(map);
 let allLinkPolylines = [];
+// 이미 그려진 link_id — 트립 버퍼 로드와 지도 이동 로드가 겹칠 때 중복으로 다시 그리지
+//   않기 위한 집합 (2026-08-26 최정우 추가)
+const loadedLinkIds = new Set();
+
+function renderLinkFeature(f) {
+  const link = f.properties;
+  if (loadedLinkIds.has(link.link_id)) return;
+  loadedLinkIds.add(link.link_id);
+
+  const latlngs = f.geometry.coordinates.map(function (c) { return [c[1], c[0]]; });
+  const pl = L.polyline(latlngs, {
+    color: colorFor(link), weight: weightFor(link), opacity: 0.85
+  }).addTo(linkLayer);
+  // 주행방향 화살표 — 속을 채운 12px 삼각형, 간격 70px 로 짧은 링크에도 최소 한 개는 찍힌다.
+  //   색은 틸(#00796b) + 짙은 테두리 (2026-08-23 최정우 수정).
+  //   지도에 이미 쓰인 16색과 CIE76 ΔE 로 골랐다 — 최소 ΔE 33.6(가장 가까운 게 매칭점 청록
+  //   #00bcd4 이지만 명도가 45 대 71 로 크게 갈린다), 링크 파랑(#1e88e5)과도 충분히 분리된다.
+  //   밝기 조정 이력: 라임 #c6ff00(L93, ΔE43.2) → 너무 밝음 → 연두 #64dd17(L79, ΔE47.2)
+  //   → 더 어둡게 요청 → 틸 #00796b(L45, ΔE33.6).
+  //   초록 계열을 그대로 어�둡히면 개방형(#00a152)·출발마커(#2e7d32)와 겹친다(ΔE 0~12).
+  //   그래서 색상을 청록 쪽으로 틀어 명도를 낮추면서도 분리도를 유지했다.
+  L.polylineDecorator(pl, {
+    patterns: [{
+      offset: '12%', repeat: '70px',
+      symbol: L.Symbol.arrowHead({
+        pixelSize: 12, headAngle: 55, polygon: true,
+        pathOptions: { stroke: true, color: '#e0f2f1', weight: 1.2, opacity: 0.9,
+                       fill: true, fillColor: '#00796b', fillOpacity: 1 }
+      })
+    }]
+  }).addTo(linkLayer);
+  const nm = link.name ? link.name : '(도로명 없음)';
+  pl.bindTooltip(
+    '<b>' + link.link_id + '</b><br/>' + nm + '<br/>' +
+    (link.st_nd_name || link.st_nd_id) + ' → ' + (link.ed_nd_name || link.ed_nd_id) +
+    (link.len != null ? '<br/>' + link.len.toFixed(1) + 'm' : ''),
+    { sticky: true, className: 'link-label' }
+  );
+  pl.on('mouseover', function () { pl.setStyle({ weight: weightFor(link) + 3, opacity: 1 }); });
+  pl.on('mouseout', function () { pl.setStyle({ weight: weightFor(link), opacity: 0.85 }); });
+  allLinkPolylines.push(pl);
+}
 
 async function loadTripRoads(tripId) {
   let data;
@@ -530,44 +582,44 @@ async function loadTripRoads(tripId) {
   }
   linkLayer.clearLayers();
   allLinkPolylines = [];
-  (data.features || []).forEach(function (f) {
-    const latlngs = f.geometry.coordinates.map(function (c) { return [c[1], c[0]]; });
-    const link = f.properties;
-    const pl = L.polyline(latlngs, {
-      color: colorFor(link), weight: weightFor(link), opacity: 0.85
-    }).addTo(linkLayer);
-    // 주행방향 화살표 — 속을 채운 12px 삼각형, 간격 70px 로 짧은 링크에도 최소 한 개는 찍힌다.
-    //   색은 틸(#00796b) + 짙은 테두리 (2026-08-23 최정우 수정).
-    //   지도에 이미 쓰인 16색과 CIE76 ΔE 로 골랐다 — 최소 ΔE 33.6(가장 가까운 게 매칭점 청록
-    //   #00bcd4 이지만 명도가 45 대 71 로 크게 갈린다), 링크 파랑(#1e88e5)과도 충분히 분리된다.
-    //   밝기 조정 이력: 라임 #c6ff00(L93, ΔE43.2) → 너무 밝음 → 연두 #64dd17(L79, ΔE47.2)
-    //   → 더 어둡게 요청 → 틸 #00796b(L45, ΔE33.6).
-    //   초록 계열을 그대로 어�둡히면 개방형(#00a152)·출발마커(#2e7d32)와 겹친다(ΔE 0~12).
-    //   그래서 색상을 청록 쪽으로 틀어 명도를 낮추면서도 분리도를 유지했다.
-    L.polylineDecorator(pl, {
-      patterns: [{
-        offset: '12%', repeat: '70px',
-        symbol: L.Symbol.arrowHead({
-          pixelSize: 12, headAngle: 55, polygon: true,
-          pathOptions: { stroke: true, color: '#e0f2f1', weight: 1.2, opacity: 0.9,
-                         fill: true, fillColor: '#00796b', fillOpacity: 1 }
-        })
-      }]
-    }).addTo(linkLayer);
-    const nm = link.name ? link.name : '(도로명 없음)';
-    pl.bindTooltip(
-      '<b>' + link.link_id + '</b><br/>' + nm + '<br/>' +
-      (link.st_nd_name || link.st_nd_id) + ' → ' + (link.ed_nd_name || link.ed_nd_id) +
-      (link.len != null ? '<br/>' + link.len.toFixed(1) + 'm' : ''),
-      { sticky: true, className: 'link-label' }
-    );
-    pl.on('mouseover', function () { pl.setStyle({ weight: weightFor(link) + 3, opacity: 1 }); });
-    pl.on('mouseout', function () { pl.setStyle({ weight: weightFor(link), opacity: 0.85 }); });
-    allLinkPolylines.push(pl);
-  });
+  loadedLinkIds.clear();
+  (data.features || []).forEach(renderLinkFeature);
   // 링크가 나중에 추가돼 게이트 마커를 덮으므로 다시 맨 앞으로 (2026-08-22 최정우 추가)
   bringGatesToFront();
 }
+
+// ==== 지도 이동 시 그 영역 도로 자동 로드 ====
+// 트립 버퍼 밖으로 지도를 옮기면(예: 판교 트립 보다가 강릉 구역으로 이동) 배경 도로망이
+//   하나도 안 보이던 문제 — 지도가 멈출 때마다(moveend) 현재 화면 bbox 도로를 추가로
+//   불러와 누적 렌더링한다. loadTripRoads 처럼 지우지 않고 더하기만 해서, 트립 선택 때
+//   불러온 도로는 그대로 유지된다 (2026-08-26 최정우 추가, 사용자 지시)
+// 전국 단위로 축소해서 보면 매 이동마다 최대 8000개 링크를 계속 불러와 느려진다 — 과금
+//   구역 설정 지역을 살펴보는 용도로는 그 정도로 확대(도시/지구 단위)했을 때만 불러오면
+//   충분하다. 트립 버퍼 로드(loadTripRoads)는 이 문턱과 무관하게 항상 동작 — 여기서
+//   막는 건 moveend 로 매번 새로 불러오는 배경 도로망뿐 (2026-08-26 최정우 수정,
+//   사용자 지시 — 축소 시 느려지는 문제)
+const VIEWPORT_ROADS_MIN_ZOOM = 13;
+let viewportRoadsTimer = null;
+async function loadViewportRoads() {
+  if (map.getZoom() < VIEWPORT_ROADS_MIN_ZOOM) return;
+  const b = map.getBounds();
+  const url = apiBase() + '/prim/roads'
+    + '?min_lon=' + b.getWest() + '&min_lat=' + b.getSouth()
+    + '&max_lon=' + b.getEast() + '&max_lat=' + b.getNorth();
+  let data;
+  try {
+    data = await fetchJson(url);
+  } catch (e) {
+    console.warn('[viewer] 화면 영역 도로 조회 실패:', e.message);
+    return;
+  }
+  (data.features || []).forEach(renderLinkFeature);
+  bringGatesToFront();
+}
+map.on('moveend', function () {
+  clearTimeout(viewportRoadsTimer);
+  viewportRoadsTimer = setTimeout(loadViewportRoads, 400);
+});
 
 // ---- 체크박스 토글 ----
 function applyChargeLayerVisibility(chk) {

@@ -1174,7 +1174,13 @@ void CBinaryMaker::SetGridSgmtInfo(uint32& dwGridID, const uint64& qwLinkID,
 void CBinaryMaker::ComputeOppositeLinkPairs()
 {
 	const double OPP_MIN_LEN = 50.0;			// 페어링 시도 최소 링크 길이 (m)
-	const double OPP_ENDPOINT_DIST = 15.0;		// 뒤집힌 끝점 매칭 허용 거리 (m, 편도)
+	// 뒤집힌 끝점 매칭 허용 거리 (m, 편도) — 15m→20m (2026-08-26 최정우 수정). 실측
+	//   900376_20260826160622(성덕로 2520125100/2520125200)가 19.0m로 15m를 살짝 넘겨 짝
+	//   인정이 안 됐고, 그 결과 LinkSgmtMapMatch()의 반대편 보호 가드(qwOppositeLinkID!=0 이면
+	//   역방향 적합 후보 배제)가 안 걸려 반대 방향 링크에 최대 19.4m씩 오매칭된 사례가 25개
+	//   트립·875개 GPS 포인트에서 재현됨(전체 재매칭 검증). 상호 최적매칭·ROAD_RANK 일치 조건은
+	//   그대로 유지되어 오탐 방지 안전장치는 안 풀림 — 순수 끝점거리 허용치만 완화
+	const double OPP_ENDPOINT_DIST = 20.0;
 
 	m_mapOppositeLinkID->clear();
 

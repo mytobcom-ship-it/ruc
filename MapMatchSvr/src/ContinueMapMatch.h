@@ -87,6 +87,16 @@ private:
 	// 역행 의심 후보의 반대방향(왕복분리) 짝 링크를 추가 후보로 평가 (2026-08-19 최정우 추가)
 	void TryOppositeLinkCandidate(SGMT_MATCH_INPUT& stSgmtMatchInput,
 		const uint64& qwOppositeLinkID, list<MATCH_ENTRY> *plistMatchEntryList);
+	// TryOppositeLinkCandidate 의 대상(LINK_INFO.qwOppositeLinkID)이 없을 때(CreateData
+	//   ComputeOppositeLinkPairs 가 짝을 못 찾은 경우) 쓰는 대체 경로 — GPS 주변 그리드에서
+	//   같은 도로명(szRoadName)의 다른 링크를 찾아 추가 후보로 평가한다. 트리거 조건은
+	//   TryOppositeLinkCandidate 와 동일(역행 의심)로 그대로 재사용 — "큰 오프셋이면 무조건
+	//   탐색"으로 넓히면 정차 중 등에서 후보가 흔들리는 회귀가 재현된 전례(BridgeNearbyLinkStarts
+	//   주석 참고)가 있어, 이미 검증된 신호에만 얹는다. 실측 900376_20260826160622 seq12~16
+	//   (성덕로 2520125100/200, 페어링 임계값 조정으로 1차 해결되긴 했으나 페어링 자체가 안 되는
+	//   케이스의 일반적 대비책) (2026-08-26 최정우 추가)
+	void TryNearbyRoadNameCandidate(SGMT_MATCH_INPUT& stSgmtMatchInput, PLINK_INFO pstCurLinkInfo,
+		const uint64& qwCurLinkID, list<MATCH_ENTRY> *plistMatchEntryList);
 	// 링크 ID 는 uint64(전국 10자리 코드 기준 지역코드 43 이상은 2^32 초과) — set<uint32> 로 받으면
 	//   삽입/조회 시 조용히 하위 32비트로 잘려 서로 다른 링크가 충돌할 수 있었음(2026-08-14 최정우
 	//   수정 — "소스상 문제" 검토 중 발견, BeginMapMatch 의 동일 목적 집합은 원래부터 set<uint64>)

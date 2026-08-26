@@ -270,6 +270,11 @@ typedef struct sVehicleTripSession
 	sint16							nPendingFinalStatus;					// 보류 행의 확정 MATCH_STATUS(보정 전)
 	int								nPendingIntersectLen;					// 보류 행 INTERSECT_LEN
 	bool							bPendingHasCoords;						// 보류 행 MATCH_LAT/LON 저장 여부
+	// 보류 행이 있는 상태에서 SKIP/ERROR 틱이 연속될 때 "몇 틱째 보류 연장 중인지" — 다음
+	//   정상 매칭이 나올 때까지 SKIP 을 건너뛰고 계속 보류해 경로 일관성 보정 기회를 넓히되,
+	//   MM_PENDING_MAX_HOLD_TICKS 를 넘으면 더는 기다리지 않고 그냥 확정한다(트립이 SKIP만
+	//   계속되다 끝나는 경우 무한 보류 방지) (2026-08-26 최정우 추가)
+	int								nPendingHoldTicks;
 	uint64							qwLastConfirmedLinkID;					// 마지막으로 "신뢰 가능(과금 반영)"하게 커밋된 링크 ID(0=없음) — 보정판단 기준
 	time_t							dtLastConfirmedLinkTime;				// qwLastConfirmedLinkID 가 확정됐던 GPS 시각 — 폐쇄형/구간단속
 																			//   직전링크 이탈 출구판정(bExitOnPrevLink) 시 "실제로 그 링크에 마지막으로
@@ -339,6 +344,7 @@ typedef struct sVehicleTripSession
 		dtSpeedLastZoneTime(0),								// (2026-08-25 최정우 추가)
 		bHasPendingCommit(false),								// (2026-08-21 최정우 추가)
 		nPendingFinalStatus(MATCH_STATUS_PENDING),				// (2026-08-21 최정우 추가)
+		nPendingHoldTicks(0),									// (2026-08-26 최정우 추가)
 		nPendingIntersectLen(-1),								// (2026-08-21 최정우 추가)
 		bPendingHasCoords(false),								// (2026-08-21 최정우 추가)
 		qwLastConfirmedLinkID(0),								// (2026-08-21 최정우 추가)

@@ -648,7 +648,16 @@ bool CGISUtil::GetDirAngle(POINT& stSgmtPoint, POINT& stPoint, sint16 *pnDirAngl
 */
 const sint16 CGISUtil::GetDirAngleDegree(POINT& stPoint1, POINT& stPoint2)
 {
-	sint16 nDirAngle = round(DEG(atan2(stPoint2.dfX - stPoint1.dfX, stPoint2.dfY - stPoint1.dfY)));
+	// 경도축(dfX)에 cos(위도) 보정 없이 atan2 하면 고위도·동서방향 세그먼트일수록 방위각이
+	//   부정확해짐(link.psf 에 저장되는 wDirAng 이 이 함수로 계산됨 — 실측 000376_20260826160622
+	//   seq102: 저장된 wDirAng=248 vs 실제 243.26, 154m 세그먼트에서 11.9m 옆으로 밀림 발견)
+	//   (2026-08-26 최정우 추가). 여기 stPoint.dfX/dfY 는 순수 도(度) 단위(*360000 이전) — MapMatchSvr
+	//   쪽 동일 버그 수정(좌표정수 단위)과는 스케일이 다르므로 RAD() 에 /360000 없이 바로 적용
+	const double dfLatRad = RAD((stPoint1.dfY + stPoint2.dfY) / 2.0);
+	const double dfDx = (stPoint2.dfX - stPoint1.dfX) * cos(dfLatRad);
+	const double dfDy = stPoint2.dfY - stPoint1.dfY;
+
+	sint16 nDirAngle = round(DEG(atan2(dfDx, dfDy)));
 
 	if (nDirAngle < 0)
 		nDirAngle += 360;

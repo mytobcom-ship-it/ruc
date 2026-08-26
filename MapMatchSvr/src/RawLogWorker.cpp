@@ -451,7 +451,13 @@ void CRawLogWorker::AppendStaleParkingCharge(int nThreadId, const string& strDev
 	// park_ttl 초과 — 마지막 신뢰(raw_vld=true) 확인 시점까지만 체류로 인정하고 강제 마감한다.
 	//   디바이스 세션 자체는 지우지 않는다(GPS 는 계속 들어오고 다른 유형 세션은 유효).
 	//   정상 마감 경로와 동일하게 Y/0 로 기록 (2026-08-23 최정우 수정 — 구역별로 처리)
-	const time_t dtNow = time(nullptr);
+	// "지금"은 서버 벽시계가 아니라 이 세션이 처리해온 GPS 타임라인상 최신 시각(dtLastGpsEventTime)을
+	//   쓴다 — 실시간 운영에서는 둘이 거의 같아 동작이 그대로지만, 과거 데이터를 벌크로 재처리할
+	//   때는 벽시계(예: 지금 19시)가 재처리 중인 GPS 시각(예: 그날 15시)보다 몇 시간 앞서 있어
+	//   park_ttl(600초)을 사실상 항상 즉시 초과한 것으로 오판, 연속된 주정차 1건이 여러 건으로
+	//   쪼개지는 버그가 있었다(실측 000376_20260826150010 — 이동·이탈 없이 정지 상태로 6초 간격
+	//   두 레코드로 분리됨). dtLastGpsEventTime==0(비정상 경로)이면 벽시계로 폴백 (2026-08-26 최정우 추가)
+	const time_t dtNow = (pstSession->dtLastGpsEventTime > 0) ? pstSession->dtLastGpsEventTime : time(nullptr);
 	for (size_t i = 0; i < pstSession->vtParkRuns.size(); )
 	{
 		PARK_RUN_SESSION& stRun = pstSession->vtParkRuns[i];
@@ -1870,6 +1876,48 @@ void CRawLogWorker::CommitPendingRow(int nThreadId, VEHICLE_TRIP_SESSION *pstSes
 		}
 	}
 
+	// ── 경로 불연속 보류행 보정 (2026-08-26 최정우 추가) ──
+	//   보류 행의 링크가 직전 신뢰 링크와 위상적으로(같은 노드 공유) 연결 안 됐는데, "다음"
+	//   확정 링크는 직전 신뢰 링크와 곧바로 연결된다면 — 보류 행이 경로에서 뜬 오매칭이라는
+	//   신호. 위 왕복분리 보정(qwOppositeLinkID 공식 짝만 인정)과 달리 원인을 가리지 않고 순수
+	//   노드 연결로만 판단해 더 넓게 잡는다. 좌표/링크는 다른 저신뢰 SKIP과 동일하게 참고용으로
+	//   DB에 그대로 남기고 MATCH_STATUS만 SKIP 재기록 — bMatched(과금 처리 여부)는 이미 위에서
+	//   확정된 값 그대로 두어 과금은 되돌리지 않는다(기존 정책과 동일). bJoinedOppStreak 인
+	//   틱은 저 위 로직이 이미 처리 중이라 건드리지 않는다 (실측 000376_20260826152113
+	//   M260/M261/M262 — M261 도 SKIP 이라 기존 1틱 지연만으로는 M262 까지 못 보고 놓쳤었음,
+	//   ProcessRawLog 의 SKIP 보류연장(MM_PENDING_MAX_HOLD_TICKS)과 짝을 이룸)
+	if (bMatched && bHasNextLinkID && (qwNextLinkID != stMatchLinkInfo.qwLinkID) && !bJoinedOppStreak
+		&& (pstSession->qwLastConfirmedLinkID != 0) && (pstSession->qwLastConfirmedLinkID != stMatchLinkInfo.qwLinkID)
+		&& (m_stConfig.pcDataLoader != nullptr))
+	{
+		PLINK_INFO pstLastLink = m_stConfig.pcDataLoader->GetLinkInfo(pstSession->qwLastConfirmedLinkID);
+		PLINK_INFO pstPendingLinkChk = m_stConfig.pcDataLoader->GetLinkInfo(stMatchLinkInfo.qwLinkID);
+		PLINK_INFO pstNextLinkChk = m_stConfig.pcDataLoader->GetLinkInfo(qwNextLinkID);
+
+		if ((pstLastLink != nullptr) && (pstPendingLinkChk != nullptr) && (pstNextLinkChk != nullptr))
+		{
+			bool bPendingConnected =
+				(pstPendingLinkChk->qwStNodeID == pstLastLink->qwEdNodeID)
+				|| (pstPendingLinkChk->qwStNodeID == pstLastLink->qwStNodeID)
+				|| (pstPendingLinkChk->qwEdNodeID == pstLastLink->qwEdNodeID)
+				|| (pstPendingLinkChk->qwEdNodeID == pstLastLink->qwStNodeID);
+			bool bNextConnectedToLast =
+				(pstNextLinkChk->qwStNodeID == pstLastLink->qwEdNodeID)
+				|| (pstNextLinkChk->qwEdNodeID == pstLastLink->qwEdNodeID);
+
+			if (!bPendingConnected && bNextConnectedToLast)
+			{
+				nFinalStatus = MATCH_STATUS_SKIP;
+				LOGFMTW("[#%02d] path discontinuity corrected!device=[%s] trip_id=[%s] seq=[%u] "
+					"pending_link=[%llu] last_confirmed=[%llu] next=[%llu] -> SKIP",
+					nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRawLogInfo.dwSeqNo,
+					static_cast<unsigned long long>(stMatchLinkInfo.qwLinkID),
+					static_cast<unsigned long long>(pstSession->qwLastConfirmedLinkID),
+					static_cast<unsigned long long>(qwNextLinkID));
+			}
+		}
+	}
+
 	if (bMatched)
 	{
 		const double dfCurX = pstSession->dfLastMatchX;
@@ -2346,6 +2394,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		//   로직으로 확정된다(반대편 짝 링크 1틱 오매칭 보정, [[project_mapmatch_opposite_link_and_begin_heading]]
 		//   과 별개 후속 조치) (2026-08-21 최정우 추가)
 		stSession.bHasPendingCommit = true;
+		stSession.nPendingHoldTicks = 0;						// 새 보류 행 시작 — 연장 카운트 초기화 (2026-08-26 최정우 추가)
 		stSession.stPendingRawLogInfo = stRawLogInfo;
 		stSession.stPendingMatchLinkInfo = stMatchLinkInfo;
 		stSession.nPendingFinalStatus = nFinalStatus;
@@ -2368,10 +2417,23 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		return true;
 	}
 
-	// SKIP/ERROR(또는 bUntrustedMatch) 확정 — 기존과 동일하게 즉시 커밋. 보류 중이던 행이 있으면
-	//   "다음" 링크 참고 없이(이 행은 신뢰 못하는 매칭이라 보정판단에 못 씀) 계산된 값 그대로
-	//   확정한다 (2026-08-21 최정우 추가)
-	CommitPendingRow(nThreadId, &stSession, false, 0, pvtUpdates, pvtChargeInserts);
+	// SKIP/ERROR(또는 bUntrustedMatch) — 이 행 자체는 보정판단에 못 쓰지만(신뢰 못하는 매칭),
+	//   보류 중이던 "다른" 행이 있으면 곧바로 포기하지 않고 MM_PENDING_MAX_HOLD_TICKS 틱까지는
+	//   계속 보류를 연장해 그 다음 정상 매칭이 나올 때까지 기다린다 — SKIP 한 틱 때문에 경로
+	//   일관성 보정(CommitPendingRow 의 "경로 불연속 보류행 보정") 기회를 놓치던 사각지대 보완
+	//   (2026-08-21 최정우 1틱 지연 도입, 2026-08-26 최정우 보류연장 추가 — 실측
+	//   000376_20260826152113 M260/M261/M262)
+	//   트립종료(bTrustedTripEnd)면 더 이상 "다음" GPS 가 안 오므로 보류 연장 없이 즉시 확정한다
+	//   (안 그러면 보류 행이 커밋 한 번 못 받고 세션과 함께 유실됨) (2026-08-26 최정우 추가)
+	if (stSession.bHasPendingCommit && !bTrustedTripEnd
+		&& (stSession.nPendingHoldTicks < MM_PENDING_MAX_HOLD_TICKS))
+	{
+		stSession.nPendingHoldTicks += 1;
+	}
+	else
+	{
+		CommitPendingRow(nThreadId, &stSession, false, 0, pvtUpdates, pvtChargeInserts);
+	}
 
 	// INTERSECT_LEN: GPS↔세그먼트 교차점(MATCH_LAT/LON) 하버사인 거리(m) → 정수 반올림
 	const bool bHasCoords = (bMatched || bOut);

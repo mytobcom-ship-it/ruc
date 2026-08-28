@@ -561,6 +561,18 @@ bool IsRoadTypeCompatible(uint8 nCandRoadType, uint8 nPrevRoadType)
 		return true;
 	if (IsElevatedRoad(nCandRoadType) && IsElevatedRoad(nPrevRoadType))
 		return true;
+	// 일반↔교량 호환 — 교량(BRIDGE)은 하천 위를 지나는 평탄한 시내 구간이 흔해(고가차도와 달리
+	//   고도 변화가 거의 없음) 이 함수가 불리는 Δalt≈0(alt_gap 이내) 분기에서 후보가 교량이라는
+	//   이유만으로 페널티를 주면 정답 후보가 부당하게 배제된다. 실측(link_id=2520216300 교차
+	//   트립 4개·277점, 고도 35~44m로 진입~통과~진출 내내 완전히 평탄 — 실제 고가/교량성 고도
+	//   변화 패턴 전혀 없음, G79 사례) 확인 후 사용자 지시로 추가 (2026-08-28 최정우 추가).
+	//   고가(ELEVATED)는 대상에서 뺌 — 고가차도는 실제로 고도 변화가 뚜렷한 경우가 많아 그
+	//   전제(Δalt≈0인데 고가면 의심)가 여전히 유효함
+	bool bBridgeNormalPair =
+		((nCandRoadType == ROAD_TYPE_BRIDGE) && (nPrevRoadType == ROAD_TYPE_NORMAL))
+		|| ((nCandRoadType == ROAD_TYPE_NORMAL) && (nPrevRoadType == ROAD_TYPE_BRIDGE));
+	if (bBridgeNormalPair)
+		return true;
 	return false;
 }
 

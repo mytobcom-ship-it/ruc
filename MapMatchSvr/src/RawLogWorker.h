@@ -320,6 +320,16 @@ typedef struct sVehicleTripSession
 	//   복귀가 확인되면 한꺼번에 SKIP 재기록한다(CommitPendingRow 참고).
 	uint64							qwOppStreakAnchorLinkID;
 	vector<size_t>					vtOppStreakUpdateIdx;
+	// 같은 링크 ambiguous-reverse SKIP 브릿지 — bAmbiguousReverse 는 정의상 항상 세션 연속매칭
+	//   앵커와 같은 링크에서만 발생(ContinueMapMatch.cpp qwPrevLinkID 비교 조건)하므로, 진행 중이던
+	//   SKIP 런이 나중에 같은 링크로 확정 복귀하면 그 사이 SKIP 전부를 MATCHED로 소급 정정한다.
+	//   링크가 실제로 바뀌면(진짜 이탈) 런을 버리고 SKIP 유지 — 위 vtOppStreakUpdateIdx 와 동일한
+	//   "소급 재기록" 패턴(CommitPendingRow 참고). 좌표/링크는 원래 계산값 그대로라 다시 채울 필요
+	//   없음, MATCH_STATUS만 바꿈. 과금은 애초에 이 tick들에 대해 호출된 적이 없어(신뢰 못하는
+	//   매칭이라 과금 함수 자체를 안 태움) 소급 처리하지 않음 — DB 표시만 정정(사용자 지시,
+	//   2026-08-28 최정우 추가)
+	uint64							qwAmbigReverseRunLinkID;
+	vector<size_t>					vtAmbigReverseRunIdx;
 	// 트립 시작(또는 장시간 SKIP 후) 첫 매칭이 왕복분리 어느 쪽인지 불확실한 구간의 "경쟁 후보"
 	//   추적용 (2026-08-24 최정우 추가, 실측 21트립 중 3건꼴로 재현 확인). qwLastConfirmedLinkID·
 	//   qwOppStreakAnchorLinkID 가 둘 다 0(진짜 앵커도, 확정된 스트릭도 없음)일 때만 쓰인다 —
@@ -394,6 +404,7 @@ typedef struct sVehicleTripSession
 		qwLastConfirmedLinkID(0),	// (2026-08-21 최정우 추가)
 		dtLastConfirmedLinkTime(0),	// (2026-08-24 최정우 추가)
 		qwOppStreakAnchorLinkID(0),	// (2026-08-24 최정우 추가)
+		qwAmbigReverseRunLinkID(0),	// (2026-08-28 최정우 추가)
 		qwStartCandLinkA(0),	// (2026-08-24 최정우 추가)
 		qwStartCandLinkB(0),	// (2026-08-24 최정우 추가)
 		dfPendingPrevMatchX(0.0),	// (2026-08-21 최정우 추가)

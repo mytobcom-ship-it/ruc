@@ -1827,6 +1827,31 @@ void CRawLogWorker::CommitPendingRow(int nThreadId, VEHICLE_TRIP_SESSION *pstSes
 			}
 		}
 	}
+
+	// ── 같은 링크 ambiguous-reverse SKIP 브릿지 해소 (2026-08-28 최정우 추가) ──
+	//   "다음"(bHasNextLinkID) 확정 링크가 진행 중인 런의 링크와 같으면 링크 이탈이 없었다는
+	//   뜻이므로 그 사이 쌓인 SKIP 을 MATCHED 로 소급 재기록한다. 다르면 진짜 이탈로 보고 런만
+	//   버린다(SKIP 유지, DB 재기록 없음) — pstSession 자체(보류 중이던 행)의 매칭 성공 여부와는
+	//   무관하게 "다음" 링크 정보만으로 판정
+	if (bHasNextLinkID && (pstSession->qwAmbigReverseRunLinkID != 0) && !pstSession->vtAmbigReverseRunIdx.empty())
+	{
+		if (qwNextLinkID == pstSession->qwAmbigReverseRunLinkID)
+		{
+			for (size_t i = 0; i < pstSession->vtAmbigReverseRunIdx.size(); ++i)
+			{
+				size_t idx = pstSession->vtAmbigReverseRunIdx[i];
+				if (idx >= pvtUpdates->size()) continue;
+				(*pvtUpdates)[idx].strMatchStatus = "1";
+			}
+			LOGFMTW("[#%02d] ambiguous-reverse %zu-tick same-link bridge!device=[%s] trip_id=[%s] "
+				"link=[%llu] -> MATCHED (charge not retroactively processed)",
+				nThreadId, pstSession->vtAmbigReverseRunIdx.size(), stRawLogInfo.szDeviceKey,
+				stRawLogInfo.szTripID, static_cast<unsigned long long>(pstSession->qwAmbigReverseRunLinkID));
+		}
+		pstSession->qwAmbigReverseRunLinkID = 0;
+		pstSession->vtAmbigReverseRunIdx.clear();
+	}
+
 	// 이번 틱이 스트릭에 새로 편입되는지 — 위 블록 판정 직후, 과금 호출로 qwLastConfirmedLinkID 가
 	//   갱신되기 "전"에 미리 계산해둔다 (2026-08-24 최정우 추가)
 	const bool bJoinedOppStreak = (pstSession->qwOppStreakAnchorLinkID != 0)
@@ -2492,6 +2517,19 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		bHasCoords ? &stMatchLinkInfo.dfMatchX : nullptr,
 		bHasCoords ? stMatchLinkInfo.qwLinkID : 0))
 		return false;
+
+	// 같은 링크 ambiguous-reverse SKIP 브릿지 후보 적립 — 해소/폐기는 CommitPendingRow 가 "다음"
+	//   확정 링크를 볼 때 처리한다(사용자 지시, 2026-08-28 최정우 추가). bAmbiguousReverse 는 정의상
+	//   항상 세션 연속매칭 앵커와 같은 링크에서만 발생하므로 링크 불일치 검사 없이 바로 적립해도 안전
+	if (stMatchLinkInfo.bAmbiguousReverse)
+	{
+		if (stSession.qwAmbigReverseRunLinkID != stMatchLinkInfo.qwLinkID)
+		{
+			stSession.qwAmbigReverseRunLinkID = stMatchLinkInfo.qwLinkID;
+			stSession.vtAmbigReverseRunIdx.clear();
+		}
+		stSession.vtAmbigReverseRunIdx.push_back(pvtUpdates->size() - 1);
+	}
 
 	// END 이벤트면 MATCHED/ERROR/SKIP 무관 세션 종료 (bulk 성공 후 mapSessions.erase)
 	//   bTrustedTripEnd 로 스퓨리어스 END 는 제외(2026-08-25)

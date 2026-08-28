@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>노드·링크 코드값 참조</title>
+<style>
+  :root {
+    --bg: #f8fafc; --panel: #ffffff; --text: #1e293b; --muted: #64748b;
+    --border: #e2e8f0; --accent: #1e88e5; --code-bg: #f1f5f9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a; --panel: #1e293b; --text: #e2e8f0; --muted: #94a3b8;
+      --border: #334155; --accent: #60a5fa; --code-bg: #0b1220;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", sans-serif;
+    line-height: 1.6; font-size: 16px; padding: 28px 32px 60px; max-width: 1100px; margin: 0 auto;
+  }
+  h1 { font-size: 22px; margin: 0 0 6px; }
+  h2 { font-size: 16px; margin: 30px 0 8px; }
+  .subtitle { color: var(--muted); font-size: 14px; margin: 0 0 20px; }
+  .note {
+    background: var(--code-bg); border-left: 4px solid var(--accent); border-radius: 4px;
+    padding: 10px 14px; font-size: 13px; margin: 0 0 20px; line-height: 1.55;
+  }
+  .note b { color: var(--accent); }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 11.5px; }
+  .wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; vertical-align: top; }
+  thead th { background: var(--code-bg); font-size: 12px; }
+  td.code { font-family: Consolas, monospace; font-weight: 700; white-space: nowrap; }
+  td.sym { font-family: Consolas, monospace; font-size: 12px; color: var(--accent); white-space: nowrap; }
+  td.cnt { font-family: Consolas, monospace; font-size: 12px; color: var(--muted); text-align: right; white-space: nowrap; }
+  .field-meta { color: var(--muted); font-size: 12.5px; margin: 0 0 10px; }
+  footer { color: var(--muted); font-size: 12px; margin-top: 30px; border-top: 1px solid var(--border); padding-top: 14px; }
+  footer a { color: var(--accent); }
+</style>
+</head>
+<body>
+  <h1>노드·링크 코드값 참조</h1>
+  <p class="subtitle">
+    국토교통부고시 제2023-22호 「지능형교통체계 표준 노드·링크 구축기준」기준 — 노드·링크 기초정보
+    필드의 코드값을 필드별로 정리. MapMatchSvr/CreateData 소스(<code>DataDefine.h</code>)의 enum 심볼명을
+    함께 표기.
+  </p>
+
+  <div class="note">
+    2026-08-27 갱신 — <code>doc/지능형교통체계ITS+표준+노드링크+구축+및+운영지침.PDF</code>(24쪽,
+    [별지2])와 실제 운영 데이터(<code>network.moct_link</code> 155만건, <code>network.moct_node</code>
+    118만건 전수 집계)를 대조해 확정한 값. 상세 근거는 <code>doc/표준노드링크_시설물_도로_코드_분석.html</code>
+    참고.
+  </div>
+
+  <h2>ROAD_TYPE — 도로유형</h2>
+  <p class="field-meta">필드: <code>MOCT_LINK.ROAD_TYPE</code> → <code>LINK_INFO.nRoadType</code> (uint8) · 국문 <code>eLinkRoadType</code></p>
+  <div class="wrap">
+    <table>
+      <thead><tr><th>코드</th><th>enum 심볼</th><th>의미</th><th>전국 건수</th></tr></thead>
+      <tbody>
+        <tr><td class="code">000</td><td class="sym">ROAD_TYPE_NORMAL</td><td>일반도로</td><td class="cnt">1,509,012</td></tr>
+        <tr><td class="code">001</td><td class="sym">ROAD_TYPE_ELEVATED</td><td>고가차도</td><td class="cnt">1,405</td></tr>
+        <tr><td class="code">002</td><td class="sym">ROAD_TYPE_UNDERGROUND</td><td>지하차도</td><td class="cnt">2,459</td></tr>
+        <tr><td class="code">003</td><td class="sym">ROAD_TYPE_BRIDGE</td><td>교량</td><td class="cnt">35,813</td></tr>
+        <tr><td class="code">004</td><td class="sym">ROAD_TYPE_TUNNEL</td><td>터널</td><td class="cnt">6,461</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>NODE_TYPE — 노드유형</h2>
+  <p class="field-meta">필드: <code>MOCT_NODE.NODE_TYPE</code> → <code>LINK_INFO.nStNodeType</code>/<code>nEdNodeType</code> (uint8) · 국문 <code>eLinkNodeType</code></p>
+  <div class="wrap">
+    <table>
+      <thead><tr><th>코드</th><th>enum 심볼</th><th>의미</th><th>전국 건수</th></tr></thead>
+      <tbody>
+        <tr><td class="code">101</td><td class="sym">NODE_TYPE_CROSSROAD</td><td>교차로 (도로교차점)</td><td class="cnt">885,309</td></tr>
+        <tr><td class="code">102</td><td class="sym">NODE_TYPE_ROAD_END</td><td>도로 시·종점</td><td class="cnt">42,566</td></tr>
+        <tr><td class="code">103</td><td class="sym">NODE_TYPE_ATTR_CHANGE</td><td>속성변화점 (도로 부가시설물·운영 변환점 등)</td><td class="cnt">22,057</td></tr>
+        <tr><td class="code">104</td><td class="sym">NODE_TYPE_FACILITY</td><td>도로시설물 (교량·터널·고가·지하차도 등 구조 변환점)</td><td class="cnt">71,692</td></tr>
+        <tr><td class="code">105</td><td class="sym">NODE_TYPE_ADMIN_BOUNDARY</td><td>행정경계 (시·도, 시·군·구 등 변화점)</td><td class="cnt">4,329</td></tr>
+        <tr><td class="code">106</td><td class="sym">NODE_TYPE_RAMP_CONNECT</td><td>연결로접속부 (진출입로, IC·JC 연결로 접속지점)</td><td class="cnt">12,106</td></tr>
+        <tr><td class="code">107</td><td class="sym">NODE_TYPE_MIN_SPACING</td><td>최소노드배치점 (긴 링크의 분할용 노드)</td><td class="cnt">140,398</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="field-meta">현재 이 필드는 저장만 되고 매칭 로직의 조건 분기에는 쓰이지 않음.</p>
+
+  <h2>TURN_TYPE — 회전제한유형</h2>
+  <p class="field-meta">필드: <code>TURNINFO.TURN_TYPE</code> (원본 3자리 코드 유지) · 국문 정의 — 회전 각도가 아니라 회전 허용·제한의 유형</p>
+  <div class="wrap">
+    <table>
+      <thead><tr><th>코드</th><th>enum 심볼</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td class="code">001</td><td class="sym">TURN_TYPE_UNPROTECTED</td><td>비보호회전 (조건부 회전 가능)</td></tr>
+        <tr><td class="code">002</td><td class="sym">TURN_TYPE_BUSONLY</td><td>버스만회전 (버스만 가능, 기타 차량 제한)</td></tr>
+        <tr><td class="code">003</td><td class="sym">TURN_TYPE_NOTURN</td><td>회전금지</td></tr>
+        <tr><td class="code">011</td><td class="sym">TURN_TYPE_UTURN</td><td>U-TURN (가능)</td></tr>
+        <tr><td class="code">012</td><td class="sym">TURN_TYPE_PTURN</td><td>P-TURN (가능)</td></tr>
+        <tr><td class="code">101</td><td class="sym">TURN_TYPE_NOLEFT</td><td>좌회전금지</td></tr>
+        <tr><td class="code">102</td><td class="sym">TURN_TYPE_NOSTRAIGHT</td><td>직진금지</td></tr>
+        <tr><td class="code">103</td><td class="sym">TURN_TYPE_NORIGHT</td><td>우회전금지</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>TURN_OPER — 회전제한운영</h2>
+  <p class="field-meta">필드: <code>TURNINFO.TURN_OPER</code> · 허용/금지 플래그가 아니라 <b>TURN_TYPE 제한의 운영 방식</b></p>
+  <div class="wrap">
+    <table>
+      <thead><tr><th>코드</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td class="code">0</td><td>전일제 — TURN_TYPE의 제한이 하루 종일 운영됨</td></tr>
+        <tr><td class="code">1</td><td>시간제 — TURN_TYPE의 제한이 특정 시간대에만 운영됨</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>ROAD_RANK — 도로등급</h2>
+  <p class="field-meta">필드: <code>MOCT_LINK.ROAD_RANK</code> → <code>LINK_INFO.nRoadRank</code> (uint8) · 국문 <code>eLinkRoadRank</code></p>
+  <div class="wrap">
+    <table>
+      <thead><tr><th>코드</th><th>enum 심볼</th><th>의미</th><th>전국 건수</th></tr></thead>
+      <tbody>
+        <tr><td class="code">101</td><td class="sym">LINK_ROAD_RANK_EXPRESS</td><td>고속국도</td><td class="cnt">28,339</td></tr>
+        <tr><td class="code">102</td><td class="sym">LINK_ROAD_RANK_URBAN</td><td>도시고속국도</td><td class="cnt">3,028</td></tr>
+        <tr><td class="code">103</td><td class="sym">LINK_ROAD_RANK_NATIONAL</td><td>일반국도</td><td class="cnt">141,467</td></tr>
+        <tr><td class="code">104</td><td class="sym">LINK_ROAD_RANK_METRO</td><td>특별·광역시도</td><td class="cnt">253,571</td></tr>
+        <tr><td class="code">105</td><td class="sym">LINK_ROAD_RANK_NATIONAL_LOCAL</td><td>국가지원지방도</td><td class="cnt">41,712</td></tr>
+        <tr><td class="code">106</td><td class="sym">LINK_ROAD_RANK_LOCAL</td><td>지방도</td><td class="cnt">140,144</td></tr>
+        <tr><td class="code">107</td><td class="sym">LINK_ROAD_RANK_CITY</td><td>시·군도</td><td class="cnt">946,889</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <footer>
+    근거: <code>doc/지능형교통체계ITS+표준+노드링크+구축+및+운영지침.PDF</code>(24쪽, [별지2] 기초정보
+    입력방법 및 코드값) · <code>network.moct_link</code>/<code>network.moct_node</code> 전수 집계
+    (2026-08-22) · <code>doc/표준노드링크_시설물_도로_코드_분석.html</code>. 소스 반영:
+    <code>CreateData/src/DataDefine.h</code>, <code>MapMatchSvr/src/DataDefine.h</code> (2026-08-27 최정우).
+  </footer>
+</body>
+</html>

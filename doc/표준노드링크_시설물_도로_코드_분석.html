@@ -42,6 +42,7 @@
     .zero { color:var(--muted); }
     .warn { color:var(--red); font-weight:700; }
     .same { color:var(--green); font-weight:700; }
+    .fixed { color:var(--blue); font-weight:700; }
     .tag { display:inline-block; padding:2px 7px; border-radius:999px; color:#1261a0; background:#e5f2fc; font-size:12px; font-weight:700; }
     .bar { min-width:130px; height:8px; margin-top:6px; overflow:hidden; border-radius:99px; background:#e7edf2; }
     .bar span { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,#2382c1,#20a17b); }
@@ -118,8 +119,12 @@
           </tbody>
         </table>
       </div>
-      <div class="notice danger"><strong>소스 불일치:</strong> <code>DataDefine.h</code>는 `001=교량, 002=터널, 003=고가, 004=지하`로 정의하지만,
-        공식 2023 코드표는 `001=고가차도, 002=지하차도, 003=교량, 004=터널`이다.</div>
+      <div class="notice ok"><strong>정정 완료 (2026-08-27):</strong> <code>DataDefine.h</code>가 `001=교량, 002=터널, 003=고가,
+        004=지하`로 정의돼 있던 것을 공식 2023 코드표(`001=고가차도, 002=지하차도, 003=교량, 004=터널`)에 맞게 수정했다.
+        <code>CreateData/src/DataDefine.h</code>·<code>MapMatchSvr/src/DataDefine.h</code> 양쪽 다 반영, 재빌드·
+        link.psf 재생성·MapMatchSvr 재기동까지 완료(단 link.psf는 이 필드가 원시값 그대로 통과라 내용 변화 없음,
+        md5 동일 확인). 상세: <code>web/docs/node-road-type-codes.html</code>(웹뷰어 좌측 패널
+        "노드·링크 코드값 참조" 링크).</div>
     </section>
 
     <section id="road-rank">
@@ -185,28 +190,31 @@
     </section>
 
     <section id="conflicts">
-      <h2>6. 공식 규격·현재 코드 정의 차이</h2>
+      <h2>6. 공식 규격·현재 코드 정의 차이 (2026-08-27 정정 완료)</h2>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>필드</th><th>코드</th><th>2023 공식 정의</th><th>현재 소스 정의</th><th>판정</th></tr></thead>
+          <thead><tr><th>필드</th><th>코드</th><th>2023 공식 정의</th><th>수정 전 소스</th><th>수정 후 소스</th><th>판정</th></tr></thead>
           <tbody>
-            <tr><td>ROAD_TYPE</td><td class="code">001</td><td>고가차도</td><td>교량</td><td class="warn">불일치</td></tr>
-            <tr><td>ROAD_TYPE</td><td class="code">002</td><td>지하차도</td><td>터널</td><td class="warn">불일치</td></tr>
-            <tr><td>ROAD_TYPE</td><td class="code">003</td><td>교량</td><td>고가차도</td><td class="warn">불일치</td></tr>
-            <tr><td>ROAD_TYPE</td><td class="code">004</td><td>터널</td><td>지하차도</td><td class="warn">불일치</td></tr>
-            <tr><td>NODE_TYPE</td><td class="code">102</td><td>도로 시·종점</td><td>JC</td><td class="warn">불일치</td></tr>
-            <tr><td>NODE_TYPE</td><td class="code">103</td><td>속성변화점</td><td>SA/휴게소</td><td class="warn">불일치</td></tr>
-            <tr><td>NODE_TYPE</td><td class="code">104</td><td>도로시설물</td><td>IC</td><td class="warn">불일치</td></tr>
-            <tr><td>NODE_TYPE</td><td class="code">105</td><td>행정경계</td><td>TG</td><td class="warn">불일치</td></tr>
-            <tr><td>NODE_TYPE</td><td class="code">106</td><td>연결로접속부</td><td>기타</td><td class="warn">불일치</td></tr>
-            <tr><td>NODE_TYPE</td><td class="code">107</td><td>최소노드배치점</td><td>시·군도 노드 등</td><td class="warn">불일치</td></tr>
-            <tr><td>ROAD_RANK</td><td class="code">101~107</td><td>도로등급</td><td>동일</td><td class="same">일치</td></tr>
+            <tr><td>ROAD_TYPE</td><td class="code">001</td><td>고가차도</td><td>교량</td><td>고가차도</td><td class="fixed">정정완료</td></tr>
+            <tr><td>ROAD_TYPE</td><td class="code">002</td><td>지하차도</td><td>터널</td><td>지하차도</td><td class="fixed">정정완료</td></tr>
+            <tr><td>ROAD_TYPE</td><td class="code">003</td><td>교량</td><td>고가차도</td><td>교량</td><td class="fixed">정정완료</td></tr>
+            <tr><td>ROAD_TYPE</td><td class="code">004</td><td>터널</td><td>지하차도</td><td>터널</td><td class="fixed">정정완료</td></tr>
+            <tr><td>NODE_TYPE</td><td class="code">102</td><td>도로 시·종점</td><td>JC</td><td>도로 시·종점</td><td class="fixed">정정완료</td></tr>
+            <tr><td>NODE_TYPE</td><td class="code">103</td><td>속성변화점</td><td>SA/휴게소</td><td>속성변화점</td><td class="fixed">정정완료</td></tr>
+            <tr><td>NODE_TYPE</td><td class="code">104</td><td>도로시설물</td><td>IC</td><td>도로시설물</td><td class="fixed">정정완료</td></tr>
+            <tr><td>NODE_TYPE</td><td class="code">105</td><td>행정경계</td><td>TG</td><td>행정경계</td><td class="fixed">정정완료</td></tr>
+            <tr><td>NODE_TYPE</td><td class="code">106</td><td>연결로접속부</td><td>기타</td><td>연결로접속부</td><td class="fixed">정정완료</td></tr>
+            <tr><td>NODE_TYPE</td><td class="code">107</td><td>최소노드배치점</td><td>시·군도 노드 등</td><td>최소노드배치점</td><td class="fixed">정정완료</td></tr>
+            <tr><td>ROAD_RANK</td><td class="code">101~107</td><td>도로등급</td><td>동일</td><td>동일</td><td class="same">일치(변경 없음)</td></tr>
           </tbody>
         </table>
       </div>
-      <div class="notice ok"><strong>권장:</strong> 바이너리 생성·맵매칭에서 시설물 상태를 사용하기 전에
-        <code>DataDefine.h</code>의 enum과 주석을 공식 2023 코드표로 정정해야 한다. 특히 고도 보조 점수의
-        고가·교량·터널·지하 판정이 반대로 적용될 수 있다.</div>
+      <div class="notice ok"><strong>완료:</strong> <code>CreateData/src/DataDefine.h</code>·<code>MapMatchSvr/src/DataDefine.h</code>의
+        ROAD_TYPE·NODE_TYPE enum과 주석을 공식 2023 코드표로 정정, 양쪽 재빌드 후 link.psf 재생성·배포·
+        MapMatchSvr 재기동까지 반영했다(2026-08-27). NODE_TYPE은 조건 분기에 안 쓰여 동작 영향 없음.
+        ROAD_TYPE은 <code>IsUndergroundRoad()</code>가 보던 값이 4(터널)→2(지하차도)로 바뀌어 고도 보조
+        점수의 지하차도 판정이 이제 올바른 대상에 적용된다(<code>IsElevatedRoad()</code>는 {1,3} 세트
+        체크라 정정과 무관하게 결과 동일).</div>
     </section>
 
     <section id="sources">

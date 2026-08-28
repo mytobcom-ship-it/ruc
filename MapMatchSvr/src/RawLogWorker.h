@@ -29,6 +29,8 @@ typedef struct sZoneRunSession
 {
 	char							szRoadID[20+1];						// 진행 중인 구역 road_id
 	time_t							dtEntryTime;						// 진입 시각
+	uint32							dwEntryGpsSeq;						// dtEntryTime 과 동일 tick 의 GPS_SEQ —
+																		//   PRIM_CHARGEHAND.start_gps_seq 원본 (2026-08-28 최정우 추가)
 	double							dfEntryX;							// 진입 시점 매칭 위치 경도 — from_lon
 	double							dfEntryY;							// 진입 시점 매칭 위치 위도 — from_lat
 	double							dfAccumDistM;						// 진입 이후 누적 이동거리(m)
@@ -44,6 +46,9 @@ typedef struct sZoneRunSession
 																		//   구역내 확정은 seq38 인데 디바운스 대기 중 seq42~44 가 이미
 																		//   RL-Z00003(구간단속)로 넘어가 있어, 이탈 확정 시각(dtGPS)을
 																		//   그대로 쓰면 두 구역 범위가 겹쳐 보임) (2026-08-24 최정우 추가)
+	uint32							dwLastInZoneGpsSeq;					// dtLastInZoneTime 과 동일 tick 의 GPS_SEQ —
+																		//   PRIM_CHARGEHAND.end_gps_seq 원본(OPEN·NODE_STEP)
+																		//   (2026-08-28 최정우 추가)
 	time_t							dtExitCandidateTime;				// "무존" 최초 감지 시각 — 재진입 유예용(면제도로만 사용)
 	int								nExitTicks;							// 이탈 연속 감지 횟수(디바운스) — 일반도로(NODE_STEP)만 사용
 																		//   (2026-08-24 최정우 추가 — 순간 오매칭 1틱으로 세션이
@@ -72,8 +77,8 @@ typedef struct sZoneRunSession
 																		//   "통과함"으로 오판된다 (2026-08-25 최정우 추가)
 
 	sZoneRunSession() :
-		dtEntryTime(0), dfEntryX(0.0), dfEntryY(0.0), dfAccumDistM(0.0),
-		dfLastX(0.0), dfLastY(0.0), qwLastLinkID(0), dtLastInZoneTime(0),
+		dtEntryTime(0), dwEntryGpsSeq(0), dfEntryX(0.0), dfEntryY(0.0), dfAccumDistM(0.0),
+		dfLastX(0.0), dfLastY(0.0), qwLastLinkID(0), dtLastInZoneTime(0), dwLastInZoneGpsSeq(0),
 		dtExitCandidateTime(0), nExitTicks(0),
 		dfFirstOutX(0.0), dfFirstOutY(0.0), dtFirstOut(0),
 		bStartedByTrip(false), bGateCrossed(false),
@@ -89,6 +94,8 @@ typedef struct sParkRunSession
 {
 	char							szRoadID[20+1];						// 진행 중인 구역 road_id
 	time_t							dtEntryTime;						// 세션 시작 시각 — occur_dt(진입 시각)
+	uint32							dwEntryGpsSeq;						// dtEntryTime 과 동일 tick 의 GPS_SEQ —
+																		//   PRIM_CHARGEHAND.start_gps_seq 원본 (2026-08-28 최정우 추가)
 	double							dfEntryX;							// 시작 raw GPS 경도 — from_lon
 	double							dfEntryY;
 	double							dfAccumDistM;						// 누적 이동거리(m)
@@ -99,9 +106,14 @@ typedef struct sParkRunSession
 	time_t							dtLastInZoneTime;					// 마지막으로 조건을 만족한 시각 — 체류 종료 기준
 	double							dfLastInZoneX;
 	double							dfLastInZoneY;
+	uint32							dwLastInZoneGpsSeq;					// dtLastInZoneTime 과 동일 tick 의 GPS_SEQ —
+																		//   PRIM_CHARGEHAND.end_gps_seq 원본(정상 진출) (2026-08-28 최정우 추가)
 	time_t							dtLastConfirmedTime;				// 마지막 raw_vld=true 확인 시각 — park_ttl 기준
 	double							dfLastConfirmedX;
 	double							dfLastConfirmedY;
+	uint32							dwLastConfirmedGpsSeq;				// dtLastConfirmedTime 과 동일 tick 의 GPS_SEQ —
+																		//   PRIM_CHARGEHAND.end_gps_seq 원본(park_ttl 강제마감)
+																		//   (2026-08-28 최정우 추가)
 	// 이탈 디바운스(park_exitcnt)·재진입 유예(park_regrace) 판정에 쓰인 시간을 체류시간에서
 	//   빼기 위해 dtLastInZoneTime을 종료 시각으로 쓰던 기존 방식은, 실제 경계 통과가 그 이후
 	//   ~ 첫 이탈 확인 틱 사이 어딘가라는 사실은 반영 못 해 항상 짧게(under-count) 잡혔다.
@@ -113,9 +125,11 @@ typedef struct sParkRunSession
 	time_t							dtFirstOut;
 
 	sParkRunSession() :
-		dtEntryTime(0), dfEntryX(0.0), dfEntryY(0.0), dfAccumDistM(0.0), dfLastX(0.0), dfLastY(0.0),
+		dtEntryTime(0), dwEntryGpsSeq(0), dfEntryX(0.0), dfEntryY(0.0), dfAccumDistM(0.0),
+		dfLastX(0.0), dfLastY(0.0),
 		nExitTicks(0), dtExitCandidateTime(0), dtLastInZoneTime(0), dfLastInZoneX(0.0),
-		dfLastInZoneY(0.0), dtLastConfirmedTime(0), dfLastConfirmedX(0.0), dfLastConfirmedY(0.0),
+		dfLastInZoneY(0.0), dwLastInZoneGpsSeq(0),
+		dtLastConfirmedTime(0), dfLastConfirmedX(0.0), dfLastConfirmedY(0.0), dwLastConfirmedGpsSeq(0),
 		dfFirstOutX(0.0), dfFirstOutY(0.0), dtFirstOut(0)
 	{ szRoadID[0] = '\0'; }
 } PARK_RUN_SESSION;
@@ -126,10 +140,13 @@ typedef struct sParkCandidate
 	char							szRoadID[20+1];
 	int								nTicks;								// 연속 충족 횟수
 	time_t							dtTime;								// 연속의 첫 좌표 시각
+	uint32							dwGpsSeq;							// dtTime 과 동일 tick 의 GPS_SEQ — 스트릭이 세션으로
+																		//   승격되면 PARK_RUN_SESSION.dwEntryGpsSeq 로 승계
+																		//   (2026-08-28 최정우 추가)
 	double							dfX;								// 연속의 첫 좌표
 	double							dfY;
 
-	sParkCandidate() : nTicks(0), dtTime(0), dfX(0.0), dfY(0.0) { szRoadID[0] = '\0'; }
+	sParkCandidate() : nTicks(0), dtTime(0), dwGpsSeq(0), dfX(0.0), dfY(0.0) { szRoadID[0] = '\0'; }
 } PARK_CANDIDATE;
 
 typedef struct sVehicleTripSession
@@ -168,6 +185,8 @@ typedef struct sVehicleTripSession
 											//   대신 실제 첫 매칭 좌표를 담음 — 아래 참고
 	double							dfEntryFromLon;						// 입구 게이트 링크의 from_node 경도(위와 동일 예외)
 	time_t							dtEntryTime;							// 입구 통과 시각 — occur_dt 로 사용
+	uint32							dwEntryGpsSeq;						// dtEntryTime 과 동일 tick 의 GPS_SEQ —
+																		//   PRIM_CHARGEHAND.start_gps_seq 원본(폐쇄형) (2026-08-28 최정우 추가)
 	// 트립이 이미 폐쇄형 도로 위에서 시작해(버그1, 입구 게이트 확정 못 함) 진입 게이트ID가
 	//   비어있는 경우 — 출구가 나중에 확정되더라도 ZONE_INFO.dfLengthM(구역 전체 등록 길이)를
 	//   쓰면 안 되고, 실제 출발 지점(dfEntryFromLat/Lon, 이 경우 링크 시작점이 아니라 실제
@@ -179,6 +198,9 @@ typedef struct sVehicleTripSession
 	//   게이트 미확인 이탈 시엔 그 고정값을 쓸 근거가 없어 NODE_STEP과 동일한 실시간 누적 방식 도입)
 	double							dfClosedLastX;						// 마지막 확인 매칭 위치 경도
 	double							dfClosedLastY;						// 마지막 확인 매칭 위치 위도
+	uint32							dwClosedLastGpsSeq;					// dfClosedLastX/Y 와 동일 tick 의 GPS_SEQ —
+																		//   PRIM_CHARGEHAND.end_gps_seq 원본(TTL 강제마감 대체값)
+																		//   (2026-08-28 최정우 추가)
 	double							dfClosedAccumDistM;					// 진입 이후 누적 이동거리(m)
 	// qwLastConfirmedLinkID 는 트립 시작 후보(A/B) 판정이 안 끝나면 0에 계속 머물러 있어(진입
 	//   자체가 트립의 첫 확정 링크인 케이스, 실측 000376_20260819140856) 진출 판정의 "직전 링크"
@@ -186,6 +208,9 @@ typedef struct sVehicleTripSession
 	//   추적(2026-08-25 최정우 추가, 사용자 지시 — "다음 맵매칭 좌표/링크로 진출 확인 가능")
 	uint64							qwClosedLastZoneLinkID;					// 구역 안에서 마지막으로 확인된 링크 ID(0=없음)
 	time_t							dtClosedLastZoneTime;					// 위 링크가 확인됐던 GPS 시각
+	uint32							dwClosedLastZoneGpsSeq;					// dtClosedLastZoneTime 과 동일 tick 의 GPS_SEQ —
+																			//   PRIM_CHARGEHAND.end_gps_seq 원본(정상 진출,
+																			//   bExitOnPrevLink 케이스) (2026-08-28 최정우 추가)
 	// "방금 출구 처리한 링크/구역으로 즉시 재진입 방지" 가드는 더 이상 세션에 안 둠 — 세션에 두면
 	//   트립이 끝날 때까지 안 풀려서 같은 구역 재통과(진짜 재진입)까지 막아버리는 버그였음. 실제로
 	//   막아야 하는 범위는 "출구 처리 직후 같은 tick 안에서 바로 이어지는 입구 후보 검사"뿐이라
@@ -196,6 +221,9 @@ typedef struct sVehicleTripSession
 	bool							bInSpeedZone;							// true=입구 통과, 출구 대기 중
 	char							szSpeedZoneRoadId[20+1];				// 진입한 구간단속 구역 road_id
 	time_t							dtSpeedEntryTime;						// 입구 통과 시각 — 평균속도·occur_dt 계산용
+	uint32							dwSpeedEntryGpsSeq;						// dtSpeedEntryTime 과 동일 tick 의 GPS_SEQ —
+																			//   PRIM_CHARGEHAND.start_gps_seq 원본(구간단속)
+																			//   (2026-08-28 최정우 추가)
 	char							szSpeedEntryTollgateId[20+1];			// 입구 게이트 TOLLGATE_ID — from_id/to_id·
 											//   entry/exit_tollgate_id 게이트ID 기반으로 변경(2026-08-20
 											//   최정우 수정, 사용자 지시 — 기존엔 구역 road_id만 쓰고
@@ -209,10 +237,16 @@ typedef struct sVehicleTripSession
 	// 폐쇄형과 동일 이유(2026-08-25 최정우 추가) — ProcessClosedRoadCharge() 필드 주석 참고
 	double							dfSpeedLastX;
 	double							dfSpeedLastY;
+	uint32							dwSpeedLastGpsSeq;						// dfSpeedLastX/Y 와 동일 tick 의 GPS_SEQ —
+																			//   PRIM_CHARGEHAND.end_gps_seq 원본(TTL 강제마감 대체값)
+																			//   (2026-08-28 최정우 추가)
 	double							dfSpeedAccumDistM;
 	// 폐쇄형과 동일 이유(2026-08-25 최정우 추가) — qwClosedLastZoneLinkID 주석 참고
 	uint64							qwSpeedLastZoneLinkID;
 	time_t							dtSpeedLastZoneTime;
+	uint32							dwSpeedLastZoneGpsSeq;					// dtSpeedLastZoneTime 과 동일 tick 의 GPS_SEQ —
+																			//   PRIM_CHARGEHAND.end_gps_seq 원본(정상 진출,
+																			//   bExitOnPrevLink 케이스) (2026-08-28 최정우 추가)
 	// qwSpeedZoneJustExitedLinkID/szSpeedZoneJustExitedRoadId 도 동일 이유로 제거(2026-08-20 최정우 수정) — 위 주석 참고
 
 	// 주정차 트랙 — 게이트/구간단속과 별도 독립 상태(폐쇄형 고속도로 위 정차 등 동시 진행 가능).
@@ -309,57 +343,63 @@ typedef struct sVehicleTripSession
 		dtLastSeen(0),
 		dwLastGpsSeq(0),
 		bStartWarned(false),
-		dfLastMatchX(0.0),									// (2026-07-08 최정우 추가)
-		dfLastMatchY(0.0),									// (2026-07-08 최정우 추가)
-		dtLastMatchGps(0),									// (2026-07-08 최정우 추가)
-		dtLastGpsEventTime(0),									// (2026-08-25 최정우 추가)
-		bHasLastMatch(false),								// (2026-07-08 최정우 추가)
+		dfLastMatchX(0.0),	// (2026-07-08 최정우 추가)
+		dfLastMatchY(0.0),	// (2026-07-08 최정우 추가)
+		dtLastMatchGps(0),	// (2026-07-08 최정우 추가)
+		dtLastGpsEventTime(0),	// (2026-08-25 최정우 추가)
+		bHasLastMatch(false),	// (2026-07-08 최정우 추가)
 		nPrevAltitude(NO_ALTITUDE),
 		nPrevRoadType(ROAD_TYPE_NORMAL),
 		bHasPrevAlt(false),
-		dfLastMatchLinkPos(0.0),							// (2026-07-20 최정우 추가)
-		bHasPrevLinkPos(false),								// (2026-07-20 최정우 추가)
-		nReverseStreak(0),									// (2026-07-21 최정우 추가)
-		bLastPointOk(true),									// (2026-07-21 최정우 추가)
-		nChargeSeq(1),										// (2026-08-12 최정우 추가)
-		bInClosedRoad(false),								// (2026-08-12 최정우 추가)
-		dfEntryFromLat(0.0),									// (2026-08-12 최정우 추가)
-		dfEntryFromLon(0.0),									// (2026-08-12 최정우 추가)
-		dtEntryTime(0),										// (2026-08-12 최정우 추가)
-		bClosedEntryAmbiguous(false),								// (2026-08-25 최정우 추가)
-		dfClosedLastX(0.0),									// (2026-08-25 최정우 추가)
-		dfClosedLastY(0.0),									// (2026-08-25 최정우 추가)
-		dfClosedAccumDistM(0.0),								// (2026-08-25 최정우 추가)
-		qwClosedLastZoneLinkID(0),								// (2026-08-25 최정우 추가)
-		dtClosedLastZoneTime(0),								// (2026-08-25 최정우 추가)
-		bInSpeedZone(false),									// (2026-08-12 최정우 추가)
-		dtSpeedEntryTime(0),									// (2026-08-12 최정우 추가)
-		dfSpeedEntryFromLat(0.0),								// (2026-08-25 최정우 추가)
-		dfSpeedEntryFromLon(0.0),								// (2026-08-25 최정우 추가)
-		bSpeedEntryAmbiguous(false),								// (2026-08-25 최정우 추가)
-		dfSpeedLastX(0.0),									// (2026-08-25 최정우 추가)
-		dfSpeedLastY(0.0),									// (2026-08-25 최정우 추가)
-		dfSpeedAccumDistM(0.0),								// (2026-08-25 최정우 추가)
-		qwSpeedLastZoneLinkID(0),								// (2026-08-25 최정우 추가)
-		dtSpeedLastZoneTime(0),								// (2026-08-25 최정우 추가)
-		bHasPendingCommit(false),								// (2026-08-21 최정우 추가)
-		nPendingFinalStatus(MATCH_STATUS_PENDING),				// (2026-08-21 최정우 추가)
-		nPendingHoldTicks(0),									// (2026-08-26 최정우 추가)
-		nPendingIntersectLen(-1),								// (2026-08-21 최정우 추가)
-		bPendingHasCoords(false),								// (2026-08-21 최정우 추가)
-		qwLastConfirmedLinkID(0),								// (2026-08-21 최정우 추가)
-		dtLastConfirmedLinkTime(0),								// (2026-08-24 최정우 추가)
-		qwOppStreakAnchorLinkID(0),								// (2026-08-24 최정우 추가)
-		qwStartCandLinkA(0),									// (2026-08-24 최정우 추가)
-		qwStartCandLinkB(0),									// (2026-08-24 최정우 추가)
-		dfPendingPrevMatchX(0.0),								// (2026-08-21 최정우 추가)
-		dfPendingPrevMatchY(0.0),								// (2026-08-21 최정우 추가)
-		dtPendingPrevMatchGps(0),								// (2026-08-21 최정우 추가)
-		bPendingHadLastMatch(false),								// (2026-08-21 최정우 추가)
-		dfLastRawTickX(0.0),									// (2026-08-24 최정우 추가)
-		dfLastRawTickY(0.0),									// (2026-08-24 최정우 추가)
-		dtLastRawTick(0),									// (2026-08-24 최정우 추가)
-		bHasLastRawTick(false)									// (2026-08-24 최정우 추가)
+		dfLastMatchLinkPos(0.0),	// (2026-07-20 최정우 추가)
+		bHasPrevLinkPos(false),	// (2026-07-20 최정우 추가)
+		nReverseStreak(0),	// (2026-07-21 최정우 추가)
+		bLastPointOk(true),	// (2026-07-21 최정우 추가)
+		nChargeSeq(1),	// (2026-08-12 최정우 추가)
+		bInClosedRoad(false),	// (2026-08-12 최정우 추가)
+		dfEntryFromLat(0.0),	// (2026-08-12 최정우 추가)
+		dfEntryFromLon(0.0),	// (2026-08-12 최정우 추가)
+		dtEntryTime(0),	// (2026-08-12 최정우 추가)
+		dwEntryGpsSeq(0),	// (2026-08-28 최정우 추가)
+		bClosedEntryAmbiguous(false),	// (2026-08-25 최정우 추가)
+		dfClosedLastX(0.0),	// (2026-08-25 최정우 추가)
+		dfClosedLastY(0.0),	// (2026-08-25 최정우 추가)
+		dwClosedLastGpsSeq(0),	// (2026-08-28 최정우 추가)
+		dfClosedAccumDistM(0.0),	// (2026-08-25 최정우 추가)
+		qwClosedLastZoneLinkID(0),	// (2026-08-25 최정우 추가)
+		dtClosedLastZoneTime(0),	// (2026-08-25 최정우 추가)
+		dwClosedLastZoneGpsSeq(0),	// (2026-08-28 최정우 추가)
+		bInSpeedZone(false),	// (2026-08-12 최정우 추가)
+		dtSpeedEntryTime(0),	// (2026-08-12 최정우 추가)
+		dwSpeedEntryGpsSeq(0),	// (2026-08-28 최정우 추가)
+		dfSpeedEntryFromLat(0.0),	// (2026-08-25 최정우 추가)
+		dfSpeedEntryFromLon(0.0),	// (2026-08-25 최정우 추가)
+		bSpeedEntryAmbiguous(false),	// (2026-08-25 최정우 추가)
+		dfSpeedLastX(0.0),	// (2026-08-25 최정우 추가)
+		dfSpeedLastY(0.0),	// (2026-08-25 최정우 추가)
+		dwSpeedLastGpsSeq(0),	// (2026-08-28 최정우 추가)
+		dfSpeedAccumDistM(0.0),	// (2026-08-25 최정우 추가)
+		qwSpeedLastZoneLinkID(0),	// (2026-08-25 최정우 추가)
+		dtSpeedLastZoneTime(0),	// (2026-08-25 최정우 추가)
+		dwSpeedLastZoneGpsSeq(0),	// (2026-08-28 최정우 추가)
+		dfLastRawTickX(0.0),	// (2026-08-24 최정우 추가)
+		dfLastRawTickY(0.0),	// (2026-08-24 최정우 추가)
+		dtLastRawTick(0),	// (2026-08-24 최정우 추가)
+		bHasLastRawTick(false),	// (2026-08-24 최정우 추가)
+		bHasPendingCommit(false),	// (2026-08-21 최정우 추가)
+		nPendingFinalStatus(MATCH_STATUS_PENDING),	// (2026-08-21 최정우 추가)
+		nPendingIntersectLen(-1),	// (2026-08-21 최정우 추가)
+		bPendingHasCoords(false),	// (2026-08-21 최정우 추가)
+		nPendingHoldTicks(0),	// (2026-08-26 최정우 추가)
+		qwLastConfirmedLinkID(0),	// (2026-08-21 최정우 추가)
+		dtLastConfirmedLinkTime(0),	// (2026-08-24 최정우 추가)
+		qwOppStreakAnchorLinkID(0),	// (2026-08-24 최정우 추가)
+		qwStartCandLinkA(0),	// (2026-08-24 최정우 추가)
+		qwStartCandLinkB(0),	// (2026-08-24 최정우 추가)
+		dfPendingPrevMatchX(0.0),	// (2026-08-21 최정우 추가)
+		dfPendingPrevMatchY(0.0),	// (2026-08-21 최정우 추가)
+		dtPendingPrevMatchGps(0),	// (2026-08-21 최정우 추가)
+		bPendingHadLastMatch(false)	// (2026-08-21 최정우 추가)
 	{
 		szTripId[0] = '\0';									// (2026-07-08 최정우 추가)
 		szEntryTollgateId[0] = '\0';							// (2026-08-12 최정우 추가)
@@ -395,7 +435,8 @@ typedef struct sRawLogUpdateRow
  * @remark PRIM_CHARGEHAND 컬럼 순서(query.sql [charge_insert] 와 반드시 일치): trip_id, device_key,
  *   trip_seq, charge_type, charge_unit, link_id, from_id, to_id, from_lat, from_lon, to_lat, to_lon,
  *   zone_id, zone_name, dist_m, speed_kmh, speed_limit_kmh, occur_dt, trip_start_dt, tollgate_id,
- *   entry_tollgate_id, exit_tollgate_id, reg_dt, upd_dt, charge_yn, charge_status, stay_seconds, trip_end_dt
+ *   entry_tollgate_id, exit_tollgate_id, reg_dt, upd_dt, charge_yn, charge_status, stay_seconds,
+ *   trip_end_dt, start_gps_seq, end_gps_seq (2026-08-28 최정우 수정)
 */
 typedef struct sChargeInsertRow
 {
@@ -430,6 +471,10 @@ typedef struct sChargeInsertRow
 																		//   다른 3종은 빈 값(DB 기본 0) (2026-08-13 최정우 추가)
 	string							strTripEndDt;						// 주정차 TTL 만료 강제마감 전용 — 더 이상 GPS 수신 불가로 판단한 시각.
 																		//   그 외는 빈 값(NULL 유지, 실제 TRIP_EVENT=2 시 [trip_end] UPDATE가 채움) (2026-08-13 최정우 추가)
+	string							strStartGpsSeq;						// 진입 시점 PRIM_RAWGPS.GPS_SEQ — 웹뷰어 G순번과 동일 개념
+																		//   (2026-08-28 최정우 추가)
+	string							strEndGpsSeq;						// 구역 안에서 실제로 마지막 확인된 GPS_SEQ(보간 경계 tick이 아님)
+																		//   (2026-08-28 최정우 추가)
 } CHARGE_INSERT_ROW, *PCHARGE_INSERT_ROW;
 
 /**
@@ -584,7 +629,7 @@ private:
 	//   항상 채움(호출측 로그가 STAY_SECONDS 를 그대로 쓸 수 있게) (사용자 지시, 2026-08-24 최정우 추가)
 	bool BuildParkRow(const PARK_RUN_SESSION& stRun, const string& strTripId,
 		const string& strDeviceKey, int nChargeSeq, time_t dtEnd, double dfEndX, double dfEndY,
-		const char *pszChargeYn, const char *pszChargeStatus, CHARGE_INSERT_ROW *pstRow);
+		uint32 dwEndGpsSeq, const char *pszChargeYn, const char *pszChargeStatus, CHARGE_INSERT_ROW *pstRow);
 	// 주정차 구역 경계 통과 시각 보간 — dfInX/Y(폴리곤 내부로 판정된 점)와 dfOutX/Y(외부로 판정된 점)
 	//   사이를, 각 점의 경계까지 거리 비율로 나눠 실제 경계 통과 시각을 추정한다(등속 직선 이동 가정).
 	//   dfInX/Y 가 실제로 폴리곤 내부가 아니거나(버퍼만으로 판정됐거나) dfOutX/Y 가 이미 내부이면
@@ -625,7 +670,7 @@ private:
 	//   사용자 판단 계승, 2026-08-14)
 	// 면제도로 과금 1행 생성 — 정상 이탈과 TTL 만료 공용 (2026-08-23 최정우 추가)
 	void BuildExemptRow(const ZONE_RUN_SESSION& stRun, const string& strTripId,
-		const string& strDeviceKey, int nChargeSeq, time_t dtEnd, CHARGE_INSERT_ROW *pstRow);
+		const string& strDeviceKey, int nChargeSeq, time_t dtEnd, uint32 dwEndGpsSeq, CHARGE_INSERT_ROW *pstRow);
 	void AppendExpiredExemptZoneCharge(int nThreadId, const string& strDeviceKey,
 		const VEHICLE_TRIP_SESSION& stSession, vector<CHARGE_INSERT_ROW> *pvtOut);
 	// 일반도로(ROAD_KIND=0, NODE_STEP) 진입/이탈 판정 — 비과금도로와 동일 구조(게이트 없이 매칭
@@ -647,13 +692,13 @@ private:
 	//   (사용자 지시 패턴 계승, 2026-08-14 추가)
 	// 일반도로 과금 1행 생성 — 정상 이탈과 TTL 만료가 같은 형식을 쓰도록 공용화 (2026-08-23 최정우 추가)
 	void BuildNodeStepRow(const ZONE_RUN_SESSION& stRun, const string& strTripId,
-		const string& strDeviceKey, int nChargeSeq, time_t dtEnd, CHARGE_INSERT_ROW *pstRow);
+		const string& strDeviceKey, int nChargeSeq, time_t dtEnd, uint32 dwEndGpsSeq, CHARGE_INSERT_ROW *pstRow);
 	void AppendExpiredNodeStepCharge(int nThreadId, const string& strDeviceKey,
 		const VEHICLE_TRIP_SESSION& stSession, vector<CHARGE_INSERT_ROW> *pvtOut);
 	// 개방형 과금 1행 생성 — 정상 이탈과 TTL 만료 공용. bStartedByTrip 에 따라 dist_m 산출
 	//   방식·charge_yn/status 가 갈린다 — ZONE_RUN_SESSION 상단 주석 참고 (2026-08-25 최정우 추가)
 	void BuildOpenZoneRow(const ZONE_RUN_SESSION& stRun, const string& strTripId,
-		const string& strDeviceKey, int nChargeSeq, time_t dtEnd, CHARGE_INSERT_ROW *pstRow);
+		const string& strDeviceKey, int nChargeSeq, time_t dtEnd, uint32 dwEndGpsSeq, CHARGE_INSERT_ROW *pstRow);
 	// TTL 만료로 세션이 지워지기 직전, 아직 열려있는 개방형 run 이면 그 상태 그대로 1건 기록 —
 	//   [trip_abend] UPDATE(query.sql)가 뒤이어 TRIP_END_DT IS NULL 인 이 행을 찾아 N/3(AUDIT)로
 	//   정정한다(다른 유형과 동일한 2단계 처리, AppendExpiredNodeStepCharge 참고) (2026-08-25 최정우 추가)

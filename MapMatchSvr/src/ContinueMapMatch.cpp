@@ -423,9 +423,17 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
 					//   판단 불가: heading 이 없거나(NO_ANGLE) 각도가 애매/큼 → 노이즈라 단정 못 하므로
 					//     좌표는 계산된 값 그대로 두고 SKIP 표시만 얹어 다운스트림이 신뢰하지 않게 한다.
 					//   (2026-07-22 최정우 추가)
+					// 저속(MM_SPEED_LOW_KMH 이하)은 heading 유무와 무관하게 "확실한 노이즈"로도 인정한다 —
+					//   2026-08-26 수정으로 저속일 땐 heading 자체를 없는 것으로 취급(bHasHeading=false)하게
+					//   됐는데, 그 결과 heading 기반 확정 조건을 절대 못 만족해 정차 중 GPS 튐이 매번
+					//   판단불가(SKIP)로 빠지는 부작용이 생겼다. 저속은 heading보다 오히려 더 강한
+					//   "역주행일 리 없다"는 근거이므로(물리적으로 저속 이하 상태에서 후퇴는 GPS 노이즈일
+					//   수밖에 없음) heading 부재를 이걸로 대신 메운다 (사용자 지시, 2026-08-28 최정우 추가)
+					bool bLowSpeedStationary = (stSgmtMatchInput.nSpeed >= 0)
+						&& (stSgmtMatchInput.nSpeed <= MM_SPEED_LOW_KMH);
 					bool bPoorAngle = IsPoorAngleFit(stMatchEntry);
-					bool bDefiniteNoise = stSgmtMatchRes.bHasHeading && !bPoorAngle
-						&& (stMatchEntry.dfIntersectLenSgmt <= MM_CLAMP_SKIP_LEN);
+					bool bDefiniteNoise = (stMatchEntry.dfIntersectLenSgmt <= MM_CLAMP_SKIP_LEN)
+						&& (bLowSpeedStationary || (stSgmtMatchRes.bHasHeading && !bPoorAngle));
 
 					if (bDefiniteNoise)
 					{

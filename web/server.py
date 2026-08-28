@@ -455,17 +455,19 @@ def _query_trip_charges(conn, trip_id, line_buf_m):
 def _query_trip_charges_postgis(conn, trip_id, line_buf_m):
     """trip_id 의 과금 이력(prim_chargehand) + GPS 순번 범위
 
-    prim_chargehand 에는 GPS 순번 컬럼이 없어 prim_rawgps 와 조인해 역산한다.
-      G 순번 : LINE 구역은 M 과 동일 기준(매칭 링크가 구역 link_ids 소속)이라 M 범위와 항상 일치.
-               POLY 구역(주정차)만 형상 포함(ST_Contains)으로 판정하며 M 은 비어 있음.
-               2026-08-22 사용자 지시로 기하(버퍼) 기준에서 변경 — G·M 순번 불일치 해소
-      M 순번 : 매칭 링크(match_link_id)가 그 구역의 link_ids 에 속한 구간
+      G 순번 : prim_chargehand.start_gps_seq~end_gps_seq — 엔진(RawLogWorker)이 진입/구역 안에서
+               실제로 마지막 확인된 tick 을 실시간으로 직접 기록한 값(2026-08-28 최정우 수정 —
+               이전엔 GPS 순번 컬럼이 없어 prim_rawgps 시간창과 조인해 사후 역산했으나, 엔진이
+               직접 채우도록 바뀌면서 그 역산 로직(g_hit/g_run/g_rng, t_rng 의 s_g/e_g)을 제거하고
+               engine 값을 그대로 신뢰한다. 0(과거 미구현 시절 레코드의 기본값)은 NULL 처리)
+      M 순번 : 매칭 링크(match_link_id)가 그 구역의 link_ids 에 속한 구간 — 여전히 prim_rawgps 와
+               조인해 계산(엔진이 따로 기록하지 않음)
     같은 구역을 여러 번 지나면 gps_seq 연속 구간(run)으로 나눠, 구역별 등장 순서대로
     해당 구역의 과금 이력(trip_seq 순)에 하나씩 대응시킨다.
     주정차(POLY)는 link_ids 가 비어 있어 M 순번이 나오지 않는다. (2026-08-22 최정우 추가)
-    G·M 범위 모두 엔진이 확정한 시간창(occur_dt~occur_dt+stay_seconds, t_rng CTE)을 우선
-    적용하며, run 기반 g_rng/m_rng 는 t_rng 가 없을 때만 쓰는 폴백이다 — 구간 내부 맵매칭
-    끊김으로 run 이 둘로 갈려도 대응이 어긋나지 않는다. (2026-08-24 최정우 추가)
+    M 범위는 엔진이 확정한 시간창(occur_dt~occur_dt+stay_seconds, t_rng CTE)을 우선 적용하며,
+    run 기반 m_rng 는 t_rng 가 없을 때만 쓰는 폴백이다 — 구간 내부 맵매칭 끊김으로 run 이 둘로
+    갈려도 대응이 어긋나지 않는다. (2026-08-24 최정우 추가)
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -477,37 +479,6 @@ def _query_trip_charges_postgis(conn, trip_id, line_buf_m):
             gps AS (
                 SELECT gps_seq, gps_lat, gps_lon, match_lat, match_lon, match_link_id, gps_dt
                 FROM ruc.prim_rawgps WHERE trip_id = %(tid)s
-            ),
-            -- G: LINE 구역은 M 과 같은 기준(매칭 링크가 구역 link_ids 에 속함), POLY 구역만 형상 포함
-            --   (2026-08-22 최정우 수정 — 사용자 지시로 G·M 순번을 일치시킴)
-            --   원래는 원시 좌표가 구역선 line_buf_m 이내인지로 G 를 잡았는데, 나란한 옆 도로를
-            --   달릴 때도 버퍼에 걸려 G 가 M 보다 훨씬 넓게 나왔다(실측: 옆 도로 주행 13점이
-            --   구간단속 구역선에서 6.7~18.2m). 매칭 좌표로 바꿔도 옆 링크가 10~12m 라 그대로였고,
-            --   버퍼를 2m 까지 줄여도 M 구간 36개 중 23개(약 64퍼센트)만 일치해 기하 기준으로는
-            --   순번을 맞출 수 없다는 것이 확인됐다. 주정차(POLY)는 link_ids 가 없어 형상 포함으로
-            --   판정하며, 이 경우 M 은 비고 G 만 표시된다.
-            g_hit AS (
-                SELECT z.road_id, p.gps_seq
-                FROM gps p JOIN zone z ON
-                     CASE WHEN z.geom_type = 'POLY'
-                          THEN ST_Contains(z.geom, ST_SetSRID(ST_MakePoint(
-                                   COALESCE(p.match_lon, p.gps_lon),
-                                   COALESCE(p.match_lat, p.gps_lat)), 4326))
-                          ELSE (z.link_ids IS NOT NULL
-                                AND p.match_link_id IN (SELECT jsonb_array_elements_text(z.link_ids)))
-                     END
-                WHERE COALESCE(p.match_lat, p.gps_lat) IS NOT NULL
-                  AND COALESCE(p.match_lon, p.gps_lon) IS NOT NULL
-            ),
-            g_run AS (
-                SELECT road_id, gps_seq,
-                       gps_seq - ROW_NUMBER() OVER (PARTITION BY road_id ORDER BY gps_seq) AS grp
-                FROM g_hit
-            ),
-            g_rng AS (
-                SELECT road_id, MIN(gps_seq) AS s, MAX(gps_seq) AS e,
-                       ROW_NUMBER() OVER (PARTITION BY road_id ORDER BY MIN(gps_seq)) AS rn
-                FROM g_run GROUP BY road_id, grp
             ),
             -- M: 매칭 링크가 구역 link_ids 에 속함
             m_hit AS (
@@ -531,22 +502,18 @@ def _query_trip_charges_postgis(conn, trip_id, line_buf_m):
                        ROW_NUMBER() OVER (PARTITION BY c.zone_id ORDER BY c.trip_seq) AS zone_rn
                 FROM ruc.prim_chargehand c WHERE c.trip_id = %(tid)s
             ),
-            -- G/M 범위를 연속구간(run) 순번 대응으로 구하면, 그 구간 "안에서" 맵매칭이 한 틱이라도
+            -- M 범위를 연속구간(run) 순번 대응으로 구하면, 그 구간 "안에서" 맵매칭이 한 틱이라도
             --   끊기면(SKIP) 실제로는 하나인 과금기록이 run 두 개로 쪼개져 순번 대응이 어긋난다
-            --   (실측 000376_20260819094414 RL-Z00003 trip_seq=5 — G82~93 이 하나의 과금인데
-            --   G84~85 맵매칭 실패로 run 이 [82,83]/[86~93] 둘로 갈려 뒤 run 이 통째로 누락됐었음).
-            --   원래 POLY(주정차)에만 적용하던 "engine 이 이미 확정한 시간창으로 gps_seq 를 복원"하는
-            --   방식을 LINE 구역까지 전부 적용 — 웹뷰어가 재추정하지 않고 엔진이 이미 판정한 구간을
-            --   그대로 신뢰하면 중간에 맵매칭이 몇 틱을 건너뛰어도 항상 정확하다.
+            --   (실측 000376_20260819094414 RL-Z00003 trip_seq=5). "engine 이 이미 확정한 시간창으로
+            --   gps_seq 를 복원"하는 t_rng 를 우선 적용해 이를 방지한다.
             --   주의: occur_dt 의미가 과금유형마다 다르다(RawLogWorker.cpp 실측) — PARKING(4)·
             --   CLOSED_ROAD(2)·SPEED_ZONE(3)·OPEN_ROAD(1)은 "진입"(또는 순간통과) 시각이라 창이
             --   [occur_dt, occur_dt+stay] 이지만, NODE_STEP(0)·EXEMPT(5)는 "진출" 시각으로 기록돼
             --   창이 거꾸로 [occur_dt-stay, occur_dt] 다 — 방향을 안 가리면 진입시각형은 stay_seconds
             --   만큼 미래로 밀려 실제 구간을 완전히 벗어난다(실측 000376_20260819140532 RL-Z00002
-            --   trip_seq=1 — 실제 존재 구간 M24~39인데 진입형 창 적용 시 M39~54로 밀려 M24~31이
-            --   통째로 누락돼 보였음). t_rng 가 못 찾으면(예외 상황) 기존 run 기반 g_rng/m_rng 로
-            --   폴백한다 (2026-08-22 최정우 추가, 2026-08-24 최정우 수정 — POLY 전용에서 전체 확장
-            --   + 과금유형별 진입/진출 방향 반영)
+            --   trip_seq=1). t_rng 가 못 찾으면(예외 상황) 기존 run 기반 m_rng 로 폴백한다
+            --   (2026-08-22 최정우 추가, 2026-08-24 최정우 수정 — POLY 전용에서 전체 확장 + 과금유형별
+            --   진입/진출 방향 반영, 2026-08-28 최정우 수정 — G 관련 부분 제거, M 전용으로 축소)
             t_win AS (
                 SELECT ch.trip_seq, ch.zone_id,
                        CASE WHEN ch.charge_type IN (0, 5)
@@ -574,21 +541,17 @@ def _query_trip_charges_postgis(conn, trip_id, line_buf_m):
             --   두 tick 사이 직선거리로 못 가르는 경우(비율이 0~1 밖으로 나가 dtPrev/dtCur 로 클램프,
             --   InterpolateGateCrossingTime() 참고) 시간창 끝이 "실제로는 구역 밖인" 경계 참조용 tick과
             --   정확히 같은 시각이 되어 그 tick까지 범위에 끌려들어온다(실측 000376_20260819094414
-            --   RL-Z00002 trip_seq=1 — 실제 소속은 M25~42인데 G/M43까지로 표출됐었음). s_g/e_g·
-            --   s_m/e_m 은 그 안에서 "실제 구역 소속(g_hit/m_hit)"인 tick으로만 다시 좁힌 값 — 시간창
-            --   내부의 SKIP 갭은 여전히 안 끊기고(MIN/MAX라 중간 결측은 무시), 경계의 비소속 tick만
-            --   깎여나간다. 소속 tick이 시간창 안에 하나도 없으면(예외) s_all/e_all 로 폴백
-            --   (2026-08-26 최정우 추가)
+            --   RL-Z00002 trip_seq=1). s_m/e_m 은 그 안에서 "실제 구역 소속(m_hit)"인 tick으로만
+            --   다시 좁힌 값 — 시간창 내부의 SKIP 갭은 여전히 안 끊기고(MIN/MAX라 중간 결측은 무시),
+            --   경계의 비소속 tick만 깎여나간다. 소속 tick이 시간창 안에 하나도 없으면(예외) s_all/e_all
+            --   로 폴백 (2026-08-26 최정우 추가, 2026-08-28 최정우 수정 — s_g/e_g/g_hit 조인 제거)
             t_rng AS (
                 SELECT w.trip_seq,
                        MIN(p.gps_seq) AS s_all, MAX(p.gps_seq) AS e_all,
-                       MIN(p.gps_seq) FILTER (WHERE gh.gps_seq IS NOT NULL) AS s_g,
-                       MAX(p.gps_seq) FILTER (WHERE gh.gps_seq IS NOT NULL) AS e_g,
                        MIN(p.gps_seq) FILTER (WHERE mh.gps_seq IS NOT NULL) AS s_m,
                        MAX(p.gps_seq) FILTER (WHERE mh.gps_seq IS NOT NULL) AS e_m
                 FROM t_win w
                 JOIN gps p ON to_timestamp(p.gps_dt, 'YYYYMMDDHH24MISS') BETWEEN w.dt_from AND w.dt_to
-                LEFT JOIN g_hit gh ON gh.road_id = w.zone_id AND gh.gps_seq = p.gps_seq
                 LEFT JOIN m_hit mh ON mh.road_id = w.zone_id AND mh.gps_seq = p.gps_seq
                 GROUP BY w.trip_seq
             )
@@ -596,17 +559,17 @@ def _query_trip_charges_postgis(conn, trip_id, line_buf_m):
                    ch.tollgate_id, ch.entry_tollgate_id, ch.exit_tollgate_id,
                    ch.dist_m, ch.speed_kmh, ch.speed_limit_kmh, ch.stay_seconds,
                    ch.occur_dt, ch.charge_yn,
-                   COALESCE(t_rng.s_g, t_rng.s_all, g_rng.s) AS g_from,
-                   COALESCE(t_rng.e_g, t_rng.e_all, g_rng.e) AS g_to,
+                   NULLIF(ch.start_gps_seq, 0) AS g_from,
+                   NULLIF(ch.end_gps_seq, 0) AS g_to,
                    COALESCE(t_rng.s_m, t_rng.s_all, m_rng.s) AS m_from,
                    COALESCE(t_rng.e_m, t_rng.e_all, m_rng.e) AS m_to
             FROM ch
             LEFT JOIN t_rng ON t_rng.trip_seq = ch.trip_seq
-            LEFT JOIN g_rng ON g_rng.road_id = ch.zone_id AND g_rng.rn = ch.zone_rn
             LEFT JOIN m_rng ON m_rng.road_id = ch.zone_id AND m_rng.rn = ch.zone_rn
-            -- G 순번(주행 순서) 오름차순. 구역 형상이 없어 G 를 못 구한 행은 뒤로 보내고
-            --   그 안에서는 trip_seq 순 (2026-08-22 최정우 수정)
-            ORDER BY COALESCE(t_rng.s_g, t_rng.s_all, g_rng.s) ASC NULLS LAST, ch.trip_seq
+            -- G 순번(주행 순서) 오름차순 — 엔진이 직접 기록한 값이라 항상 채워져 있음(구 레코드의
+            --   0=NULLIF 로 미상 처리된 경우만 뒤로 감), 그 안에서는 trip_seq 순 (2026-08-22 최정우
+            --   수정, 2026-08-28 최정우 수정 — start_gps_seq 기준으로 변경)
+            ORDER BY NULLIF(ch.start_gps_seq, 0) ASC NULLS LAST, ch.trip_seq
             """,
             {"tid": trip_id, "buf": line_buf_m},
         )
@@ -617,12 +580,10 @@ def _query_trip_charges_postgis(conn, trip_id, line_buf_m):
 def _query_trip_charges_no_postgis(conn, trip_id):
     """PostGIS 없는 DB(원격 실서비스 — postgis extension 자체가 미설치)용 폴백.
 
-    POLY(주정차) 구역의 ST_Contains 형상판정을 뺀 버전 — LINE 구역은 원래도 형상이 필요없었고
-    (link_ids 소속 여부만 보면 됨), POLY 는 g_from/g_to 를 t_rng(엔진이 확정한 시간창)에만
-    의존한다 — PARKING 의 occur_dt 는 진입 시각이라 t_rng 가 원래도 정확한 값을 준다. 정식
-    쿼리와 달리 g_rng/m_rng 가 없어 t_rng 를 못 구하는 예외 상황(occur_dt NULL 등)에서는
-    POLY 행의 g_from/g_to 가 비게 되는 게 유일한 차이 — 실측상 흔치 않다.
-    (2026-08-24 최정우 추가)
+    G 순번은 postgis 버전과 동일하게 prim_chargehand.start_gps_seq~end_gps_seq 를 그대로 쓴다
+    (형상판정이 필요 없어 애초에 postgis 유무와 무관 — 2026-08-28 최정우 수정). M 순번(LINE 구역만,
+    매칭 링크가 zone.link_ids 에 속하는 구간)만 이 폴백 특유의 로직 — POLY(주정차)는 형상판정이
+    필요해 여기선 못 구해 항상 t_rng 폴백에 의존한다. (2026-08-24 최정우 추가)
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -691,14 +652,14 @@ def _query_trip_charges_no_postgis(conn, trip_id):
                    ch.tollgate_id, ch.entry_tollgate_id, ch.exit_tollgate_id,
                    ch.dist_m, ch.speed_kmh, ch.speed_limit_kmh, ch.stay_seconds,
                    ch.occur_dt, ch.charge_yn,
-                   COALESCE(t_rng.s, m_rng.s) AS g_from,
-                   COALESCE(t_rng.e, m_rng.e) AS g_to,
+                   NULLIF(ch.start_gps_seq, 0) AS g_from,
+                   NULLIF(ch.end_gps_seq, 0) AS g_to,
                    COALESCE(t_rng.s, m_rng.s) AS m_from,
                    COALESCE(t_rng.e, m_rng.e) AS m_to
             FROM ch
             LEFT JOIN t_rng ON t_rng.trip_seq = ch.trip_seq
             LEFT JOIN m_rng ON m_rng.road_id = ch.zone_id AND m_rng.rn = ch.zone_rn
-            ORDER BY COALESCE(t_rng.s, m_rng.s) ASC NULLS LAST, ch.trip_seq
+            ORDER BY NULLIF(ch.start_gps_seq, 0) ASC NULLS LAST, ch.trip_seq
             """,
             {"tid": trip_id},
         )

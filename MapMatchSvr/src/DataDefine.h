@@ -22,15 +22,24 @@
 /**
  * @enum eLinkRoadType
  * @brief ROAD_TYPE — LINK_INFO.nRoadType (uint8, DBF 숫자 그대로)
- * @remark MOCT_LINK.ROAD_TYPE: 0=일반, 1=교량, 2=터널, 3=고가, 4=지하
+ * @remark MOCT_LINK.ROAD_TYPE: 0=일반, 1=고가, 2=지하, 3=교량, 4=터널 (국토교통부고시
+ *   제2023-22호 공식 코드값 — 2026-08-27 최정우 수정. 기존 enum은 001=교량/002=터널/
+ *   003=고가/004=지하로 정의돼 있었으나 실측(network.moct_link 전국 155만건, 분포
+ *   001:1,405건·002:2,459건·003:35,813건·004:6,461건)과 doc/지능형교통체계ITS+표준+
+ *   노드링크+구축+및+운영지침.PDF 24쪽 대조 결과 공식값과 반대로 정의돼 있었음이 확인돼
+ *   정정함. IsElevatedRoad(){1,3} 세트 체크라 이 스왑과 무관하게 결과 동일하지만,
+ *   IsUndergroundRoad()는 값 4 단독 체크라 정정 후 대상이 터널→지하차도로 바뀜(의도된
+ *   동작 변경 — RoadTypeDirectionPenalty()의 "고도 상승+지하형" 감점 로직이 원래
+ *   지하차도(움푹 파였다 다시 올라오는 구조)를 겨냥한 설계였는데 정정 전엔 터널에
+ *   잘못 적용되고 있었음). 상세: doc/표준노드링크_시설물_도로_코드_분석.html
 */
 enum eLinkRoadType : uint8
 {
 	ROAD_TYPE_NORMAL				= 0,								// 000 일반도로
-	ROAD_TYPE_BRIDGE				= 1,								// 001 교량
-	ROAD_TYPE_TUNNEL				= 2,								// 002 터널
-	ROAD_TYPE_ELEVATED				= 3,								// 003 고가차도
-	ROAD_TYPE_UNDERGROUND			= 4									// 004 지하차도
+	ROAD_TYPE_ELEVATED				= 1,								// 001 고가차도
+	ROAD_TYPE_UNDERGROUND			= 2,								// 002 지하차도
+	ROAD_TYPE_BRIDGE				= 3,								// 003 교량
+	ROAD_TYPE_TUNNEL				= 4									// 004 터널
 };
 
 /**
@@ -73,18 +82,24 @@ enum eLinkRoadRank : uint8
 /**
  * @enum eLinkNodeType
  * @brief NODE_TYPE — MOCT_NODE.NODE_TYPE → LINK_INFO.nStNodeType/nEdNodeType (uint8)
- * @remark 0=미설정(초기값). 101~107=MOCT 노드 유형
+ * @remark 0=미설정(초기값). 101~107=MOCT 노드 유형 — 국토교통부고시 제2023-22호 공식
+ *   코드값(2026-08-27 최정우 수정). 기존 enum은 102=JC/103=SA/104=IC/105=TG/106=기타/
+ *   107=시군도노드등으로 정의돼 있었으나 실측(network.moct_node 전국 1,178,457건,
+ *   분포 101:885,309·102:42,566·103:22,057·104:71,692·105:4,329·106:12,106·
+ *   107:140,398건 — 공식코드 108/109는 실측 0건)과 대조해 정정. 이 필드는 현재 어떤
+ *   조건 분기에도 안 쓰여(저장만 됨) 기능 영향은 없음. 상세: doc/표준노드링크_시설물_
+ *   도로_코드_분석.html
 */
 enum eLinkNodeType : uint8
 {
 	NODE_TYPE_NONE					= 0,								// 미설정 (초기값)
-	NODE_TYPE_CROSSROAD				= 101,								// 교차로
-	NODE_TYPE_JC					= 102,								// JC (분기점)
-	NODE_TYPE_SA					= 103,								// SA/휴게소
-	NODE_TYPE_IC					= 104,								// IC (나들목)
-	NODE_TYPE_TG					= 105,								// TG (톨게이트)
-	NODE_TYPE_ETC					= 106,								// 기타
-	NODE_TYPE_CITY					= 107								// 시·군도 노드 등
+	NODE_TYPE_CROSSROAD				= 101,								// 교차로 (도로교차점)
+	NODE_TYPE_ROAD_END				= 102,								// 도로 시·종점
+	NODE_TYPE_ATTR_CHANGE			= 103,								// 속성변화점
+	NODE_TYPE_FACILITY				= 104,								// 도로시설물 (교량·터널·고가·지하차도 등)
+	NODE_TYPE_ADMIN_BOUNDARY			= 105,								// 행정경계
+	NODE_TYPE_RAMP_CONNECT			= 106,								// 연결로접속부 (IC·JC 등)
+	NODE_TYPE_MIN_SPACING			= 107								// 최소노드배치점
 };
 
 /**

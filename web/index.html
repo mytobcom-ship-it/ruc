@@ -137,6 +137,41 @@
   }
   .leaflet-popup.gate-popup .leaflet-popup-content { font-size: 11.5px; line-height: 1.5; margin: 7px 10px; }
   .leaflet-popup.gate-popup .leaflet-popup-tip { background: #ffffffee; border: 1px solid #94a3b8; }
+  /* G/M 점 마커 마우스오버 상세정보 풍선도움말 — 겹친 마커 전부를 한 팝업 안에 줄줄이 나열해
+     여러 개의 풍선도움말이 서로 겹치지 않게 한다 (2026-08-27 최정우 추가) */
+  .leaflet-popup.pt-hover-popup .leaflet-popup-content-wrapper {
+    background: #ffffffee; color: #1e293b; border: 1px solid #94a3b8; border-radius: 4px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.25);
+  }
+  /* 가로 나열 + 줄바꿈 — 세로 나열은 아래쪽이 화면(패널 등)에 가려 잘 안 보일 수 있어 변경
+     (2026-08-27 최정우 수정, 사용자 지시). G/M 을 한 쌍(pt-pair)으로 묶어 단어처럼 가로로
+     흘려보내다가 폭이 넘치면 2줄·3줄로 줄바꿈한다.
+     주의: display:flex + flex-wrap 으로 구현했더니 Leaflet 팝업 크기 계산(_updateLayout 이
+     offsetWidth 측정 시 white-space:nowrap 을 임시로 씌우는 방식) 과 충돌해 컨테이너 너비가
+     쌍 1개 폭으로 쪼그라들어 결과적으로 한 줄에 하나씩(세로 나열처럼) 표시되는 버그 발생
+     (playwright 로 재현·확인, 2026-08-27). Leaflet 의 이 계산은 "보통 텍스트처럼 줄바꿈되는
+     inline 컨텐츠"를 전제로 하므로, 컨테이너는 flex 를 쓰지 않고 max-width 만 지정해 일반
+     인라인 흐름에 맡기고, 각 쌍(.pt-pair)만 inline-flex(줄바꿈 시 쌍 내부가 쪼개지지 않게)로
+     둬서 "단어처럼 흐르다 줄바꿈"되게 한다. */
+  .leaflet-popup.pt-hover-popup .leaflet-popup-content {
+    margin: 6px 9px; font-size: 11.5px; line-height: 2.2; max-width: 240px;
+  }
+  .leaflet-popup.pt-hover-popup .leaflet-popup-tip { background: #ffffffee; border: 1px solid #94a3b8; }
+  .pt-pair {
+    display: inline-flex; align-items: center; gap: 3px; white-space: nowrap;
+    vertical-align: middle; margin: 0 10px 0 0;
+  }
+  .pt-pair .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .pt-pair .lbl { font-weight: 700; }
+  .pt-pair .arrow { color: #94a3b8; }
+  /* 미매칭 G — 지도 위 실패 마커(fail-x-marker)와 같은 방식으로 글자 위에 X 를 겹쳐 표시
+     (2026-08-27 최정우 추가, 사용자 지시) */
+  .pt-pair .lbl-wrap { position: relative; display: inline-block; }
+  .pt-pair .fail-x {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    font-weight: 900; font-size: 13px; line-height: 1; pointer-events: none;
+    color: #212121; text-shadow: 0 0 2px #fff, 0 0 2px #fff, 0 0 2px #fff, 0 0 2px #fff;
+  }
   /* 원격 DB 실시간 마지막 주행 패널 (2026-08-18 최정우 추가) */
   h1 { display: flex; align-items: center; gap: 8px; }
   .live-dot { width: 9px; height: 9px; border-radius: 50%; background: #43a047; flex: none;
@@ -289,6 +324,7 @@
         <a href="docs/psf-format.html" target="_blank" rel="noopener">link.psf 바이너리 포맷 ↗</a>
         <a href="docs/zone-link-map.html" target="_blank" rel="noopener">과금구역 링크 연결 점검 ↗</a>
         <a href="docs/zone-link-map-offline.html" target="_blank" rel="noopener">과금구역 점검 (오프라인 배포용) ↗</a>
+        <a href="docs/node-road-type-codes.html" target="_blank" rel="noopener">노드·링크 코드값 참조 ↗</a>
       </div>
     </div>
     <footer class="credit">출처: ruc.road_link (59.11.91.162/ruc, update_date 최대 2026-07-16) — 정적 스냅샷. 로컬 roadnet DB와는 별도 적재본</footer>
@@ -704,6 +740,7 @@ let seqLabelMarkers = [];
 function bindSeqLabel(marker, shortText, direction, offset) {
   marker.bindTooltip(shortText, { permanent: true, direction: direction, offset: offset, className: 'pt-label' });
   if (map.getZoom() < SEQ_LABEL_MIN_ZOOM) marker.closeTooltip();
+  marker._ptLabel = shortText;                // 마우스오버 풍선도움말용 (2026-08-27 최정우 추가)
   seqLabelMarkers.push(marker);
   return marker;
 }
@@ -801,6 +838,66 @@ function ptRadiusForZoom(zoom) { return Math.max(5, Math.min(12, zoom - 7)); }
 const ptMarkers = [];                       // 줌 변경 시 반지름을 다시 계산할 대상
 const failXMarkers = [];                    // 줌 변경 시 X 표시 크기를 다시 계산할 대상 (2026-08-24 최정우 추가)
 
+// G/M 마커 마우스오버 풍선도움말 — 상시 라벨(pt-label, SEQ_LABEL_MIN_ZOOM 이상에서만 열림)과
+//   별개로, 줌 레벨과 무관하게 마우스오버 시 항상 G순번/M순번을 보여준다. 저줌에서는 점들이
+//   같은 화면 픽셀에 다닥다닥 겹치므로, 마커 하나만 올리는 게 아니라 그 지점에 겹친 점 전부를
+//   찾아 팝업 하나에 줄줄이 나열한다(각자 별도 풍선도움말을 띄우면 서로 겹쳐 못 읽는다) —
+//   사용자 지시(2026-08-27). 기존 지도 표출(상시 라벨·마커 모양)은 그대로 두고 이 동작만 추가.
+const ptHoverPopup = L.popup({ closeButton: false, autoPan: false, className: 'pt-hover-popup', maxWidth: 240 });
+function findOverlappingPtMarkers(latlng) {
+  // 화면 픽셀 기준으로 겹침을 판단 — 줌에 따라 마커 반지름이 바뀌므로 그 반지름의 1.6배를
+  //   "겹쳐 보인다"의 기준으로 삼는다(반지름이 같은 두 원은 중심거리가 2r 이내면 맞닿거나 겹침).
+  const centerPt = map.latLngToContainerPoint(latlng);
+  const thresholdPx = ptRadiusForZoom(map.getZoom()) * 1.6;
+  const found = [];
+  for (let i = 0; i < ptMarkers.length; i++) {
+    const m = ptMarkers[i];
+    if (!m._map || !m._ptLabel) continue;
+    const d = centerPt.distanceTo(map.latLngToContainerPoint(m.getLatLng()));
+    if (d <= thresholdPx) found.push(m);
+  }
+  // G/M 섞여 있으면 순번 순으로, 같은 순번이면 G가 먼저 오게 정렬 (2026-08-27 최정우 추가)
+  found.sort(function (a, b) {
+    const na = parseInt(a._ptLabel.slice(1), 10), nb = parseInt(b._ptLabel.slice(1), 10);
+    return (na - nb) || a._ptLabel.charCodeAt(0) - b._ptLabel.charCodeAt(0);
+  });
+  return found;
+}
+function attachPtHover(marker) {
+  marker.on('mouseover', function () {
+    const overlapped = findOverlappingPtMarkers(marker.getLatLng());
+    // gps_seq 단위로 G/M 을 한 쌍으로 묶는다 — 같은 seq 의 G·M 이 둘 다 겹쳐 있으면 나란히,
+    //   M 이 없으면(맵매칭 실패) G 만 표시하고 지도 위 X 마커와 동일하게 글자 위에 X 를 겹친다
+    //   (2026-08-27 최정우 수정, 사용자 지시)
+    const seqMap = new Map();                // seq -> { g:boolean, m:boolean }
+    overlapped.forEach(function (m) {
+      const seq = parseInt(m._ptLabel.slice(1), 10);
+      const entry = seqMap.get(seq) || { g: false, m: false };
+      if (m._ptLabel.charAt(0) === 'G') entry.g = true; else entry.m = true;
+      seqMap.set(seq, entry);
+    });
+    const seqs = Array.from(seqMap.keys()).sort(function (a, b) { return a - b; });
+    const html = seqs.map(function (seq) {
+      const entry = seqMap.get(seq);
+      const p = accumPoints.get(seq);
+      const failed = entry.g && !entry.m && p && isMatchFailed(p);
+      const parts = [];
+      if (entry.g) {
+        parts.push('<span class="dot" style="background:' + RAW_COLOR + '"></span>'
+          + '<span class="lbl-wrap"><span class="lbl">G' + seq + '</span>'
+          + (failed ? '<span class="fail-x">✕</span>' : '') + '</span>');
+      }
+      if (entry.m) {
+        parts.push('<span class="dot" style="background:' + MATCH_POINT_COLOR + '"></span>'
+          + '<span class="lbl">M' + seq + '</span>');
+      }
+      return '<span class="pt-pair">' + parts.join('<span class="arrow">→</span>') + '</span>';
+    }).join('');
+    ptHoverPopup.setLatLng(marker.getLatLng()).setContent(html || marker._ptLabel).openOn(map);
+  });
+  marker.on('mouseout', function () { map.closePopup(ptHoverPopup); });
+}
+
 function addGpsMarker(p) {
   const r = ptRadiusForZoom(map.getZoom());
   const gm = L.circleMarker([p.gps_lat, p.gps_lon],
@@ -809,6 +906,7 @@ function addGpsMarker(p) {
   gm._gpsSeq = p.gps_seq;
   ptMarkers.push(gm);
   bindSeqLabel(gm, 'G' + p.gps_seq, 'center', [0, 0]);
+  attachPtHover(gm);
   return gm;
 }
 function addMatchMarker(p) {
@@ -818,6 +916,7 @@ function addMatchMarker(p) {
     .addTo(liveMatchedPointLayer);
   ptMarkers.push(mm);
   bindSeqLabel(mm, 'M' + p.gps_seq, 'center', [0, 0]);
+  attachPtHover(mm);
   return mm;
 }
 // X 표시 아이콘 — 마커(circleMarker) 반지름에 맞춘 지름으로 만든다. 매칭 마커와 같은 크기를

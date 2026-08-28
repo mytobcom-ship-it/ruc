@@ -330,6 +330,19 @@ typedef struct sVehicleTripSession
 	//   2026-08-28 최정우 추가)
 	uint64							qwAmbigReverseRunLinkID;
 	vector<size_t>					vtAmbigReverseRunIdx;
+	// 경계 클램프(bClampLowConf) SKIP 브릿지 — 위 ambiguous-reverse 브릿지와 달리 이쪽은 "같은
+	//   링크로 복귀"가 아니라 "실제로 인접(1-hop 직결) 링크로 넘어간" 경우다. 클램프는 짧은 링크
+	//   끝에서 자주 발생하는데(신규 표준노드링크가 교차로를 여러 노드로 쪼개 전국 링크의 29%가
+	//   15m 미만), 실시간 엔진의 후보 선택 자체를 바꾸면 왕복분리 등 다른 애매한 구간까지 건드려
+	//   전국 단위로 더 큰 회귀가 남을 확인함(2026-08-28, hop 페널티 완화 2건 모두 검증 실패해 되돌림).
+	//   대신 다음 확정 링크를 실제로 확인한 뒤 사후에만(CommitPendingRow) 재매칭하므로 실시간
+	//   추적 앵커는 전혀 안 건드림 — RematchBeginBiased() 는 이미 검증된 기존 보정(BEGIN 반대방향
+	//   오매칭)과 동일 메커니즘 재사용. 링크 자체가 바뀌므로 좌표/INTERSECT_LEN 도 재계산해서
+	//   같이 재기록해야 해서, ambiguous-reverse 브릿지와 달리 원본 GPS 도 tick별로 보관해야 한다
+	//   (사용자 지시, 2026-08-28 최정우 추가)
+	uint64							qwClampRunLinkID;
+	vector<size_t>					vtClampRunUpdateIdx;
+	vector<RAW_LOG_INFO>			vtClampRunRawLogInfo;
 	// 트립 시작(또는 장시간 SKIP 후) 첫 매칭이 왕복분리 어느 쪽인지 불확실한 구간의 "경쟁 후보"
 	//   추적용 (2026-08-24 최정우 추가, 실측 21트립 중 3건꼴로 재현 확인). qwLastConfirmedLinkID·
 	//   qwOppStreakAnchorLinkID 가 둘 다 0(진짜 앵커도, 확정된 스트릭도 없음)일 때만 쓰인다 —
@@ -405,6 +418,7 @@ typedef struct sVehicleTripSession
 		dtLastConfirmedLinkTime(0),	// (2026-08-24 최정우 추가)
 		qwOppStreakAnchorLinkID(0),	// (2026-08-24 최정우 추가)
 		qwAmbigReverseRunLinkID(0),	// (2026-08-28 최정우 추가)
+		qwClampRunLinkID(0),	// (2026-08-28 최정우 추가)
 		qwStartCandLinkA(0),	// (2026-08-24 최정우 추가)
 		qwStartCandLinkB(0),	// (2026-08-24 최정우 추가)
 		dfPendingPrevMatchX(0.0),	// (2026-08-21 최정우 추가)

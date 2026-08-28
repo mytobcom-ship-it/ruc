@@ -1852,6 +1852,76 @@ void CRawLogWorker::CommitPendingRow(int nThreadId, VEHICLE_TRIP_SESSION *pstSes
 		pstSession->vtAmbigReverseRunIdx.clear();
 	}
 
+	// ── 경계 클램프(bClampLowConf) SKIP 브릿지 해소 (2026-08-28 최정우 추가) ──
+	//   "다음" 확정 링크가 클램프 런의 링크와 다르지만 실제로 인접(1-hop 직결)하면, 각 tick 을
+	//   그 링크로 편향 재매칭(RematchBeginBiased — BEGIN 반대방향 오매칭 보정과 동일 메커니즘)해
+	//   재매칭 결과가 정말 그 링크로 떨어지는 경우만 링크·좌표·INTERSECT_LEN까지 소급 재기록한다.
+	//   다음 링크가 클램프 런과 같으면(원래 링크로 복귀 확정) 브릿지 대상이 아니므로 그대로 SKIP
+	//   유지 — bAmbiguousReverse 브릿지가 이미 그 경우를 커버함. 인접하지 않으면(진짜 별개 구간)
+	//   재매칭 시도 없이 런만 버린다
+	if (bHasNextLinkID && (pstSession->qwClampRunLinkID != 0) && !pstSession->vtClampRunUpdateIdx.empty()
+		&& (qwNextLinkID != pstSession->qwClampRunLinkID)
+		&& (m_stConfig.pcDataLoader != nullptr) && (m_stConfig.pcProcessManager != nullptr))
+	{
+		PLINK_INFO pstClampLink = m_stConfig.pcDataLoader->GetLinkInfo(pstSession->qwClampRunLinkID);
+		PLINK_INFO pstNextLink = m_stConfig.pcDataLoader->GetLinkInfo(qwNextLinkID);
+		bool bConnected = (pstClampLink != nullptr) && (pstNextLink != nullptr)
+			&& ((pstClampLink->qwEdNodeID == pstNextLink->qwStNodeID)
+				|| (pstClampLink->qwEdNodeID == pstNextLink->qwEdNodeID)
+				|| (pstClampLink->qwStNodeID == pstNextLink->qwStNodeID)
+				|| (pstClampLink->qwStNodeID == pstNextLink->qwEdNodeID));
+
+		if (bConnected)
+		{
+			CProcessManager& cPM = m_stConfig.pcProcessManager[nThreadId];
+			size_t nBridged = 0;
+			for (size_t i = 0; i < pstSession->vtClampRunUpdateIdx.size(); ++i)
+			{
+				size_t idx = pstSession->vtClampRunUpdateIdx[i];
+				if (idx >= pvtUpdates->size()) continue;
+
+				MATCH_LINK_INFO stRematched;
+				if (!cPM.RematchBeginBiased(pstSession->vtClampRunRawLogInfo[i], qwNextLinkID, &stRematched)
+					|| (stRematched.qwLinkID != qwNextLinkID))
+					continue;			// 재매칭이 그 링크로 안 떨어지면 이 tick 은 건드리지 않음(SKIP 유지)
+
+				int nNewIntersectLen = CalcIntersectLen(pstSession->vtClampRunRawLogInfo[i],
+					stRematched.dfMatchX, stRematched.dfMatchY);
+				char szMatchLat[32], szMatchLon[32], szIntersectLen[16], szMatchLinkId[24];
+				snprintf(szMatchLat, sizeof(szMatchLat), "%.06lf", stRematched.dfMatchY);
+				snprintf(szMatchLon, sizeof(szMatchLon), "%.06lf", stRematched.dfMatchX);
+				snprintf(szIntersectLen, sizeof(szIntersectLen), "%d", nNewIntersectLen);
+				snprintf(szMatchLinkId, sizeof(szMatchLinkId), "%llu",
+					static_cast<unsigned long long>(qwNextLinkID));
+
+				(*pvtUpdates)[idx].strMatchStatus = "1";
+				(*pvtUpdates)[idx].strMatchLat = szMatchLat;
+				(*pvtUpdates)[idx].strMatchLon = szMatchLon;
+				(*pvtUpdates)[idx].strIntersectLen = szIntersectLen;
+				(*pvtUpdates)[idx].strMatchLinkId = szMatchLinkId;
+				++nBridged;
+			}
+			if (nBridged > 0)
+			{
+				LOGFMTW("[#%02d] clamp-low-conf %zu/%zu-tick adjacent-link bridge!device=[%s] trip_id=[%s] "
+					"link=[%llu] -> [%llu] (rematched, charge not retroactively processed)",
+					nThreadId, nBridged, pstSession->vtClampRunUpdateIdx.size(), stRawLogInfo.szDeviceKey,
+					stRawLogInfo.szTripID, static_cast<unsigned long long>(pstSession->qwClampRunLinkID),
+					static_cast<unsigned long long>(qwNextLinkID));
+			}
+		}
+		pstSession->qwClampRunLinkID = 0;
+		pstSession->vtClampRunUpdateIdx.clear();
+		pstSession->vtClampRunRawLogInfo.clear();
+	}
+	else if (bHasNextLinkID && (pstSession->qwClampRunLinkID != 0) && (qwNextLinkID == pstSession->qwClampRunLinkID))
+	{
+		// 원래 링크로 복귀 확정 — 브릿지 대상 아님(SKIP 유지), 런만 정리
+		pstSession->qwClampRunLinkID = 0;
+		pstSession->vtClampRunUpdateIdx.clear();
+		pstSession->vtClampRunRawLogInfo.clear();
+	}
+
 	// 이번 틱이 스트릭에 새로 편입되는지 — 위 블록 판정 직후, 과금 호출로 qwLastConfirmedLinkID 가
 	//   갱신되기 "전"에 미리 계산해둔다 (2026-08-24 최정우 추가)
 	const bool bJoinedOppStreak = (pstSession->qwOppStreakAnchorLinkID != 0)
@@ -2529,6 +2599,21 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 			stSession.vtAmbigReverseRunIdx.clear();
 		}
 		stSession.vtAmbigReverseRunIdx.push_back(pvtUpdates->size() - 1);
+	}
+
+	// 경계 클램프(bClampLowConf) SKIP 브릿지 후보 적립 — 해소는 CommitPendingRow 가 "다음" 확정
+	//   링크가 이 클램프 링크와 실제로 인접(1-hop 직결)한지 확인한 뒤 RematchBeginBiased 로
+	//   재매칭한다. 원본 GPS 를 같이 보관해야 재매칭이 가능함 (사용자 지시, 2026-08-28 최정우 추가)
+	if (stMatchLinkInfo.bClampLowConf)
+	{
+		if (stSession.qwClampRunLinkID != stMatchLinkInfo.qwLinkID)
+		{
+			stSession.qwClampRunLinkID = stMatchLinkInfo.qwLinkID;
+			stSession.vtClampRunUpdateIdx.clear();
+			stSession.vtClampRunRawLogInfo.clear();
+		}
+		stSession.vtClampRunUpdateIdx.push_back(pvtUpdates->size() - 1);
+		stSession.vtClampRunRawLogInfo.push_back(stRawLogInfo);
 	}
 
 	// END 이벤트면 MATCHED/ERROR/SKIP 무관 세션 종료 (bulk 성공 후 mapSessions.erase)

@@ -539,8 +539,11 @@ void CRawLogWorker::BuildExemptRow(const ZONE_RUN_SESSION& stRun, const string& 
 	snprintf(szDistM, sizeof(szDistM), "%d", static_cast<int>(stRun.dfAccumDistM + 0.5));
 	pstRow->strDistM = szDistM;
 
+	// 경과시간 1초 하한 — 폐쇄식·구간단속과 동일 관례. 구역 안 tick 이 1개뿐이면 0초가 되어
+	//   speed_kmh 가 아예 안 채워지던 문제를 막는다 (사용자 지시, 2026-08-30 최정우 추가)
 	double dfElapsedSec = difftime(dtEnd, stRun.dtEntryTime);
-	if (dfElapsedSec > 0.0)
+	if (dfElapsedSec < 1.0)
+		dfElapsedSec = 1.0;
 	{
 		double dfAvgSpeedKmh = (stRun.dfAccumDistM / dfElapsedSec) * 3.6;
 		char szSpeedKmh[16];
@@ -559,7 +562,9 @@ void CRawLogWorker::BuildExemptRow(const ZONE_RUN_SESSION& stRun, const string& 
 	pstRow->strStartGpsSeq = szStartGpsSeq;
 	pstRow->strEndGpsSeq = szEndGpsSeq;
 
-	pstRow->strOccurDt = FormatDateTime14(dtEnd);
+	// OCCUR_DT — 진입 시각. 개방형·폐쇄식·주정차와 동일 관례(일반도로만 진출 시각을 쓴다)
+	//   (사용자 지시, 2026-08-30 최정우 수정 — 이전에는 면제도로만 진출 시각이었다)
+	pstRow->strOccurDt = FormatDateTime14(stRun.dtEntryTime);
 	const char *pszTripStartDt = ExtractTripStartDt(strTripId.c_str());
 	pstRow->strTripStartDt = (pszTripStartDt != nullptr) ? pszTripStartDt : pstRow->strOccurDt;
 
@@ -590,7 +595,8 @@ void CRawLogWorker::AppendExpiredExemptZoneCharge(int nThreadId, const string& s
 	{
 		CHARGE_INSERT_ROW stRow;
 		BuildExemptRow(stSession.vtExemptRuns[i], stSession.szTripId, strDeviceKey,
-			nSeq, stSession.dtLastSeen, stSession.dwLastGpsSeq, "N", "4", &stRow);
+			nSeq, stSession.vtExemptRuns[i].dtLastInZoneTime,
+			stSession.vtExemptRuns[i].dwLastInZoneGpsSeq, "N", "4", &stRow);
 		pvtOut->push_back(stRow);
 		nSeq += 1;
 
@@ -4669,19 +4675,37 @@ void CRawLogWorker::ProcessExemptZoneCharge(int nThreadId, const sRawLogInfo& st
 	{
 		ZONE_RUN_SESSION& stRun = pstSession->vtExemptRuns[si];
 
-		// 누적 이동거리는 재진입 유예 대기 중에도 갱신한다 — 유예 구간의 이동거리·시간을
-		//   dist_m·stay_seconds 에 포함(사용자 지시, 2026-08-14)
-		POINT stPrev, stCur;
-		stPrev.dfX = stRun.dfLastX;  stPrev.dfY = stRun.dfLastY;
-		stCur.dfX = stMatchLinkInfo.dfMatchX;  stCur.dfY = stMatchLinkInfo.dfMatchY;
-		stRun.dfAccumDistM += HaversineMeters(stPrev, stCur);
-		stRun.dfLastX = stMatchLinkInfo.dfMatchX;
-		stRun.dfLastY = stMatchLinkInfo.dfMatchY;
-
 		bool bSameZone = false;
 		for (size_t e = 0; e < vtZones.size(); ++e)
 		{
 			if (strcmp(stRun.szRoadID, vtZones[e]->szRoadID) == 0) { bSameZone = true; break; }
+		}
+
+		// dist_m·stay_seconds 는 "면제도로(base_roadlink 등록 링크) 위를 실제로 달린 만큼"이다.
+		//   그래서 이 tick 이 그 구역에 매칭됐을 때만 누적·갱신한다. 구역을 벗어난 뒤 재진입
+		//   유예(exempt_regrace) 를 기다리는 동안의 주행은 면제도로 주행이 아니므로 제외한다.
+		//   (사용자 지시, 2026-08-30 최정우 수정 — 이전에는 유예 구간까지 무조건 가산해
+		//    64m 구역에 719m 가 기록되는 문제가 있었다. 2026-08-14 의 "유예 구간 포함" 지시를 대체)
+		if (bSameZone)
+		{
+			POINT stPrev, stCur;
+			stPrev.dfX = stRun.dfLastX;  stPrev.dfY = stRun.dfLastY;
+			stCur.dfX = stMatchLinkInfo.dfMatchX;  stCur.dfY = stMatchLinkInfo.dfMatchY;
+			stRun.dfAccumDistM += HaversineMeters(stPrev, stCur);
+			stRun.dfLastX = stMatchLinkInfo.dfMatchX;
+			stRun.dfLastY = stMatchLinkInfo.dfMatchY;
+			stRun.dtLastInZoneTime = stRawLogInfo.dtGPS;		// to_lat/lon·stay_seconds 기준 tick
+			stRun.dwLastInZoneGpsSeq = stRawLogInfo.dwSeqNo;	// end_gps_seq
+			stRun.qwLastLinkID = stMatchLinkInfo.qwLinkID;
+			stRun.dtFirstOut = 0;								// 재진입 — 이탈 보간 기준점 리셋
+		}
+		else if (stRun.dtFirstOut == 0)
+		{
+			// 구역 밖 "첫" tick — 이탈 경계 보간의 바깥쪽 기준점. 이후 tick 으로 덮어쓰면 유예
+			//   구간 끝점과 보간하게 돼 엉뚱한 결과가 나온다(개방형 dfFirstOut* 동일 근거)
+			stRun.dfFirstOutX = stMatchLinkInfo.dfMatchX;
+			stRun.dfFirstOutY = stMatchLinkInfo.dfMatchY;
+			stRun.dtFirstOut = stRawLogInfo.dtGPS;
 		}
 
 		if (bSameZone && !bTripEnding)
@@ -4702,9 +4726,43 @@ void CRawLogWorker::ProcessExemptZoneCharge(int nThreadId, const sRawLogInfo& st
 			{ ++si; continue; }
 		}
 
+		// 이탈 경계 보정 — 구역 안 마지막 링크의 종료 노드까지 거리·시각을 채운다. 개방형
+		//   ProcessOpenGateCharge() 의 dtOpenExitTime 처리와 동일 원리(InterpolateGateCrossingTime
+		//   을 "구역 경계 노드"에 겨냥). 트립이 구역 안에서 끝난 경우(bSameZone)는 그 지점이 곧
+		//   진출점이므로 보정하지 않는다 (사용자 지시, 2026-08-30 최정우 추가)
+		time_t dtExemptEnd = (stRun.dtLastInZoneTime != 0) ? stRun.dtLastInZoneTime : stRawLogInfo.dtGPS;
+		if (!bSameZone && (stRun.qwLastLinkID != 0) && (m_stConfig.pcDataLoader != nullptr))
+		{
+			PLINK_INFO pstLastLink = m_stConfig.pcDataLoader->GetLinkInfo(stRun.qwLastLinkID);
+			if (pstLastLink != nullptr)
+			{
+				POINT stFrom, stNode;
+				stFrom.dfX = stRun.dfLastX;  stFrom.dfY = stRun.dfLastY;
+				stNode.dfX = static_cast<double>(pstLastLink->dwEdNodeX) / 360000.0;
+				stNode.dfY = static_cast<double>(pstLastLink->dwEdNodeY) / 360000.0;
+
+				double dfTail = HaversineMeters(stFrom, stNode);
+				if ((dfTail > 0.0) && (dfTail <= pstLastLink->dfLen + 1.0))
+				{
+					stRun.dfAccumDistM += dfTail;
+					stRun.dfLastX = stNode.dfX;
+					stRun.dfLastY = stNode.dfY;
+				}
+
+				if (stRun.dtFirstOut != 0)
+				{
+					dtExemptEnd = InterpolateGateCrossingTime(
+						stFrom.dfX, stFrom.dfY, stRun.dtLastInZoneTime,
+						stRun.dfFirstOutX, stRun.dfFirstOutY, stRun.dtFirstOut,
+						stNode.dfX, stNode.dfY);
+				}
+			}
+		}
+
 		CHARGE_INSERT_ROW stRow;
 		BuildExemptRow(stRun, stRawLogInfo.szTripID, stRawLogInfo.szDeviceKey,
-			pstSession->nChargeSeq, stRawLogInfo.dtGPS, stRawLogInfo.dwSeqNo, "Y", "0", &stRow);
+			pstSession->nChargeSeq, dtExemptEnd, stRun.dwLastInZoneGpsSeq,
+			"Y", "0", &stRow);
 		pvtChargeInserts->push_back(stRow);
 
 		LOGFMTI("[#%02d] exempt zone exit recorded!device=[%s] trip_id=[%s] seq=[%d] road=[%s] "
@@ -4733,13 +4791,44 @@ void CRawLogWorker::ProcessExemptZoneCharge(int nThreadId, const sRawLogInfo& st
 		ZONE_RUN_SESSION stRun;
 		strncpy(stRun.szRoadID, vtZones[e]->szRoadID, sizeof(stRun.szRoadID) - 1);
 		stRun.szRoadID[sizeof(stRun.szRoadID) - 1] = '\0';
-		stRun.dtEntryTime = stRawLogInfo.dtGPS;
+
+		// 진입 경계 보정 — 구역에 들어온 링크의 시작 노드까지 거리·시각을 채운다. 개방형
+		//   ProcessOpenGateCharge() 의 진입 보간과 동일 원리. 트립이 구역 안에서 시작한 경우
+		//   (bTripStarting)는 겨냥할 "직전 구역 밖 tick" 자체가 없어 보정 대상이 아니며,
+		//   그 출발좌표가 곧 진입좌표다 (사용자 지시, 2026-08-30 최정우 추가)
+		const bool bTripStarting = (stRawLogInfo.nTripEvent == TRIP_EVENT_START);
+		bool bHeadDone = false;
+		if (!bTripStarting && pstSession->bHasLastMatch)
+		{
+			POINT stNode, stCur;
+			stNode.dfX = stMatchLinkInfo.dfStNodeX;  stNode.dfY = stMatchLinkInfo.dfStNodeY;
+			stCur.dfX = stMatchLinkInfo.dfMatchX;    stCur.dfY = stMatchLinkInfo.dfMatchY;
+
+			double dfHead = HaversineMeters(stNode, stCur);
+			if ((dfHead >= 0.0) && (dfHead <= stMatchLinkInfo.dfLen + 1.0))
+			{
+				stRun.dtEntryTime = InterpolateGateCrossingTime(
+					pstSession->dfLastMatchX, pstSession->dfLastMatchY, pstSession->dtLastMatchGps,
+					stCur.dfX, stCur.dfY, stRawLogInfo.dtGPS,
+					stNode.dfX, stNode.dfY);
+				stRun.dfEntryX = stNode.dfX;
+				stRun.dfEntryY = stNode.dfY;
+				stRun.dfAccumDistM = dfHead;
+				bHeadDone = true;
+			}
+		}
+		if (!bHeadDone)
+		{
+			stRun.dtEntryTime = stRawLogInfo.dtGPS;
+			stRun.dfEntryX = stMatchLinkInfo.dfMatchX;
+			stRun.dfEntryY = stMatchLinkInfo.dfMatchY;
+			stRun.dfAccumDistM = 0.0;
+		}
 		stRun.dwEntryGpsSeq = stRawLogInfo.dwSeqNo;
-		stRun.dfEntryX = stMatchLinkInfo.dfMatchX;
-		stRun.dfEntryY = stMatchLinkInfo.dfMatchY;
-		stRun.dfAccumDistM = 0.0;
 		stRun.dfLastX = stMatchLinkInfo.dfMatchX;
 		stRun.dfLastY = stMatchLinkInfo.dfMatchY;
+		stRun.dtLastInZoneTime = stRawLogInfo.dtGPS;			// 진입 tick 이 곧 구역 안 첫 tick
+		stRun.dwLastInZoneGpsSeq = stRawLogInfo.dwSeqNo;
 		stRun.qwLastLinkID = stMatchLinkInfo.qwLinkID;
 		pstSession->vtExemptRuns.push_back(stRun);
 

@@ -179,6 +179,8 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileStr("sql", "trip_abend", "", pstConfig->strAbnormalTripEndSession);
 	// [sql] server_status (선택, 비어 있으면 서버 상태 하트비트 비활성) (2026-08-20 최정우 추가)
 	cIniReader.GetProfileStr("sql", "server_status", "", pstConfig->strServerStatusSession);
+	// [sql] stale_recover (선택, 비어 있으면 좀비 PROCESSING 운영 중 회수 비활성) (2026-08-29 최정우 추가)
+	cIniReader.GetProfileStr("sql", "stale_recover", "", pstConfig->strStaleRecoverSession);
 	// [server] id — PROC_SERVERSTATUS.SERVER_ID (2026-08-20 최정우 추가)
 	cIniReader.GetProfileStr("server", "id", CFG_DEF_SERVER_ID, pstConfig->strServerId);
 	// [server] status_interval (단위: sec, 0=비활성) (2026-08-20 최정우 추가)
@@ -189,6 +191,10 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileInt("charge", "gate_reload", CFG_DEF_GATE_RELOAD, pstConfig->nGateReloadSec);
 	if (pstConfig->nGateReloadSec < 0)
 		pstConfig->nGateReloadSec = CFG_DEF_GATE_RELOAD;
+	// [server] stale_sec (단위: sec, 0=비활성) (2026-08-29 최정우 추가)
+	cIniReader.GetProfileInt("server", "stale_sec", CFG_DEF_STALE_SEC, pstConfig->nStaleSec);
+	if (pstConfig->nStaleSec < 0)
+		pstConfig->nStaleSec = CFG_DEF_STALE_SEC;
 	// [charge] park_buf (단위: m) — 구역판정 버퍼 상한(ACCURACY_M 캡) (2026-08-13 최정우 추가)
 	cIniReader.GetProfileInt("charge", "park_buf", CFG_DEF_PARK_BUF, pstConfig->nParkBuf);
 	// [charge] park_accmax (단위: m) — 주정차 판정 좌표 정확도 상한, 0=비활성 (2026-08-23 최정우 추가)

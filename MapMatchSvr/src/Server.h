@@ -68,6 +68,8 @@ private:
 	void LogMonitorStatus(time_t dtNow);
 	void WaitForNextCycle();
 	// 서버 상태(CPU/메모리) 하트비트 — PROC_SERVERSTATUS 주기 UPDATE (2026-08-20 최정우 추가)
+	// 좀비 PROCESSING(2) 운영 중 회수 — [stale_recover] (2026-08-29 최정우 추가)
+	void RecoverStaleProcessing();
 	void UpdateCpuSample();
 	bool GetMemInfo(int& nUsedMB, int& nTotalMB, double& dfMemPct);
 	void UpdateServerStatus();
@@ -115,6 +117,9 @@ private:
 	string							m_strParkFineSelectSQL;				// 주정차 과태료 최소 FROM_MIN 조회 SQL, 비어 있으면 체류시간 임계 비활성 (2026-08-24 최정우 추가)
 	int								m_nGateReloadSec;					// [charge] gate_reload — 게이트·구역 캐시 재조회 주기(sec, 0=재조회 없음) (2026-08-12 최정우 추가)
 	time_t							m_dtLastGateReload;					// 마지막 게이트 캐시 재조회 시각 (2026-08-12 최정우 추가)
+	int								m_nStaleSec;				// [server] stale_sec — 좀비 PROCESSING 회수 주기 겸 임계(sec, 0=비활성) (2026-08-29 최정우 추가)
+	time_t							m_dtLastStaleRecover;				// 마지막 좀비 PROCESSING 회수 시각 (2026-08-29 최정우 추가)
+	string							m_strStaleRecoverSQL;				// 좀비 PROCESSING 운영 중 회수 SQL (2026-08-29 최정우 추가)
 	int								m_nParkBuf;							// [charge] park_buf — 구역판정 버퍼 상한(m) (2026-08-13 최정우 추가)
 	int								m_nIgnoreRawVld;					// [mapmatch] ignore_rawvld — RAW_VLD 무시 전량 매칭(검증용) (2026-08-23 최정우 추가)
 	int								m_nParkAccMax;						// [charge] park_accmax — 주정차 판정 좌표 정확도 상한(m), 0=비활성 (2026-08-23 최정우 추가)

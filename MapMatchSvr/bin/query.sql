@@ -25,6 +25,55 @@
 --   12:SPEED_KMH 13:OBD_SPEED_KMH(차량 OBD 순간속도 — NULL 아니면 SPEED_KMH 보다 우선) 14:HEADING
 --   15:ALTITUDE_M 16:ACCURACY_M 17:BATTERY 18:RECV_DT 19:MATCH_STATUS
 
+-- ══ 이 파일의 SQL 이 전제하는 DB 스키마 ═══════════════════════════════════
+-- 엔진 소스가 요구하는 컬럼·테이블인데 DB 에 없으면, 기동은 되지만 해당 SQL 만 런타임에
+--   실패한다(과금 INSERT 전건 실패 등). 2026-08-29 실측: prim_chargehand 에 start_gps_seq 가
+--   없어 charge bulk insert 가 전건 실패하고, 그 배치의 맵매칭 결과까지 되돌아갔다.
+-- 새 환경에 DB 를 만들거나 스키마를 의심할 때 아래를 psql 로 실행할 것 (전부 재실행 안전).
+-- ※ 아래 DDL 에는 끝의 세미콜론을 일부러 뺐다 — SQLAccessor 가 세미콜론을 SQL 종료로 보고
+--   빈 키로 등록해버리기 때문이다. 복사해 실행할 때 각 문장 끝에 세미콜론을 붙일 것.
+--
+--   [charge_insert] / [charge_update] — 구역 진입·이탈 시점의 PRIM_RAWGPS.GPS_SEQ (웹뷰어 G순번)
+--     ALTER TABLE ruc.prim_chargehand
+--         ADD COLUMN IF NOT EXISTS start_gps_seq bigint NOT NULL DEFAULT 0,
+--         ADD COLUMN IF NOT EXISTS end_gps_seq   bigint NOT NULL DEFAULT 0
+--
+--   [rawgps_select] / [stale_recover] — PROCESSING(2) 예약 시각. 없으면 예약 UPDATE 자체가
+--     실패해 맵매칭이 전혀 진행되지 않는다.
+--     ALTER TABLE ruc.prim_rawgps
+--         ADD COLUMN IF NOT EXISTS match_rsv_dt char(14)
+--     CREATE INDEX IF NOT EXISTS ix_prim_rawgps_stale_proc
+--         ON ruc.prim_rawgps (match_rsv_dt) WHERE match_status = 2
+--
+--   [parkfine_select] — 주정차 단속 개시 임계(분). 테이블이 없으면 임계 0(항상 등록)으로 동작.
+--     CREATE TABLE IF NOT EXISTS ruc.base_parking_fine (
+--         fine_id  varchar(20)  NOT NULL,
+--         fine_nm  varchar(100) NOT NULL,
+--         from_min integer      NOT NULL,
+--         to_min   integer,
+--         reg_dt   timestamp    NOT NULL DEFAULT now(),
+--         upd_dt   timestamp,
+--         admin_id varchar(4),
+--         remark   varchar(200),
+--         CONSTRAINT pk_base_parking_fine PRIMARY KEY (fine_id),
+--         CONSTRAINT ck_base_parking_fine_from  CHECK (from_min >= 0),
+--         CONSTRAINT ck_base_parking_fine_range CHECK (to_min IS NULL OR to_min > from_min))
+--     INSERT INTO ruc.base_parking_fine (fine_id, fine_nm, from_min, remark)
+--     VALUES ('PF-0001', '주정차 단속 개시(5분 이상)', 5, '기본 최소 단속시간 5분 = 300초')
+--     ON CONFLICT (fine_id) DO NOTHING
+--
+-- 적용 확인
+--   SELECT column_name FROM information_schema.columns
+--    WHERE table_schema='ruc' AND ((table_name='prim_chargehand'
+--          AND column_name IN ('start_gps_seq','end_gps_seq'))
+--       OR (table_name='prim_rawgps' AND column_name='match_rsv_dt'))
+--   SELECT MIN(from_min), MIN(from_min)*60 AS 임계초 FROM ruc.base_parking_fine
+--
+-- ※ 이 블록은 섹션([대괄호]) 밖이라 SQLAccessor 가 읽지 않는다 — 실행되지 않는 기록이므로
+--   위 DDL 은 psql 로 직접 실행해야 한다. 섹션 "안"에는 절대 -- 주석을 쓰지 말 것
+--   (로더가 SQL 을 한 줄로 이어붙여 뒤가 통째로 잘린다). (2026-08-29 최정우 추가)
+-- ═════════════════════════════════════════════════════════════════════════
+
 -- ── 0. 좀비 PROCESSING 복구 ────────────────────────────────────────────────
 [rawgps_recover]
 UPDATE RUC.PRIM_RAWGPS
@@ -32,6 +81,23 @@ SET
 	MATCH_STATUS = 0
 WHERE
 	MATCH_STATUS = 2;
+
+-- ── 0-1. 좀비 PROCESSING 운영 중 회수 ──────────────────────────────────────
+-- [stale_recover] CServer::ProcessPeriodSec() 가 [server] stale_sec 주기로 실행.
+--   rawgps_recover 는 "기동 시 1회"라 엔진이 계속 떠 있는 동안 2 에 갇힌 행을 못 푼다(워커 강제
+--   종료·배치 실패 잔류분). 예약 시각(MATCH_RSV_DT)이 $1 초보다 오래된 행만 PENDING(0)으로 되돌려
+--   다음 poll 에서 재처리되게 한다. 정상 처리 중인 행(예약 직후)은 임계 미만이라 건드리지 않는다.
+--   MATCH_RSV_DT IS NULL 은 이 컬럼 도입 이전에 2 가 된 행 — 판정 근거가 없으므로 함께 회수한다.
+--   $1 = 임계 초 (2026-08-29 최정우 추가)
+[stale_recover]
+UPDATE RUC.PRIM_RAWGPS
+SET
+	MATCH_STATUS = 0,
+	MATCH_RSV_DT = NULL
+WHERE
+	MATCH_STATUS = 2
+	AND (MATCH_RSV_DT IS NULL
+		OR MATCH_RSV_DT < TO_CHAR(NOW() - ($1::INTEGER * INTERVAL '1 second'), 'YYYYMMDDHH24MISS'));
 
 -- ── 1. 조회 + 예약(Reserve) ────────────────────────────────────────────────
 -- [rawgps_select] PENDING(0) → PROCESSING(2) 예약, RETURNING 으로 행 반환
@@ -63,7 +129,8 @@ WHERE
 [rawgps_select]
 UPDATE RUC.PRIM_RAWGPS AS U
 SET
-	MATCH_STATUS = 2
+	MATCH_STATUS = 2,
+	MATCH_RSV_DT = TO_CHAR(NOW(), 'YYYYMMDDHH24MISS')
 FROM (
 	SELECT TRIP_ID, GPS_SEQ
 	FROM RUC.PRIM_RAWGPS

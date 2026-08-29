@@ -111,6 +111,8 @@ CServer::CServer() :
 	m_nDBMaxConnect(5),
 	m_nGateReloadSec(CFG_DEF_GATE_RELOAD),
 	m_dtLastGateReload(0),
+	m_nStaleSec(CFG_DEF_STALE_SEC),
+	m_dtLastStaleRecover(0),
 	m_nParkBuf(CFG_DEF_PARK_BUF),
 	m_nIgnoreRawVld(CFG_DEF_IGNORE_RAWVLD),
 	m_nParkAccMax(CFG_DEF_PARK_ACCMAX),
@@ -218,6 +220,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	m_nShutdownWait = stConfig.nShutdownWait;
 	m_nRetryMax = stConfig.nRetryMax;
 	m_nGateReloadSec = stConfig.nGateReloadSec;					// (2026-08-12 최정우 추가)
+	m_nStaleSec = stConfig.nStaleSec;		// (2026-08-29 최정우 추가)
 	m_nParkBuf = stConfig.nParkBuf;								// (2026-08-13 최정우 추가)
 	m_nParkAccMax = stConfig.nParkAccMax;						// (2026-08-23 최정우 추가)
 	m_nIgnoreRawVld = stConfig.nIgnoreRawVld;					// (2026-08-23 최정우 추가)
@@ -230,6 +233,18 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	m_nExemptRegraceSec = stConfig.nExemptRegraceSec;				// (2026-08-14 최정우 추가)
 	m_strServerId = stConfig.strServerId;							// (2026-08-20 최정우 추가)
 	m_nServerStatusIntervalSec = stConfig.nServerStatusIntervalSec;	// (2026-08-20 최정우 추가)
+
+	// stale_sec 은 ttl_sec 이상이어야 한다 — 1틱 지연커밋으로 세션 보류(pending) 중인 행은
+	//   아직 PROCESSING(2) 이고 메모리 버퍼에 남아 있다. ttl_sec 안에 회수해 PENDING(0)으로
+	//   되돌리면 그 행이 새 행처럼 재조회되면서 보류 버퍼와 겹쳐 같은 GPS 를 두 번 처리한다
+	//   (RawLogWorker 의 orphan release 가 세션 보류 행을 제외하는 이유와 동일).
+	//   세션이 TTL 로 소멸한 뒤에 회수해야 안전하므로 미만이면 ttl_sec 으로 올린다 (2026-08-29 최정우 추가)
+	if ((m_nStaleSec > 0) && (m_nStaleSec < m_nTtlSec))
+	{
+		LOGFMTW("stale_sec[%d] < ttl_sec[%d] — 세션 보류 행 이중 처리 방지를 위해 ttl_sec 으로 올림",
+			m_nStaleSec, m_nTtlSec);
+		m_nStaleSec = m_nTtlSec;
+	}
 
 	LOGFMTI("please wait ....");
 
@@ -280,6 +295,15 @@ bool CServer::Initialize(const CONFIG& stConfig)
 		LOGFMTE("raw gps recover query is empty!");
 		Uninitialize();
 		return false;
+	}
+
+	// 좀비 PROCESSING 운영 중 회수 SQL (선택) — 비어 있으면 기동 시 rawgps_recover 만 동작.
+	//   [sql] stale_recover 미설정은 실패가 아니다 (2026-08-29 최정우 추가)
+	if (!stConfig.strStaleRecoverSession.empty())
+	{
+		m_strStaleRecoverSQL = m_pcSQLAccessor->GetSQL(stConfig.strStaleRecoverSession);
+		if (m_strStaleRecoverSQL.empty())
+			LOGFMTW("stale processing recover query is empty! — 운영 중 좀비 PROCESSING 회수 비활성");
 	}
 
 	// 조회·예약 SQL (UPDATE RETURNING)
@@ -983,6 +1007,18 @@ void CServer::ProcessPeriodSec(time_t dtNow)
 		m_dtLastGateReload = dtNow;
 	}
 
+	// 좀비 PROCESSING(MATCH_STATUS=2) 운영 중 회수 — stale_sec=0 이거나 SQL 미설정이면
+	//   비활성. rawgps_recover 는 기동 시 1회뿐이라 엔진이 계속 떠 있는 동안 2 에 갇힌 행(워커
+	//   강제 종료·배치 실패 잔류분)을 못 푼다. 예약 시각(MATCH_RSV_DT)이 임계보다 오래된 행만
+	//   PENDING(0)으로 되돌려 다음 poll 에서 재처리시킨다. 처리 중인 행은 임계 미만이라 안전.
+	//   best-effort — 실패해도 다음 주기 재시도 (2026-08-29 최정우 추가)
+	if ((m_nStaleSec > 0) && (!m_strStaleRecoverSQL.empty()) &&
+		((dtNow - m_dtLastStaleRecover) >= m_nStaleSec))
+	{
+		RecoverStaleProcessing();
+		m_dtLastStaleRecover = dtNow;
+	}
+
 	// CPU 사용률 샘플 — 매초 누적(직전 /proc/stat 대비 델타), 하트비트 반영 시점엔 이 최신값을
 	//   그대로 사용한다(하트비트 순간에만 샘플링하면 그 찰나의 값이라 대표성이 떨어짐) (2026-08-20 최정우 추가)
 	UpdateCpuSample();
@@ -1005,6 +1041,57 @@ void CServer::ProcessPeriodSec(time_t dtNow)
  *   샘플과의 차이로 사용률(%)을 계산한다. 최초 1회는 델타를 낼 이전 값이 없어 계산을
  *   건너뛴다(m_bCpuSampleValid=false) (2026-08-20 최정우 추가)
 */
+/**
+ * @brief 좀비 PROCESSING(MATCH_STATUS=2) 운영 중 회수 [stale_recover]
+ * @return void
+ * @remark 예약 시각(MATCH_RSV_DT)이 m_nStaleSec 보다 오래된 행만 PENDING(0)으로 되돌린다.
+ *         기동 시 1회 도는 rawgps_recover 와 달리 엔진이 떠 있는 동안에도 회수한다 —
+ *         워커 강제 종료·배치 실패로 2 에 갇힌 행이 재기동까지 미처리로 남는 것을 막는다.
+ *         best-effort: 실패해도 로그만 남기고 다음 주기에 재시도 (2026-08-29 최정우 추가)
+*/
+void CServer::RecoverStaleProcessing()
+{
+	if (m_strStaleRecoverSQL.empty() || (m_pcPostgrePool == nullptr))
+		return;
+
+	PGconn *pcConn = m_pcPostgrePool->getConnection();
+	if (pcConn == nullptr)
+	{
+		LOGFMTE("stale processing recover — get connection failed!");
+		return;
+	}
+
+	char szThresholdSec[16];
+	snprintf(szThresholdSec, sizeof(szThresholdSec), "%d", m_nStaleSec);
+
+	const char *pszParams[1] = { szThresholdSec };
+	PGresult *pcResult = PQexecParams(pcConn, m_strStaleRecoverSQL.c_str(),
+		1, nullptr, pszParams, nullptr, nullptr, 0);
+
+	if ((pcResult == nullptr) || (PQresultStatus(pcResult) != PGRES_COMMAND_OK))
+	{
+		LOGFMTW("stale processing recover failed!error=[%s]", PQerrorMessage(pcConn));
+	}
+	else
+	{
+		// 회수 0 건이 정상 — 1 건이라도 나오면 그 사이 배치 실패·강제 종료가 있었다는 뜻이라
+		//   WARN 으로 남겨 원인 추적이 가능하게 한다
+		const char *pszAffected = PQcmdTuples(pcResult);
+		const int nAffected = ((pszAffected != nullptr) && (pszAffected[0] != '\0'))
+			? atoi(pszAffected) : 0;
+		if (nAffected > 0)
+			LOGFMTW("stale processing recovered!PROCESSING→PENDING rows=[%d] threshold=[%d]s",
+				nAffected, m_nStaleSec);
+		else
+			LOGFMTD("stale processing recover: none rows=[0] threshold=[%d]s", m_nStaleSec);
+	}
+
+	if (pcResult != nullptr)
+		PQclear(pcResult);
+
+	m_pcPostgrePool->releaseConnection(pcConn);
+}
+
 void CServer::UpdateCpuSample()
 {
 	FILE *fp = fopen("/proc/stat", "r");

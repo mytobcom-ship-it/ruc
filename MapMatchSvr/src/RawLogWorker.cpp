@@ -1554,21 +1554,101 @@ void CRawLogWorker::run(int nThreadId, void *context)
 	// 1틱 지연커밋 도입으로 이번 배치의 모든 행이 보류(pending)됐다면 vtUpdates 가 비어있을 수
 	//   있음 — 그 경우 bulk UPDATE 자체는 할 게 없어 자동 성공 취급하고, 아래 세션 커밋(보류
 	//   버퍼 포함)은 그대로 진행해야 다음 배치에서 이어서 확정(commit)된다 (2026-08-21 최정우 추가)
+	// ── 맵매칭 결과 UPDATE + 과금 INSERT 를 한 트랜잭션으로 (#10, 2026-08-29 최정우 추가) ──
+	//   이전에는 autocommit 단일 문장이라 rawgps_update 가 먼저 커밋된 뒤 과금 INSERT 가 실패하면,
+	//   보상 release 의 WHERE MATCH_STATUS=2 조건이 이미 ①에서 소진돼 affected=0 으로 실패했다.
+	//   그 결과 과금은 유실되고 매칭 결과만 남았으며, 세션도 미커밋이라 해당 구간 과금이 조용히
+	//   비었다(2026-08-29 실측: prim_chargehand 컬럼 누락으로 expected=[116] affected=[0]).
+	//   이제 실패 시 ROLLBACK 으로 MATCH_STATUS 를 2 로 되돌린 뒤 release 하므로 조건이 다시
+	//   성립해 PENDING(0)으로 재큐잉되고, 재기동 없이 다음 poll 에서 정상 재처리된다.
+	//   trip_end_dt 는 금액 무관 참고 컬럼이라 종전대로 트랜잭션 밖 best-effort 로 둔다.
+	//   ReleaseConnection() 의 PQTRANS_INERROR 롤백 가드가 이 도입을 대비해 이미 들어와 있다.
+	auto fnTxn = [pcConn](const char *pszCmd) -> bool
+	{
+		PGresult *pcTxnResult = PQexec(pcConn, pszCmd);
+		const bool bCmdOk = (pcTxnResult != nullptr)
+			&& (PQresultStatus(pcTxnResult) == PGRES_COMMAND_OK);
+		if (pcTxnResult != nullptr)
+			PQclear(pcTxnResult);
+		return bCmdOk;
+	};
+
+	const bool bNeedTxn = (!vtUpdates.empty() || !vtChargeInserts.empty());
+	bool bTxnOpen = false;
+	if (bNeedTxn)
+	{
+		if (fnTxn("BEGIN"))
+		{
+			bTxnOpen = true;
+		}
+		else
+		{
+			LOGFMTE("[#%02d] batch txn begin failed!device=[%s] trip_id=[%s]",
+				nThreadId, (*pvtBatch)[0].szDeviceKey, (*pvtBatch)[0].szTripID);
+			bProcessOk = false;
+		}
+	}
+
 	bool bUpdateOk = true;
-	if (!vtUpdates.empty())
+	bool bChargeOk = true;
+	if (bTxnOpen)
 	{
 		// reserve(rawgps_select) 의 짝: 완료는 rawgps_update(1/3/4), 실패 시 release(0) 동일 SQL
 		// 맵매칭 결과 bulk UPDATE (2026-07-08 최정우 주석 추가)
-		if (!BulkUpdateRawLogs(pcConn, vtUpdates))
+		if (!vtUpdates.empty() && !BulkUpdateRawLogs(pcConn, vtUpdates))
 		{
 			LOGFMTE("[#%02d] bulk update failed!device=[%s] trip_id=[%s] count=[%d]",
 				nThreadId, (*pvtBatch)[0].szDeviceKey, (*pvtBatch)[0].szTripID,
 				static_cast<int>(vtUpdates.size()));
-			bProcessOk = false;
 			bUpdateOk = false;
+		}
 
-			// PROCESSING 좀비 방지: match_status=0, INTERSECT_LEN/MATCH_* '' → 기존 컬럼 유지
-			// bulk update 실패 시 동일 PK release (2026-07-08 최정우 주석 추가)
+		// 과금 bulk INSERT(개방형·폐쇄형·구간단속·주정차·면제도로·일반도로 공용) — rawgps_update
+		//   성공 후에만 시도. 실패 시 map-match bulk update 실패와 동일하게 취급(배치 release·
+		//   세션 미커밋) → 다음 poll 에서 재처리되며 세션의 진행 중 트랙(vtOpenRuns 등)도 커밋되지
+		//   않아 재통과 시 정상 재부과됨 (2026-08-12 최정우 추가)
+		if (bUpdateOk && !vtChargeInserts.empty())
+		{
+			bChargeOk = BulkInsertCharges(pcConn, vtChargeInserts);
+			if (!bChargeOk)
+			{
+				LOGFMTE("[#%02d] charge bulk insert failed!device=[%s] trip_id=[%s] count=[%d]",
+					nThreadId, (*pvtBatch)[0].szDeviceKey, (*pvtBatch)[0].szTripID,
+					static_cast<int>(vtChargeInserts.size()));
+			}
+		}
+
+		if (bUpdateOk && bChargeOk)
+		{
+			// 커밋 실패도 "DB 미반영" 이므로 롤백 후 release 경로로 보낸다
+			if (!fnTxn("COMMIT"))
+			{
+				LOGFMTE("[#%02d] batch txn commit failed!device=[%s] trip_id=[%s]",
+					nThreadId, (*pvtBatch)[0].szDeviceKey, (*pvtBatch)[0].szTripID);
+				bUpdateOk = false;
+				fnTxn("ROLLBACK");
+			}
+		}
+		else if (!fnTxn("ROLLBACK"))
+		{
+			// 롤백 실패 시 MATCH_STATUS 가 2 로 복원되지 않아 아래 release 도 affected=0 이 된다.
+			//   이 경우는 기동 시 rawgps_recover 가 회수한다 (2026-08-29 최정우 추가)
+			LOGFMTE("[#%02d] batch txn rollback failed!device=[%s] trip_id=[%s]",
+				nThreadId, (*pvtBatch)[0].szDeviceKey, (*pvtBatch)[0].szTripID);
+		}
+	}
+
+	// bNeedTxn 이 false 면 반영할 게 없어 성공 취급 — 1틱 지연커밋으로 이번 배치 전 행이 보류(pending)
+	//   됐을 때가 이 경우이며, 세션 커밋은 그대로 진행해야 다음 배치에서 확정된다 (2026-08-21 최정우 추가)
+	const bool bDbOk = bTxnOpen ? (bUpdateOk && bChargeOk) : (!bNeedTxn);
+	if (!bDbOk)
+	{
+		bProcessOk = false;
+
+		// PROCESSING 좀비 방지: ROLLBACK 으로 2 로 되돌아온 예약 행을 PENDING(0)으로 반납
+		//   match_status=0, INTERSECT_LEN/MATCH_* '' → 기존 컬럼 유지 (2026-07-08 최정우 주석 추가)
+		if (!vtUpdates.empty())
+		{
 			if (!BulkReleaseRawLogs(pcConn, vtUpdates))
 			{
 				LOGFMTE("[#%02d] bulk release failed!device=[%s] trip_id=[%s] count=[%d]",
@@ -1581,63 +1661,26 @@ void CRawLogWorker::run(int nThreadId, void *context)
 					nThreadId, (*pvtBatch)[0].szDeviceKey, (*pvtBatch)[0].szTripID,
 					static_cast<int>(vtUpdates.size()));
 			}
-			// stWorkSession 폐기 — 커밋된 세션(mapSessions) 유지
 		}
+		// stWorkSession 폐기 — 커밋된 세션(mapSessions) 유지
 	}
-
-	if (bUpdateOk)
+	else
 	{
-		// 과금 bulk INSERT(개방형·폐쇄형·구간단속·주정차·면제도로·일반도로 공용) — rawgps_update
-		//   성공 후에만 시도. 실패 시 map-match bulk update 실패와 동일하게 취급(배치 release·
-		//   세션 미커밋) → 다음 poll 에서 재처리되며 세션의 진행 중 트랙(vtOpenRuns 등)도 커밋되지
-		//   않아 재통과 시 정상 재부과됨 (2026-08-12 최정우 추가)
-		bool bChargeOk = true;
-		if (!vtChargeInserts.empty())
+		// 트립 종료 trip_end_dt UPDATE — best-effort(실패해도 배치 자체는 성공 처리).
+		//   과금 INSERT 와 달리 금액에 영향 없는 참고 컬럼이라 실패해도 배치를 release 하지 않음 (2026-08-12 최정우 추가)
+		if (!vtTripEndUpdates.empty() && !UpdateTripEndDt(pcConn, vtTripEndUpdates))
 		{
-			bChargeOk = BulkInsertCharges(pcConn, vtChargeInserts);
-			if (!bChargeOk)
-			{
-				LOGFMTE("[#%02d] charge bulk insert failed!device=[%s] trip_id=[%s] count=[%d]",
-					nThreadId, (*pvtBatch)[0].szDeviceKey, (*pvtBatch)[0].szTripID,
-					static_cast<int>(vtChargeInserts.size()));
-			}
+			LOGFMTE("[#%02d] trip_end update failed!device=[%s] trip_id=[%s] count=[%d]",
+				nThreadId, (*pvtBatch)[0].szDeviceKey, (*pvtBatch)[0].szTripID,
+				static_cast<int>(vtTripEndUpdates.size()));
 		}
 
-		if (!bChargeOk)
-		{
-			bProcessOk = false;
-			if (!vtUpdates.empty() && !BulkReleaseRawLogs(pcConn, vtUpdates))
-			{
-				LOGFMTE("[#%02d] bulk release failed!device=[%s] trip_id=[%s] count=[%d]",
-					nThreadId, (*pvtBatch)[0].szDeviceKey, (*pvtBatch)[0].szTripID,
-					static_cast<int>(vtUpdates.size()));
-			}
-			else if (!vtUpdates.empty())
-			{
-				LOGFMTW("[#%02d] bulk release ok!PROCESSING→PENDING device=[%s] trip_id=[%s] count=[%d]",
-					nThreadId, (*pvtBatch)[0].szDeviceKey, (*pvtBatch)[0].szTripID,
-					static_cast<int>(vtUpdates.size()));
-			}
-			// stWorkSession 폐기 — 커밋된 세션(mapSessions) 유지
-		}
+		// DB 반영 성공 후에만 세션 커밋 (bulk 실패·release 시 연속 맵매칭 맥락 보존)
+		// bTripEnded 이면 MATCHED/ERROR/SKIP 무관 trip_id 세션 제거
+		if (bTripEnded)
+			mapSessions.erase(strDeviceKey);					// (2026-07-08 최정우 수정) 키 = DEVICE_KEY
 		else
-		{
-			// 트립 종료 trip_end_dt UPDATE — best-effort(실패해도 배치 자체는 성공 처리).
-			//   과금 INSERT 와 달리 금액에 영향 없는 참고 컬럼이라 실패해도 배치를 release 하지 않음 (2026-08-12 최정우 추가)
-			if (!vtTripEndUpdates.empty() && !UpdateTripEndDt(pcConn, vtTripEndUpdates))
-			{
-				LOGFMTE("[#%02d] trip_end update failed!device=[%s] trip_id=[%s] count=[%d]",
-					nThreadId, (*pvtBatch)[0].szDeviceKey, (*pvtBatch)[0].szTripID,
-					static_cast<int>(vtTripEndUpdates.size()));
-			}
-
-			// DB 반영 성공 후에만 세션 커밋 (bulk 실패·release 시 연속 맵매칭 맥락 보존)
-			// bTripEnded 이면 MATCHED/ERROR/SKIP 무관 trip_id 세션 제거
-			if (bTripEnded)
-				mapSessions.erase(strDeviceKey);					// (2026-07-08 최정우 수정) 키 = DEVICE_KEY
-			else
-				mapSessions[strDeviceKey] = stWorkSession;			// (2026-07-08 최정우 수정) 키 = DEVICE_KEY
-		}
+			mapSessions[strDeviceKey] = stWorkSession;			// (2026-07-08 최정우 수정) 키 = DEVICE_KEY
 	}
 
 	if (!bProcessOk)

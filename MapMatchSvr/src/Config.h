@@ -45,6 +45,7 @@ typedef struct sConfig
 	string							strTripEndUpdateSession;			// 트립 종료 시 trip_end_dt UPDATE SQL, 비어 있으면 비활성 (2026-08-12 최정우 추가)
 	string							strAbnormalTripEndSession;			// TTL 만료(비정상 종료) 시 개방형 미확정 레코드 마감 UPDATE SQL, 비어 있으면 비활성 (2026-08-13 최정우 추가)
 	string							strServerStatusSession;				// 서버 상태(CPU/메모리) 하트비트 UPDATE SQL, 비어 있으면 비활성 (2026-08-20 최정우 추가)
+	string							strStaleRecoverSession;				// 좀비 PROCESSING 운영 중 회수 SQL, 비어 있으면 비활성 (2026-08-29 최정우 추가)
 
 	// 피더 (DB poll)
 	int								nFetchLimit;						// 1회 조회·예약 최대 건수 (건)
@@ -87,6 +88,7 @@ typedef struct sConfig
 	int								nSpeedMargin;					// speed_margin (km/h) (2026-07-20 최정우 추가)
 
 	int								nGateReloadSec;						// [charge] gate_reload (단위: sec, 0=재조회 없음) (2026-08-12 최정우 추가)
+	int								nStaleSec;				// [server] stale_sec (단위: sec, 0=비활성) — 이 시간 이상 PROCESSING(2) 인 행 회수 (2026-08-29 최정우 추가)
 	int								nParkBuf;							// [charge] park_buf (단위: m) — 구역판정 버퍼 상한 (2026-08-13 최정우 추가)
 	// [charge] park_accmax (단위: m) — 주정차 판정에 쓸 좌표의 ACCURACY_M 상한. 0=비활성
 	//   측위에 실패한 단말은 셀 기반 대체 위치로 점프한 뒤 그 좌표에 얼어붙는다. 실측

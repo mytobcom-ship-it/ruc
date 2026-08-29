@@ -41,6 +41,10 @@ Simulator/bin/RawGpsSimSvr
 export/
 roadnet/
 
+# 문서(*.md) — 저장소에는 환경설정·쿼리·소스만 올린다. 문서는 로컬 유지
+#   (사용자 지시, 2026-08-30). 파일은 지우지 않고 추적만 제외한다.
+*.md
+
 # Large road network data (별도 복사 또는 CreateData로 재생성, GitHub 100MB 제한)
 *.psf
 *.psf.*

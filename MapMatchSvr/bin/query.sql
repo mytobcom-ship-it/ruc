@@ -305,7 +305,10 @@ SELECT MIN(FROM_MIN) FROM RUC.BASE_PARKING_FINE;
 --   $11=TO_LAT[](모르면 NULL) $12=TO_LON[](모르면 NULL) $13=ZONE_ID[] $14=ZONE_NAME[] $15=DIST_M[](개방형은 빈값) $16=SPEED_KMH[](계산 불가 시 빈값)
 --   $17=SPEED_LIMIT_KMH[] $18=OCCUR_DT[] $19=TRIP_START_DT[] $20=TOLLGATE_ID[](실측상 항상 빈값)
 --   $21=ENTRY_TOLLGATE_ID[](폐쇄형 전용, 개방형은 빈값) $22=EXIT_TOLLGATE_ID[](폐쇄형 전용) $23=REG_DT[] $24=UPD_DT[](REG_DT와 항상 동일)
---   $25=CHARGE_YN[](빈값=DB기본 Y, 폐쇄형 입/출구 게이트 이상 시 "N") $26=CHARGE_STATUS[](빈값=DB기본 0, 이상 시 "4"=SKIP)
+--   $25=CHARGE_YN[](빈값=DB기본 Y, 이상 시 "N" — 폐쇄형·구간단속 게이트 이상, 개방형 트립시작 run
+--     게이트 미통과, TTL flush 등)
+--   $26=CHARGE_STATUS[](빈값=DB기본 0. 이상 시 "3"=AUDIT(심사대상)이 기본이고, 면제도로(CHARGE_TYPE=5)
+--     의 TTL 만료만 "4"=SKIP — 과금 대상이 아니라 심사 큐에 올리지 않는다) (2026-08-30 최정우 수정)
 --   $27=STAY_SECONDS[](주정차 전용 — 체류시간 초. 컬럼 코멘트: "체류 시간(초). 주정차 위반 판단". 다른 3종은 빈값=DB기본 0) (2026-08-13 최정우 추가)
 --   $28=TRIP_END_DT[](주정차 TTL 만료 강제마감 전용 — 더 이상 GPS 수신 불가로 판단한 시각. 그 외는
 --     빈값=NULL 유지, 실제 TRIP_EVENT=2 수신 시 [trip_end] UPDATE 가 별도로 채움) (2026-08-13 최정우 추가)

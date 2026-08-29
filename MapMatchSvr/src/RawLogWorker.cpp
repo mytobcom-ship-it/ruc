@@ -494,13 +494,18 @@ void CRawLogWorker::AppendStaleParkingCharge(int nThreadId, const string& strDev
  * @param[in] strDeviceKey 세션 맵 키(=DEVICE_KEY)
  * @param[in] stSession 만료 직전 세션(제거 전 스냅샷)
  * @param[out] pvtOut 세션이 진행 중이었으면 CHARGE_INSERT_ROW 1건 추가
- * @remark 정상 이탈·트립종료는 ProcessExemptZoneCharge() 가 이미 그 자리에서 N/4 로 기록하므로,
+ * @remark 정상 이탈·트립종료는 ProcessExemptZoneCharge() 가 그 자리에서 Y/0 으로 기록하므로,
  *   이 함수는 그 신호(구역 이탈/트립종료)가 영영 안 오고 GPS 자체가 끊긴 경우(TTL 만료)만
- *   대신 마감해주는 보완 경로. charge_status=4(SKIP) — 면제도로는 애초에 과금 대상이 아니므로
- *   AUDIT(3)이 아니라 SKIP(4)(사용자 지시 계승).
+ *   대신 마감해주는 보완 경로 — 여기서는 N/4 로 INSERT 한다. 다른 유형이 TTL flush 를 C++ 에서
+ *   직접 N/3 으로 세팅하는 것과 동일한 구조이며, 면제도로만 AUDIT(3) 이 아니라 SKIP(4) 를 쓴다
+ *   (과금 대상이 아니라 사람이 재확인할 필요가 없다는 설계 의도, [trip_abend] 의 CHARGE_TYPE=5
+ *   분기와 값이 일치).
+ *   (사용자 지시, 2026-08-30 최정우 수정 — BuildExemptRow 가 정상/TTL 구분 없이 항상 N/4 로
+ *    고정하던 것을 호출측 지정으로 바꿈)
 */
 void CRawLogWorker::BuildExemptRow(const ZONE_RUN_SESSION& stRun, const string& strTripId,
-		const string& strDeviceKey, int nChargeSeq, time_t dtEnd, uint32 dwEndGpsSeq, CHARGE_INSERT_ROW *pstRow)
+		const string& strDeviceKey, int nChargeSeq, time_t dtEnd, uint32 dwEndGpsSeq,
+		const char *pszChargeYn, const char *pszChargeStatus, CHARGE_INSERT_ROW *pstRow)
 {
 	PZONE_INFO pstZone = m_stConfig.pcChargeDataLoader->GetZoneByRoadId(stRun.szRoadID);
 
@@ -563,8 +568,14 @@ void CRawLogWorker::BuildExemptRow(const ZONE_RUN_SESSION& stRun, const string& 
 	pstRow->strExitTollgateId = "";
 	pstRow->strRegDt = FormatDateTime14(time(nullptr));
 	pstRow->strUpdDt = pstRow->strOccurDt;
-	pstRow->strChargeYn = "N";								// 면제도로는 항상 N/4
-	pstRow->strChargeStatus = "4";
+	// charge_yn/status — 호출측 지정. 정상 이탈·트립종료는 Y/0, TTL 만료 강제마감은 N/4.
+	//   다른 유형이 TTL flush 를 C++ 에서 직접 N/3 으로 세팅하는 것과 동일한 구조이며, 면제도로만
+	//   AUDIT(3) 이 아니라 SKIP(4) 를 쓴다 — 과금 대상이 아니라 사람이 재확인할 필요가 없다는
+	//   설계 의도. [trip_abend] 의 CHARGE_TYPE=5 분기와도 값이 일치한다.
+	//   (사용자 지시, 2026-08-30 최정우 수정 — 이전에는 여기서 항상 N/4 로 고정해 정상 통행까지
+	//    "확정 데이터 아님"으로 남았다)
+	pstRow->strChargeYn = pszChargeYn;
+	pstRow->strChargeStatus = pszChargeStatus;
 }
 
 void CRawLogWorker::AppendExpiredExemptZoneCharge(int nThreadId, const string& strDeviceKey,
@@ -579,7 +590,7 @@ void CRawLogWorker::AppendExpiredExemptZoneCharge(int nThreadId, const string& s
 	{
 		CHARGE_INSERT_ROW stRow;
 		BuildExemptRow(stSession.vtExemptRuns[i], stSession.szTripId, strDeviceKey,
-			nSeq, stSession.dtLastSeen, stSession.dwLastGpsSeq, &stRow);
+			nSeq, stSession.dtLastSeen, stSession.dwLastGpsSeq, "N", "4", &stRow);
 		pvtOut->push_back(stRow);
 		nSeq += 1;
 
@@ -3850,8 +3861,9 @@ void CRawLogWorker::ProcessClosedRoadCharge(int nThreadId, const sRawLogInfo& st
  *   - speed_limit_kmh 는 구역 자체 등록값(base_roadlink.speed_limit_kmh) 사용
  *   - charge_yn/charge_status 는 기본 Y/0 — 다른 유형과 동일하게 처리(사용자 지시, 2026-08-13).
  *     원래는 위반 여부와 무관하게 항상 N/4 고정이었음(실측 2건 전부 위반(78/84>60)인데도 N/4로
- *     확인됨 — 통행료 파이프라인 비대상이라는 근거였음). 이번 변경으로 그 실측 선례와는 달라짐 —
- *     구간단속의 TTL 만료·세션유실 시 N/4 처리는 아직 별도 미구현(폐쇄형과 동일한 잔여 이슈)
+ *     확인됨 — 통행료 파이프라인 비대상이라는 근거였음). 이번 변경으로 그 실측 선례와는 달라짐.
+ *     TTL 만료·세션유실은 이후 AppendExpiredSpeedZoneCharge() 가 N/3(AUDIT) 으로 처리하도록
+ *     구현됨 — 다른 유형과 동일 관례 (2026-08-30 최정우 주석 갱신)
  *   - 2026-08-13 재작성: 폐쇄형과 동일한 3가지 한계 대응(한 링크 내 동일방향 게이트 2개 이상,
  *     road_id 까지 비교하는 재진입 가드로 "같은 링크의 다른 구역" 통과 허용, gate_div='B' 겸용
  *     게이트 지원) — CollectGateCandidates() 재사용, 상세 근거는 ProcessClosedRoadCharge() 참고
@@ -4692,7 +4704,7 @@ void CRawLogWorker::ProcessExemptZoneCharge(int nThreadId, const sRawLogInfo& st
 
 		CHARGE_INSERT_ROW stRow;
 		BuildExemptRow(stRun, stRawLogInfo.szTripID, stRawLogInfo.szDeviceKey,
-			pstSession->nChargeSeq, stRawLogInfo.dtGPS, stRawLogInfo.dwSeqNo, &stRow);
+			pstSession->nChargeSeq, stRawLogInfo.dtGPS, stRawLogInfo.dwSeqNo, "Y", "0", &stRow);
 		pvtChargeInserts->push_back(stRow);
 
 		LOGFMTI("[#%02d] exempt zone exit recorded!device=[%s] trip_id=[%s] seq=[%d] road=[%s] "

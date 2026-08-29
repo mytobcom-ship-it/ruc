@@ -680,8 +680,14 @@ private:
 	// 면제도로 세션 시작(최초 진입 및 재진입 유예 초과 후 동틱 재진입 공용) — 필드 설정만 분리
 	//   (2026-08-14 최정우 추가, 재진입 유예 도입과 함께 중복 제거용으로 분리)
 	// 면제도로(ROAD_KIND=5) 진입/이탈 판정 — 게이트 없이 매칭 링크→구역 역인덱스로 판정.
-	//   출력은 charge_type="5"(비과금도로 고유값) + charge_yn='N'/charge_status='4' 고정(사용자
-	//   지시, 2026-08-14 — zone 기반 판정으로 복귀, charge_type/from_id/to_id 모두 최종 원복 상태).
+	//   출력은 charge_type="5"(비과금도로 고유값), charge_type/from_id/to_id 는 zone 기반 판정으로
+	//   복귀한 최종 원복 상태(사용자 지시, 2026-08-14).
+	//   이 함수(정상 이탈·트립종료)가 기록하는 값은 charge_yn='Y'/charge_status='0' 이다 — 다른
+	//   과금 유형의 정상 통행과 동일. 과금 제외는 charge_yn 이 아니라 charge_type=5 로 구분된다.
+	//   이상 건만 N/4(SKIP): TTL 만료는 AppendExpiredExemptZoneCharge(), 트립 미종료는
+	//   [trip_abend] 가 처리하며, 심사 큐(charge_status=3)에는 넣지 않는다 — 면제 건은 사람이
+	//   재확인할 대상이 아니기 때문(사용자 지시, 2026-08-30 최정우 수정 — 이전에는 정상 통행까지
+	//   N/4 로 고정해 정상/이상이 구분되지 않았다).
 	//   2026-08-14 재진입 유예 추가: "무존" 상태여도 exempt_regrace 초 동안 즉시 확정하지 않고
 	//   대기 — 그 안에 같은 구역으로 복귀하면 병합, 초과하면 확정 마감. 확정 마감 시점에 이미 다른
 	//   구역 위라면 유예 없이 곧바로 그 구역으로 새 세션 시작(경계 전환 병합, BeginExemptZoneSession
@@ -690,12 +696,18 @@ private:
 	void ProcessExemptZoneCharge(int nThreadId, const sRawLogInfo& stRawLogInfo,
 		const MATCH_LINK_INFO& stMatchLinkInfo, VEHICLE_TRIP_SESSION *pstSession,
 		vector<CHARGE_INSERT_ROW> *pvtChargeInserts, bool bTrustedTripEnd);
-	// TTL 만료로 세션이 지워지기 직전, 아직 열려있는 면제도로 세션이면 N/4 로 1건 기록
-	// (다른 3종의 N/3(AUDIT)과 달리 면제도로는 애초에 과금 대상이 아니므로 N/4(SKIP)가 맞다는
-	//   사용자 판단 계승, 2026-08-14)
+	// TTL 만료로 세션이 지워지기 직전, 아직 열려있는 면제도로 세션이면 N/4 로 1건 기록 —
+	//   BuildExemptRow 에 "N","4" 를 넘긴다. 다른 유형이 TTL flush 를 C++ 에서 직접 N/3(AUDIT)
+	//   으로 세팅하는 것과 같은 구조이며, 면제도로만 N/4(SKIP) 를 쓴다: 과금 대상이 아니라
+	//   심사 큐에 올릴 필요가 없기 때문(사용자 판단 계승 2026-08-14, 2026-08-30 재확인).
+	//   trip_end_dt 를 채운 채 INSERT 하므로 [trip_abend] 와 겹치지 않는다(주정차와 동일 패턴).
 	// 면제도로 과금 1행 생성 — 정상 이탈과 TTL 만료 공용 (2026-08-23 최정우 추가)
+	//   charge_yn/status 는 호출측이 지정한다(BuildParkRow 와 동일 패턴) — 정상 이탈은 Y/0,
+	//   TTL 만료는 N/4. 다른 유형이 TTL flush 를 C++ 에서 직접 N/3 으로 세팅하는 것과 같은 구조로,
+	//   면제도로만 SKIP(4) 를 쓴다 (사용자 지시, 2026-08-30 최정우 수정)
 	void BuildExemptRow(const ZONE_RUN_SESSION& stRun, const string& strTripId,
-		const string& strDeviceKey, int nChargeSeq, time_t dtEnd, uint32 dwEndGpsSeq, CHARGE_INSERT_ROW *pstRow);
+		const string& strDeviceKey, int nChargeSeq, time_t dtEnd, uint32 dwEndGpsSeq,
+		const char *pszChargeYn, const char *pszChargeStatus, CHARGE_INSERT_ROW *pstRow);
 	void AppendExpiredExemptZoneCharge(int nThreadId, const string& strDeviceKey,
 		const VEHICLE_TRIP_SESSION& stSession, vector<CHARGE_INSERT_ROW> *pvtOut);
 	// 일반도로(ROAD_KIND=0, NODE_STEP) 진입/이탈 판정 — 비과금도로와 동일 구조(게이트 없이 매칭

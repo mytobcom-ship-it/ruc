@@ -8,7 +8,7 @@ set -e
 
 cd "$(dirname "$0")"
 
-PY="/home/mytobcom/ruc/web/.venv312/bin/python"
+PY="/home/mytobcom/ruc/.venv-roadnet/bin/python3"   # pyproj 3.7.2 (2026-08-29 최정우 수정 — .venv312 유실)
 REPROJ="/home/mytobcom/ruc/CreateData/scripts/reproject_5186_to_4326.py"
 DATA="/home/mytobcom/ruc/CreateData/data"
 

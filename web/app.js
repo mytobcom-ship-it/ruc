@@ -1,6 +1,7 @@
 /**
  * RUC 맵매칭 GPS 시각화 (2026-07-10 최정우)
- *  - 주변 도로: prim_link_info (PSF WGS84, trip bbox + road_buffer_m)
+ *  - 주변 도로: ruc.road_link (WGS84, trip bbox + road_buffer_m) (2026-08-29 최정우 수정 —
+ *      2026-08-26 roadnet DB 참조 제거로 prim_link_info 가 아니라 road_link 를 쓴다)
  *  - 도로 진행방향: LineString 꼭짓점 순서(f_node → t_node) 화살표
  *  - GPS 빨강 / MATCHED 파랑 / SKIP 주황
  */
@@ -22,7 +23,7 @@
   //   운행 1건이 2분 이상 걸리는 경우도 있어(2026-07-22 vehicles=3 전환 후 실측: 129초 시점에도
   //   미완주) 90초는 부족했다 — 5분으로 상향 (2026-07-22 최정우 수정)
   const NEWTEST_TIMEOUT_MS = 300000;
-  // ROAD_TYPE(prim_link_info) — 시설 유형. 잠수교 등 특정 교량명은 별도 코드 없이 교량(1)에 포함, name 으로 구분 (2026-07-21 최정우 추가)
+  // ROAD_TYPE(ruc.road_link) — 시설 유형. 잠수교 등 특정 교량명은 별도 코드 없이 교량(1)에 포함, name 으로 구분 (2026-07-21 최정우 추가)
   const ROAD_TYPE_LABELS = { 0: "일반도로", 1: "교량", 2: "터널", 3: "고가도로", 4: "지하차도" };
   const ARROW_ZOOM_MIN = 14;
   const ARROW_SPACING_M = 45;

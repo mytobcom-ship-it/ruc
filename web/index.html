@@ -80,6 +80,9 @@
   #chargeTable tr:hover td { background: var(--code-bg); }
   #chargeTable .ch-empty { text-align: center; color: var(--muted); padding: 14px; }
   #chargeTable .ch-na { color: var(--muted); }
+  /* 속도(㎞/h) 열 — 실측/제한 표시, 위반(실측≥제한) 시 강조 (2026-09-01 최정우 추가) */
+  #chargeTable .ch-violate { color: #d32f2f; font-weight: 700; }
+  #chargeTable .ch-limit { color: var(--muted); font-size: 11px; }
   /* 과금 이력 행 클릭 → 해당 G 범위로 지도 확대 (2026-08-24 최정우 추가) */
   #chargeTable tr.ch-row-clickable { cursor: pointer; }
   #chargeTable tr.ch-row-clickable:hover { background: var(--hover-bg, rgba(30,136,229,0.08)); }
@@ -297,6 +300,11 @@
           주정차단속 <span class="charge-desc">— base_roadlink(4)</span>
         </label>
         <label class="charge-check">
+          <input type="checkbox" id="chk-parking-proposed" data-layer="parkingProposed" checked />
+          <span class="dot" style="background:transparent; border:2px dashed #e53935;"></span>
+          제안 폴리곤(실측 클러스터) <span class="charge-desc">— RL-Z00014/RL-Z00001 실제 체류 GPS 컨벡스헐+5m, DB 미반영 비교용</span>
+        </label>
+        <label class="charge-check">
           <input type="checkbox" id="chk-exempt" data-layer="exempt" checked />
           <span class="dot" style="background:#d81b60;"></span>
           면제도로 <span class="charge-desc">— base_roadlink(5)</span>
@@ -330,18 +338,18 @@
     <div id="chargePanel">
       <div id="chargeHead">
         <span class="ch-title">과금 이력 <span class="ch-src">ruc.prim_chargehand</span></span>
-        <span class="ch-src" id="buildStamp" title="이 값이 안 보이면 브라우저가 옛 페이지를 쓰고 있습니다">build 0822-4</span>
+        <span class="ch-src" id="buildStamp" title="이 값이 안 보이면 브라우저가 옛 페이지를 쓰고 있습니다">build 0901-1</span>
         <span id="chargeCount" class="ch-count">—</span>
         <button id="chargeToggle" title="접기/펼치기">▾</button>
       </div>
       <div id="chargeBody">
         <table id="chargeTable">
           <thead><tr>
-            <th>#</th><th>유형</th><th>G순번</th><th>M순번</th>
+            <th>#</th><th>유형</th><th>G순번</th>
             <th>구간 ID</th><th>구간명</th><th>본선</th><th>진입</th><th>진출</th>
-            <th>거리(m)</th><th>발생시각</th>
+            <th>거리(m)</th><th>평균/제한속도(km/h)</th><th>체류</th><th>발생시각</th>
           </tr></thead>
-          <tbody id="chargeBody2"><tr><td colspan="11" class="ch-empty">트립을 선택하세요</td></tr></tbody>
+          <tbody id="chargeBody2"><tr><td colspan="12" class="ch-empty">트립을 선택하세요</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -388,7 +396,39 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 }).addTo(map);
 
 // ==== 과금 4유형 레이어 — 체크박스로 토글, 기본 숨김 ====
-const chargeLayers = { open: L.layerGroup(), closed: L.layerGroup(), speed: L.layerGroup(), parking: L.layerGroup(), node: L.layerGroup(), exempt: L.layerGroup() };
+const chargeLayers = { open: L.layerGroup(), closed: L.layerGroup(), speed: L.layerGroup(), parking: L.layerGroup(), node: L.layerGroup(), exempt: L.layerGroup(), parkingProposed: L.layerGroup() };
+
+// 주정차 폴리곤 재검토용 임시 비교 레이어(DB 미반영) — RL-Z00014/RL-Z00001 실제 체류 구간
+//   원시 GPS(ACCURACY_M<=15) 컨벡스헐 + 5m 버퍼. 두 구역 다 기존 등록 폴리곤 안에 원시좌표가
+//   단 1건도 안 들어가는 게 확인돼(2026-09-02), 실제 체류 위치 기준으로 다시 그려야 하는지
+//   검토하기 위한 시각적 비교 목적 — DB(base_roadlink)는 건드리지 않았다 (사용자 지시 추가)
+const PROPOSED_PARKING_ZONES = [
+  {
+    road_id: 'RL-Z00014(제안)', road_nm: '강릉 — 실측 클러스터 기준',
+    coords: [[128.906626,37.757178],[128.906616,37.757182],[128.906505,37.757267],[128.906496,37.757416],
+             [128.906663,37.757599],[128.906861,37.757737],[128.907070,37.757778],[128.907225,37.757713],
+             [128.907235,37.757665],[128.906888,37.757334],[128.906656,37.757190],[128.906631,37.757179]]
+  },
+  {
+    road_id: 'RL-Z00001(제안)', road_nm: '판교 — 실측 클러스터 기준',
+    coords: [[127.089847,37.406592],[127.089704,37.406796],[127.089614,37.406923],[127.089563,37.407012],
+             [127.089613,37.407133],[127.089933,37.407788],[127.089972,37.407844],[127.090062,37.407963],
+             [127.090280,37.407947],[127.090530,37.407911],[127.090745,37.407813],[127.090853,37.407685],
+             [127.090816,37.407559]]
+  }
+];
+function renderProposedParkingZones() {
+  PROPOSED_PARKING_ZONES.forEach(function (z) {
+    const latlngs = z.coords.map(function (c) { return [c[1], c[0]]; });
+    const tip = '<b>' + z.road_id + '</b><br/>' + z.road_nm +
+      '<br/>실측 GPS 컨벡스헐(ACCURACY_M≤15) + 5m 버퍼<br/>DB 미반영 — 비교용 제안';
+    L.polygon(latlngs, {
+      color: '#e53935', weight: 2.5, opacity: 0.95, dashArray: '6,4',
+      fillColor: '#e53935', fillOpacity: 0.08
+    }).bindTooltip(tip, { sticky: true, className: 'link-label' }).addTo(chargeLayers.parkingProposed);
+  });
+}
+renderProposedParkingZones();
 
 // 게이트 마커 마우스오버 정보 표시(gate_div/소속구역/좌표) — 항상 보이는 permanent 짧은
 //   라벨은 그대로 두고, 추가 상세정보는 hover 시 popup으로 표시 (2026-08-20 최정우 추가)
@@ -478,7 +518,9 @@ let zoneList = [];
 
 function renderZones(zones) {
   zoneList = zones || [];
-  Object.keys(chargeLayers).forEach(function (k) { chargeLayers[k].clearLayers(); });
+  // parkingProposed 는 서버 zones 응답과 무관한 정적 비교 오버레이라 매번 지우지 않는다
+  //   (DB 미반영 제안 폴리곤 — 트립 전환/새로고침 때마다 사라지면 비교 용도를 못 함)
+  Object.keys(chargeLayers).forEach(function (k) { if (k !== 'parkingProposed') chargeLayers[k].clearLayers(); });
   tgGateMarkers.length = 0;
 
   zoneList.forEach(function (z) {
@@ -1363,12 +1405,43 @@ function fmtSeqRange(from, to) {
   return (from === to) ? String(from) : (from + ' ~ ' + to);
 }
 
+// dist_m — 천단위 구분기호로 가독성 개선 (2026-09-01 최정우 추가)
+function fmtDistM(v) {
+  if (v == null || v === '') return '<span class="ch-na">—</span>';
+  const n = Number(v);
+  return isNaN(n) ? '<span class="ch-na">—</span>' : n.toLocaleString('ko-KR');
+}
+
+// speed_kmh/speed_limit_kmh — "실측 / 제한" 한 칸에 같이 표시하고, 제한속도 이상(위반)이면
+//   실측값을 강조색으로 표시 — 구간단속 위반 판정을 한눈에 보이게 함 (2026-09-01 최정우 추가)
+function fmtSpeed(r) {
+  const hasSpd = r.speed_kmh != null && r.speed_kmh !== '';
+  const hasLimit = r.speed_limit_kmh != null && r.speed_limit_kmh !== '';
+  if (!hasSpd && !hasLimit) return '<span class="ch-na">—</span>';
+  const violated = hasSpd && hasLimit && (Number(r.speed_kmh) >= Number(r.speed_limit_kmh));
+  const spd = hasSpd ? (violated ? '<span class="ch-violate">' + r.speed_kmh + '</span>' : String(r.speed_kmh))
+                      : '<span class="ch-na">—</span>';
+  return hasLimit ? (spd + ' <span class="ch-limit">/ ' + r.speed_limit_kmh + '</span>') : spd;
+}
+
+// stay_seconds — 초 단위 원값 대신 시/분/초 단위로 풀어서 표시 (2026-09-01 최정우 추가)
+function fmtStay(sec) {
+  if (sec == null || sec === '') return '<span class="ch-na">—</span>';
+  sec = Number(sec);
+  if (isNaN(sec)) return '<span class="ch-na">—</span>';
+  if (sec < 60) return sec + '초';
+  const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+  if (m < 60) return s > 0 ? (m + '분 ' + s + '초') : (m + '분');
+  const h = Math.floor(m / 60), mm = m % 60;
+  return mm > 0 ? (h + '시간 ' + mm + '분') : (h + '시간');
+}
+
 function renderChargeRows(rows) {
   const body = document.getElementById('chargeBody2');
   const cnt = document.getElementById('chargeCount');
   if (!body) return;
   if (!rows || rows.length === 0) {
-    body.innerHTML = '<tr><td colspan="11" class="ch-empty">과금 이력 없음</td></tr>';
+    body.innerHTML = '<tr><td colspan="12" class="ch-empty">과금 이력 없음</td></tr>';
     if (cnt) cnt.textContent = '0건';
     return;
   }
@@ -1388,16 +1461,14 @@ function renderChargeRows(rows) {
       + '<td class="num">' + r.trip_seq + '</td>'
       + '<td><span class="ch-type" style="background:' + t.color + '">' + t.nm + '</span></td>'
       + '<td class="mono">' + fmtSeqRange(r.g_from, r.g_to) + '</td>'
-      // M순번은 G순번과 값이 동일하다 — 지도 마커가 같은 gps_seq 를 G(원시)/M(매칭)으로
-      //   구분해 라벨링할 뿐이라, 과금 이력에서는 같은 구간 번호를 그대로 쓴다.
-      //   접두어 없이 숫자만 표시하는 기존 방식을 유지한다 (사용자 지시, 2026-08-30 최정우 수정)
-      + '<td class="mono">' + fmtSeqRange(r.g_from, r.g_to) + '</td>'
       + '<td class="mono">' + (r.zone_id || na) + '</td>'
       + '<td>' + (r.zone_name || na) + '</td>'
       + '<td class="mono">' + (r.tollgate_id || na) + '</td>'
-      + '<td class="mono">' + (r.entry_tollgate_id || na) + '</td>'
-      + '<td class="mono">' + (r.exit_tollgate_id || na) + '</td>'
-      + '<td class="num">' + (r.dist_m != null ? r.dist_m : 0) + '</td>'
+      + '<td class="mono">' + ((r.charge_type == 0 ? r.from_id : r.entry_tollgate_id) || na) + '</td>'
+      + '<td class="mono">' + ((r.charge_type == 0 ? r.to_id : r.exit_tollgate_id) || na) + '</td>'
+      + '<td class="num">' + fmtDistM(r.dist_m) + '</td>'
+      + '<td class="num">' + fmtSpeed(r) + '</td>'
+      + '<td class="num">' + fmtStay(r.stay_seconds) + '</td>'
       + '<td class="mono">' + fmtTime(r.occur_dt) + '</td>'
       + '</tr>';
   }).join('');
@@ -1440,7 +1511,7 @@ async function loadTripCharges(tripId) {
     const rows = await fetchJson(apiBase() + '/trip/' + encodeURIComponent(tripId) + '/charges');
     renderChargeRows(rows);
   } catch (e) {
-    if (body) body.innerHTML = '<tr><td colspan="11" class="ch-empty">조회 실패: ' + e.message + '</td></tr>';
+    if (body) body.innerHTML = '<tr><td colspan="12" class="ch-empty">조회 실패: ' + e.message + '</td></tr>';
   }
 }
 
@@ -1497,7 +1568,7 @@ async function refreshLiveTrip() {
       document.getElementById('lastPoll').textContent = '조회 실패: ' + e.message;
       // 옛 과금 이력이 그대로 남아 "지금 데이터"로 오해되지 않게 함께 표시 (2026-08-22 최정우 추가)
       const cb = document.getElementById('chargeBody2');
-      if (cb) cb.innerHTML = '<tr><td colspan="11" class="ch-empty">조회 실패 — 서버 응답 없음</td></tr>';
+      if (cb) cb.innerHTML = '<tr><td colspan="12" class="ch-empty">조회 실패 — 서버 응답 없음</td></tr>';
       return;
     }
 

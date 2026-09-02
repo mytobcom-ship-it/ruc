@@ -110,6 +110,12 @@ typedef struct sAltMatchCtx
 	bool							bHasPrevMatchPos;					// dfPrevMatchX/Y 유효 여부
 	double							dfPrevMatchX;						// 직전(신뢰 가능) 매칭 성공 X(경도, WGS84) — 같은 링크 노이즈 보정 기준점 (2026-07-22 최정우 추가)
 	double							dfPrevMatchY;						// 직전(신뢰 가능) 매칭 성공 Y(위도, WGS84) (2026-07-22 최정우 추가)
+	// 원시 GPS 좌표·방향(heading)이 직전 tick과 완전히 동일한지 — true 면 같은 링크 노이즈 보정
+	//   (1m 강제전진, MM_NOISE_FORWARD_NUDGE_M)을 적용하지 않고 세그먼트 매칭이 실제로 계산한
+	//   좌표를 그대로 쓴다. 좌표·방향이 똑같다는 건 차량이 실제로 움직이지 않았다는 뜻이라,
+	//   강제전진을 걸면 정지 중에도 위치가 계속 앞으로 밀리는 누적 드리프트가 생긴다
+	//   (사용자 지시, 2026-09-02 최정우 추가)
+	bool							bSameRawAndHeadingAsPrev;
 
 	sAltMatchCtx() :
 		nPrevAltitude(NO_ALTITUDE),
@@ -120,7 +126,8 @@ typedef struct sAltMatchCtx
 		bHasPrevLinkPos(false),
 		bHasPrevMatchPos(false),
 		dfPrevMatchX(0.0),
-		dfPrevMatchY(0.0)
+		dfPrevMatchY(0.0),
+		bSameRawAndHeadingAsPrev(false)
 	{}
 } ALT_MATCH_CTX, *PALT_MATCH_CTX;
 
@@ -155,6 +162,8 @@ typedef struct sMapMatchInput
 	bool							bHasPrevMatchPos;					// dfPrevMatchX/Y 유효 여부
 	double							dfPrevMatchX;						// 직전(신뢰 가능) 매칭 성공 X(경도, WGS84) — 같은 링크 노이즈 보정 기준점 (2026-07-22 최정우 추가)
 	double							dfPrevMatchY;						// 직전(신뢰 가능) 매칭 성공 Y(위도, WGS84) (2026-07-22 최정우 추가)
+	bool							bSameRawAndHeadingAsPrev;			// 원시좌표·방향이 직전 tick과 완전히 동일 — true 면 노이즈
+																		//   보정(1m 강제전진) 미적용 (2026-09-02 최정우 추가)
 
 	sMapMatchInput() :
 		nCoordinateType(WGS84GEO),
@@ -177,7 +186,8 @@ typedef struct sMapMatchInput
 		bHasPrevLinkPos(false),
 		bHasPrevMatchPos(false),
 		dfPrevMatchX(0.0),
-		dfPrevMatchY(0.0)
+		dfPrevMatchY(0.0),
+		bSameRawAndHeadingAsPrev(false)
 	{}
 } MAP_MATCH_INPUT, *PMAP_MATCH_INPUT;
 

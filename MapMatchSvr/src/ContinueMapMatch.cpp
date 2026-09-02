@@ -435,7 +435,18 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
 					bool bDefiniteNoise = (stMatchEntry.dfIntersectLenSgmt <= MM_CLAMP_SKIP_LEN)
 						&& (bLowSpeedStationary || (stSgmtMatchRes.bHasHeading && !bPoorAngle));
 
-					if (bDefiniteNoise)
+					// 원시좌표·방향이 직전 tick과 완전히 동일하면(bSameRawAndHeadingAsPrev) 실제로
+					//   정지해 있다는 뜻이라 1m 강제전진을 적용하지 않는다 — 세그먼트 매칭이 이미
+					//   계산한 자연 좌표(stMatchEntry.dfMatchX/Y, 위에서 산출됨)를 그대로 쓴다.
+					//   강제전진을 걸면 정지 중에도 위치가 계속 앞으로 밀리는 누적 드리프트가 생김
+					//   (실측 000376_20260826150010 seq1~38, 최대 15m 드리프트 확인)
+					//   (사용자 지시, 2026-09-02 최정우 추가)
+					if (bDefiniteNoise && stSgmtMatchInput.bSameRawAndHeadingAsPrev)
+					{
+						// 아무 것도 하지 않음 — stMatchEntry.dfMatchX/Y/dfSgmtMatchLen 은 이미
+						//   자연 계산값이다.
+					}
+					else if (bDefiniteNoise)
 					{
 						// 보정 전 값을 남겨둔다 — 결과가 말이 안 되면 되돌린다 (2026-08-23 최정우 추가)
 						const double dfKeepX = stMatchEntry.dfMatchX;

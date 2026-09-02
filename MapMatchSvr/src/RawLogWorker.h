@@ -75,14 +75,24 @@ typedef struct sZoneRunSession
 																		//   확정한다(UpdateOpenGateCrossed). 없으면 이미 게이트를
 																		//   지난 뒤 시작한 run(case C)이 첫 틱만으로 곧바로
 																		//   "통과함"으로 오판된다 (2026-08-25 최정우 추가)
-
+	uint64							qwEntryLinkID;						// 진입 시점 매칭 링크ID — 일반도로(NODE_STEP)의 신규 스코프
+																		//   (미등록 도로 pseudo-zone, szRoadID=="") 전용. FROM_ID를
+																		//   road_id 대신 링크ID로 채워야 해서 추가(qwLastLinkID가 이미
+																		//   "구역 안 마지막 링크"를 들고 있는 것과 대칭). road_kind=0
+																		//   정식 구역 run은 그대로 road_id 기반이라 미사용(2026-09-01 최정우 추가)
+	uint64							qwFirstOutLinkID;					// dfFirstOutX/Y 와 동일 시점(디바운스 스트릭의 "첫" 밖 tick)의
+																		//   매칭 링크ID — 누락링크 보정(FindLinkPathBounded) 목표를
+																		//   디바운스"확정" tick(이미 구역에서 몇 틱 더 간 지점)이 아니라
+																		//   이 값으로 잡아야 정확한 경계 링크가 나온다(실측
+																		//   000376_20260826155015 RL-Z00013 — 확정tick 기준으로 찾다
+																		//   구역 안쪽 링크가 잘못 나옴) (2026-09-01 최정우 추가)
 	sZoneRunSession() :
 		dtEntryTime(0), dwEntryGpsSeq(0), dfEntryX(0.0), dfEntryY(0.0), dfAccumDistM(0.0),
 		dfLastX(0.0), dfLastY(0.0), qwLastLinkID(0), dtLastInZoneTime(0), dwLastInZoneGpsSeq(0),
 		dtExitCandidateTime(0), nExitTicks(0),
 		dfFirstOutX(0.0), dfFirstOutY(0.0), dtFirstOut(0),
 		bStartedByTrip(false), bGateCrossed(false),
-		bSeenBeforeGate(false)
+		bSeenBeforeGate(false), qwEntryLinkID(0), qwFirstOutLinkID(0)
 	{
 		szRoadID[0] = '\0';
 	}
@@ -228,6 +238,10 @@ typedef struct sVehicleTripSession
 											//   entry/exit_tollgate_id 게이트ID 기반으로 변경(2026-08-20
 											//   최정우 수정, 사용자 지시 — 기존엔 구역 road_id만 쓰고
 											//   게이트ID 자체는 안 남겼음)
+	uint64							qwSpeedEntryLinkID;						// 입구 통과 시점 매칭 링크ID — NODE_STEP 일반도로 확장
+											//   (구간단속 위반=SPEED+NODE_STEP 둘 다, 비위반=NODE_STEP만)
+											//   레코드의 FROM_ID(링크ID 기반)용, 게이트ID(szSpeedEntryTollgateId)
+											//   와 별도 보관 (2026-09-01 최정우 추가)
 	// ProcessClosedRoadCharge() bClosedEntryAmbiguous 동일 근거 참고 — 구간단속은 원래 from/to_lat·lon 이
 	//   구역 등록 폴리라인 첫/끝점(ZONE_INFO.dfFirstLat/Lon)이라 별도 실제 진입좌표 필드가 없었는데,
 	//   진입 애매 시 실거리 계산에 필요해 신설(2026-08-25 최정우 추가)
@@ -266,6 +280,23 @@ typedef struct sVehicleTripSession
 	double							dfLastRawTickY;
 	time_t							dtLastRawTick;
 	bool							bHasLastRawTick;
+
+	// 같은 링크 노이즈 보정(1m 강제전진, MM_NOISE_FORWARD_NUDGE_M) 억제 판별용 "직전 tick 원시
+	//   GPS 좌표·방향(heading)" — RunMapMatch() 가 매 tick 갱신한다. 좌표·방향이 직전 tick과
+	//   완전히 같으면 실제로 정지해 있다는 뜻이라 강제전진 대신 세그먼트 매칭이 계산한 실제
+	//   좌표를 그대로 쓴다(ContinueMapMatch.cpp 참고) (사용자 지시, 2026-09-02 최정우 추가)
+	double							dfPrevTickRawX;
+	double							dfPrevTickRawY;
+	sint16							nPrevTickAngle;
+	bool							bHasPrevTickRaw;
+
+	// NODE_STEP 일반도로의 주정차 폴리곤 배제 판정용 디바운스 — PARKING 자체의 이탈 디바운스
+	//   (park_exitcnt)와 동일 기준으로, 폴리곤 밖으로 짧게(park_exitcnt 미만) 튄 tick은 여전히
+	//   "주정차 취급"으로 유지해 NODE_STEP이 그 사이만 별도 레코드로 표출하지 않게 한다
+	//   (사용자 지시, 2026-09-02 최정우 추가 — 실측 000376_20260826150010 seq158~159, PARKING은
+	//   디바운스로 세션을 안 끊는데 NODE_STEP은 디바운스 없이 즉시 표출하던 불일치)
+	bool							bNodeStepParkTouch;
+	int								nNodeStepParkExitTicks;
 
 	// 비과금도로 트랙(ROAD_KIND=5) — 게이트가 없어 매칭 링크→구역 역인덱스로 진입/이탈 판정.
 	//   정상 진행/정상 이탈 시에는 아무것도 INSERT 안 함(어차피 비과금이라 기록할 요금이 없음) —
@@ -314,6 +345,10 @@ typedef struct sVehicleTripSession
 																			//   직전링크 이탈 출구판정(bExitOnPrevLink) 시 "실제로 그 링크에 마지막으로
 																			//   있던 시각"으로 stay_seconds 를 계산하기 위함(현재 틱 시각을 쓰면 이미
 																			//   다음 링크로 넘어온 뒤라 그만큼 과다계상됨) (2026-08-24 최정우 추가)
+	uint32							dwLastConfirmedLinkGpsSeq;				// dtLastConfirmedLinkTime 과 동일 tick 의 GPS_SEQ — dwLastGpsSeq 는
+																			//   매 tick(SKIP 포함) 갱신돼 SKIP 구간 동안 못 쓰므로 별도 보관.
+																			//   NODE_STEP 케이스3(SKIP 구간 브릿지) start_gps_seq 원본
+																			//   (2026-09-01 최정우 추가)
 	// 왕복분리 반대편 링크 N틱 연속 오매칭 보정용 (2026-08-24 최정우 추가, opp_streakmax 설정).
 	//   스트릭이 시작될 때의 "진짜" 확정 링크를 앵커로 고정해두고(qwLastConfirmedLinkID 는 매 틱
 	//   갱신되므로 별도 보관 필요), 스트릭 동안 pvtUpdates 에 커밋한 인덱스를 쌓아뒀다가 앵커로
@@ -343,6 +378,15 @@ typedef struct sVehicleTripSession
 	uint64							qwClampRunLinkID;
 	vector<size_t>					vtClampRunUpdateIdx;
 	vector<RAW_LOG_INFO>			vtClampRunRawLogInfo;
+	// 완전 매칭실패(진짜 SKIP, bMatched==false) 구간 raw tick 버퍼 — 위 클램프 브릿지와 별개.
+	//   NODE_STEP 일반도로 확장 케이스3(SKIP 구간 등록)용 — 클램프는 "매칭은 됐으나 저신뢰"라 매
+	//   tick 마다 링크가 있지만, 완전 SKIP은 링크 자체가 없어 지금까지 아무 버퍼도 없었다. SKIP 런
+	//   시작 시점의 qwLastConfirmedLinkID 를 앵커로 스냅샷해두고(런 도중 갱신되지 않게), 매 SKIP tick
+	//   의 raw GPS 원본을 쌓아뒀다가, 다음 신뢰매칭이 확정되면(CommitPendingRow) RematchBeginBiased()
+	//   로 재시도해 실제 매칭 링크를 복구 시도한다(1순위 fallback, 실패하면 그래프 경로탐색→직선거리
+	//   순으로 대체) (2026-09-01 최정우 추가)
+	uint64							qwSkipRunAnchorLinkID;
+	vector<RAW_LOG_INFO>			vtSkipRunRawLogInfo;
 	// 트립 시작(또는 장시간 SKIP 후) 첫 매칭이 왕복분리 어느 쪽인지 불확실한 구간의 "경쟁 후보"
 	//   추적용 (2026-08-24 최정우 추가, 실측 21트립 중 3건꼴로 재현 확인). qwLastConfirmedLinkID·
 	//   qwOppStreakAnchorLinkID 가 둘 다 0(진짜 앵커도, 확정된 스트릭도 없음)일 때만 쓰인다 —
@@ -395,6 +439,7 @@ typedef struct sVehicleTripSession
 		bInSpeedZone(false),	// (2026-08-12 최정우 추가)
 		dtSpeedEntryTime(0),	// (2026-08-12 최정우 추가)
 		dwSpeedEntryGpsSeq(0),	// (2026-08-28 최정우 추가)
+		qwSpeedEntryLinkID(0),	// (2026-09-01 최정우 추가)
 		dfSpeedEntryFromLat(0.0),	// (2026-08-25 최정우 추가)
 		dfSpeedEntryFromLon(0.0),	// (2026-08-25 최정우 추가)
 		bSpeedEntryAmbiguous(false),	// (2026-08-25 최정우 추가)
@@ -409,6 +454,12 @@ typedef struct sVehicleTripSession
 		dfLastRawTickY(0.0),	// (2026-08-24 최정우 추가)
 		dtLastRawTick(0),	// (2026-08-24 최정우 추가)
 		bHasLastRawTick(false),	// (2026-08-24 최정우 추가)
+		dfPrevTickRawX(0.0),	// (2026-09-02 최정우 추가)
+		dfPrevTickRawY(0.0),	// (2026-09-02 최정우 추가)
+		nPrevTickAngle(-1),	// (2026-09-02 최정우 추가)
+		bHasPrevTickRaw(false),	// (2026-09-02 최정우 추가)
+		bNodeStepParkTouch(false),	// (2026-09-02 최정우 추가)
+		nNodeStepParkExitTicks(0),	// (2026-09-02 최정우 추가)
 		bHasPendingCommit(false),	// (2026-08-21 최정우 추가)
 		nPendingFinalStatus(MATCH_STATUS_PENDING),	// (2026-08-21 최정우 추가)
 		nPendingIntersectLen(-1),	// (2026-08-21 최정우 추가)
@@ -416,9 +467,11 @@ typedef struct sVehicleTripSession
 		nPendingHoldTicks(0),	// (2026-08-26 최정우 추가)
 		qwLastConfirmedLinkID(0),	// (2026-08-21 최정우 추가)
 		dtLastConfirmedLinkTime(0),	// (2026-08-24 최정우 추가)
+		dwLastConfirmedLinkGpsSeq(0),	// (2026-09-01 최정우 추가)
 		qwOppStreakAnchorLinkID(0),	// (2026-08-24 최정우 추가)
 		qwAmbigReverseRunLinkID(0),	// (2026-08-28 최정우 추가)
 		qwClampRunLinkID(0),	// (2026-08-28 최정우 추가)
+		qwSkipRunAnchorLinkID(0),	// (2026-09-01 최정우 추가)
 		qwStartCandLinkA(0),	// (2026-08-24 최정우 추가)
 		qwStartCandLinkB(0),	// (2026-08-24 최정우 추가)
 		dfPendingPrevMatchX(0.0),	// (2026-08-21 최정우 추가)
@@ -461,7 +514,7 @@ typedef struct sRawLogUpdateRow
  *   trip_seq, charge_type, charge_unit, link_id, from_id, to_id, from_lat, from_lon, to_lat, to_lon,
  *   zone_id, zone_name, dist_m, speed_kmh, speed_limit_kmh, occur_dt, trip_start_dt, tollgate_id,
  *   entry_tollgate_id, exit_tollgate_id, reg_dt, upd_dt, charge_yn, charge_status, stay_seconds,
- *   trip_end_dt, start_gps_seq, end_gps_seq (2026-08-28 최정우 수정)
+ *   trip_end_dt, start_gps_seq, end_gps_seq, non_charge_reason (2026-09-01 최정우 수정)
 */
 typedef struct sChargeInsertRow
 {
@@ -500,6 +553,10 @@ typedef struct sChargeInsertRow
 																		//   (2026-08-28 최정우 추가)
 	string							strEndGpsSeq;						// 구역 안에서 실제로 마지막 확인된 GPS_SEQ(보간 경계 tick이 아님)
 																		//   (2026-08-28 최정우 추가)
+	string							strNonChargeReason;					// 빈 값=NULL(정상). NCR_* 코드(DataDefine.h) — 이 행의
+																		//   일부 값(주로 speed_kmh/stay_seconds)을 신뢰할 수 없어
+																		//   근사·생략 처리했다는 예외사유. 임시 코드 체계, 추후
+																		//   정식 에러코드 정리 시 재배정 예정 (2026-09-01 최정우 추가)
 } CHARGE_INSERT_ROW, *PCHARGE_INSERT_ROW;
 
 /**
@@ -727,11 +784,35 @@ private:
 	// TTL 만료로 세션이 지워지기 직전, 아직 열려있는 일반도로 세션이면 N/3(AUDIT)로 1건 기록 —
 	//   실제 과금 대상이라 폐쇄형/구간단속/주정차와 동일하게 AUDIT(3), 비과금도로의 SKIP(4)과는 다름
 	//   (사용자 지시 패턴 계승, 2026-08-14 추가)
-	// 일반도로 과금 1행 생성 — 정상 이탈과 TTL 만료가 같은 형식을 쓰도록 공용화 (2026-08-23 최정우 추가)
+	// 일반도로 과금 1행 생성 — 정상 이탈과 TTL 만료가 같은 형식을 쓰도록 공용화 (2026-08-23 최정우 추가).
+	//   charge_yn/status 는 호출측이 지정(BuildParkRow/BuildExemptRow 와 동일 패턴) — 정상 이탈은
+	//   Y/0, TTL·비정상종료는 N/3(AUDIT) (2026-09-01 최정우 수정 — 기존엔 항상 Y/0 하드코딩이라
+	//   TTL 만료 시에도 심사 큐에 안 올라가던 버그, 사용자 지시로 파라미터화)
 	void BuildNodeStepRow(const ZONE_RUN_SESSION& stRun, const string& strTripId,
-		const string& strDeviceKey, int nChargeSeq, time_t dtEnd, uint32 dwEndGpsSeq, CHARGE_INSERT_ROW *pstRow);
+		const string& strDeviceKey, int nChargeSeq, time_t dtEnd, uint32 dwEndGpsSeq,
+		const char *pszChargeYn, const char *pszChargeStatus, CHARGE_INSERT_ROW *pstRow);
 	void AppendExpiredNodeStepCharge(int nThreadId, const string& strDeviceKey,
 		const VEHICLE_TRIP_SESSION& stSession, vector<CHARGE_INSERT_ROW> *pvtOut);
+	// NODE_STEP 일반도로 등록 확장(2026-09-01 최정우 추가) — LINK_ID 를 FROM_ID~TO_ID 로 삼는
+	//   신규 스코프(구간단속 위반 추가분/SKIP 구간 브릿지) 공용 row 생성. BuildNodeStepRow() 와 달리
+	//   road_id 기반 ZONE_RUN_SESSION 없이 호출측이 이미 계산해둔 값을 그대로 채운다.
+	//   pszZoneId/pszZoneName 이 nullptr 이면 빈 값(케이스2/3처럼 실제 zone이 없는 경우)
+	void BuildNodeStepRowFromLinkRange(const string& strTripId, const string& strDeviceKey,
+		int nChargeSeq, uint64 qwFromLink, uint64 qwToLink,
+		double dfFromLat, double dfFromLon, double dfToLat, double dfToLon, double dfDistM,
+		time_t dtStart, time_t dtEnd, uint32 dwStartGpsSeq, uint32 dwEndGpsSeq,
+		const char *pszChargeYn, const char *pszChargeStatus,
+		const char *pszZoneId, const char *pszZoneName, CHARGE_INSERT_ROW *pstRow);
+	// NODE_STEP 케이스3(SKIP 구간) 브릿지 — CommitPendingRow() 가 새 신뢰매칭을 확정하는 순간,
+	//   그 직전까지의 SKIP 구간이 있었고 전후 확정링크가 IsCase3EligibleRoadKind() 범위에 속하면
+	//   호출. 3단계 fallback(재매칭→그래프경로탐색→직선거리) 은 함수 내부 주석 참고 (2026-09-01 최정우 추가)
+	void ResolveSkipGapNodeStep(int nThreadId, VEHICLE_TRIP_SESSION *pstSession,
+		uint64 qwFromLink, uint64 qwToLink, const sRawLogInfo& stToRawLogInfo,
+		const MATCH_LINK_INFO& stToMatchLinkInfo, vector<CHARGE_INSERT_ROW> *pvtChargeInserts);
+	// FROM~TO 링크 사이 방향성 링크그래프(TURN_INFO 기반) bounded BFS — ResolveSkipGapNodeStep() 2순위
+	//   fallback용 순수 그래프탐색(맵매칭 스코어링 없음). pvtPathOut 은 qwFromLink~qwToLink 포함
+	//   순서대로, 실패 시 비움 (2026-09-01 최정우 추가)
+	bool FindLinkPathBounded(uint64 qwFromLink, uint64 qwToLink, int nMaxHops, vector<uint64> *pvtPathOut);
 	// 개방형 과금 1행 생성 — 정상 이탈과 TTL 만료 공용. bStartedByTrip 에 따라 dist_m 산출
 	//   방식·charge_yn/status 가 갈린다 — ZONE_RUN_SESSION 상단 주석 참고 (2026-08-25 최정우 추가)
 	void BuildOpenZoneRow(const ZONE_RUN_SESSION& stRun, const string& strTripId,

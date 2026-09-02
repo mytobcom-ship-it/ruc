@@ -569,6 +569,30 @@ bool CChargeDataLoader::LoadZones()
 			mapNewOpenLinkToRoadId[it->second.vtLinkIds[i]].push_back(it->second.szRoadID);
 	}
 
+	// 구간단속 link_id → road_id 역인덱스 재구성 — IsCase3EligibleRoadKind() 의 "이 링크가 구간단속
+	//   구역 소속인가" O(1) 판정용. 게이트 기반 진입/이탈 판정 자체는 그대로 유지, 이 역인덱스는
+	//   그와 별개로 신설 (2026-09-01 최정우 추가)
+	unordered_map<uint64, vector<string> > mapNewSpeedLinkToRoadId;
+	for (mapZoneInfo::iterator it = mapNewZoneInfo.begin(); it != mapNewZoneInfo.end(); ++it)
+	{
+		if (strcmp(it->second.szRoadKind, "3") != 0) continue;
+		for (size_t i = 0; i < it->second.vtLinkIds.size(); ++i)
+			mapNewSpeedLinkToRoadId[it->second.vtLinkIds[i]].push_back(it->second.szRoadID);
+	}
+
+	// 전체 등록 링크 합집합(ROAD_KIND 0/1/2/3/5) — NODE_STEP 케이스2("어떤 과금유형에도 등록 안 된
+	//   도로") 판정용. PARKING(4)은 폴리곤 기반이라 링크ID 매핑 개념이 없어 제외 (2026-09-01 최정우 추가)
+	unordered_set<uint64> setNewAllRegisteredLinkIds;
+	for (mapZoneInfo::iterator it = mapNewZoneInfo.begin(); it != mapNewZoneInfo.end(); ++it)
+	{
+		const char *pszKind = it->second.szRoadKind;
+		if ((strcmp(pszKind, "0") != 0) && (strcmp(pszKind, "1") != 0) && (strcmp(pszKind, "2") != 0)
+			&& (strcmp(pszKind, "3") != 0) && (strcmp(pszKind, "5") != 0))
+			continue;
+		for (size_t i = 0; i < it->second.vtLinkIds.size(); ++i)
+			setNewAllRegisteredLinkIds.insert(it->second.vtLinkIds[i]);
+	}
+
 	{
 		// 재조회 시점 교체 — m_cZoneCacheMutex 로 조회 스레드(GetZoneByRoadId/GetParkingZoneContaining 등)와
 		// 동기화(doc/README.txt §F 패턴, 2026-08-14 최정우 수정 — 락 없이 swap만 하던 걸 수정). 세 맵을
@@ -585,6 +609,8 @@ bool CChargeDataLoader::LoadZones()
 		m_mapNodeStepLinkToRoadId.swap(mapNewNodeStepLinkToRoadId);
 		m_mapExemptLinkToRoadId.swap(mapNewExemptLinkToRoadId);
 		m_mapOpenLinkToRoadId.swap(mapNewOpenLinkToRoadId);
+		m_mapSpeedLinkToRoadId.swap(mapNewSpeedLinkToRoadId);
+		m_setAllRegisteredLinkIds.swap(setNewAllRegisteredLinkIds);
 	}
 	m_bLoad = true;
 
@@ -790,4 +816,31 @@ void CChargeDataLoader::GetExemptZonesByLinkId(const uint64 qwLinkID, vector<PZO
 		PZONE_INFO p = GetZoneByRoadId(itLink->second[i]);
 		if (p != nullptr) pvtOut->push_back(p);
 	}
+}
+
+/**
+ * @brief 링크가 어떤 과금유형(ROAD_KIND 0/1/2/3/5)에도 등록돼 있는지 — NODE_STEP 케이스2
+ *   ("어떤 과금유형에도 등록 안 된 도로") 판정용 (2026-09-01 최정우 추가)
+ * @param[in] qwLinkID 매칭 링크 ID
+ * @return false=미등록(케이스2 대상)
+*/
+bool CChargeDataLoader::IsLinkChargeRegistered(const uint64 qwLinkID)
+{
+	lock_guard<CMutex> cLock(m_cZoneCacheMutex);
+	return m_setAllRegisteredLinkIds.find(qwLinkID) != m_setAllRegisteredLinkIds.end();
+}
+
+/**
+ * @brief 케이스3(SKIP 구간) 전후 확정링크 스코프 판정 — road_kind=0(일반도로) 또는 3(구간단속)
+ *   소속, 또는 어디에도 미등록이면 true (2026-09-01 최정우 추가)
+ * @param[in] qwLinkID 매칭 링크 ID(SKIP 구간의 FROM/TO 확정 링크)
+ * @return true=이 링크는 NODE_STEP 케이스3 등록 대상 범위 — 그 외(OPEN/CLOSED/PARKING/EXEMPT
+ *   소속)는 false, 그 유형 자체 로직이 처리해야 함(질문2 확정 답변)
+*/
+bool CChargeDataLoader::IsCase3EligibleRoadKind(const uint64 qwLinkID)
+{
+	lock_guard<CMutex> cLock(m_cZoneCacheMutex);
+	if (m_mapNodeStepLinkToRoadId.find(qwLinkID) != m_mapNodeStepLinkToRoadId.end()) return true;
+	if (m_mapSpeedLinkToRoadId.find(qwLinkID) != m_mapSpeedLinkToRoadId.end()) return true;
+	return m_setAllRegisteredLinkIds.find(qwLinkID) == m_setAllRegisteredLinkIds.end();
 }

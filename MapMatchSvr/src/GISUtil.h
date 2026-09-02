@@ -63,6 +63,8 @@ typedef struct sSgmtMatchInput
 	//   stPoint 와 동일하게 내부 스케일(*360000)로 변환한다 (2026-07-22 최정우 추가)
 	double							dfPrevMatchX;						// 직전 신뢰 매칭 X(경도) — 내부 스케일
 	double							dfPrevMatchY;						// 직전 신뢰 매칭 Y(위도) — 내부 스케일
+	bool							bSameRawAndHeadingAsPrev;			// 원시좌표·방향이 직전 tick과 완전히 동일 — true 면 노이즈
+																		//   보정(1m 강제전진) 미적용 (2026-09-02 최정우 추가)
 
 	sSgmtMatchInput() :
 		nRadius(0),
@@ -82,7 +84,8 @@ typedef struct sSgmtMatchInput
 		qwPrevEdNodeID(0),
 		dfPrevLinkLen(0.0),
 		dfPrevMatchX(0.0),
-		dfPrevMatchY(0.0)
+		dfPrevMatchY(0.0),
+		bSameRawAndHeadingAsPrev(false)
 	{}
 } SGMT_MATCH_INPUT, *PSGMT_MATCH_INPUT;
 

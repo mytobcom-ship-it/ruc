@@ -224,6 +224,7 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 	stSgmtMatchInput.bHasPrevMatchPos = stMapMatchInput.bHasPrevMatchPos;	// (2026-08-23 최정우 추가)
 	stSgmtMatchInput.dfPrevMatchX = stMapMatchInput.dfPrevMatchX;
 	stSgmtMatchInput.dfPrevMatchY = stMapMatchInput.dfPrevMatchY;
+	stSgmtMatchInput.bSameRawAndHeadingAsPrev = stMapMatchInput.bSameRawAndHeadingAsPrev;	// (2026-09-02 최정우 추가)
 
 	// 연속(링크 그래프) 맵매칭 엔진 호출 (2026-07-08 최정우 주석 추가)
 	if (!m_cContinueMapMatch.StartMapMatch(m_pcDataLoader, stSgmtMatchInput, qwLinkID, nSearchStep, &wErrorCode, &stMatchEntry, pstTraceCtx, &vtContinuePath, &setContinueSearchHistory))

@@ -180,6 +180,15 @@ public:
 	void GetParkingZonesContaining(const double dfLon, const double dfLat, const double dfBufM,
 		vector<PZONE_INFO> *pvtOut);
 
+	// NODE_STEP 일반도로 등록 확장(케이스1~3) 스코프 판정 — 매칭 링크가 "어떤 과금유형에도 등록
+	//   안 된 도로"(케이스2)인지, SKIP 구간 브릿지(케이스3) 대상 road_kind인지 판정용 (2026-09-01 최정우 추가)
+	// 링크가 어떤 과금유형(ROAD_KIND 0/1/2/3/5)에도 등록돼 있는지 — PARKING(4)은 폴리곤 기반이라
+	//   링크ID 매핑 개념이 없어 제외. false=케이스2(미등록 도로) 대상
+	bool IsLinkChargeRegistered(const uint64 qwLinkID);
+	// 케이스3(SKIP 구간) 전후 확정링크 스코프 판정 — road_kind=0(일반도로) 또는 3(구간단속) 소속,
+	//   또는 어디에도 미등록. true여야 그 SKIP 구간을 NODE_STEP으로 등록 대상 삼음(질문2 확정 답변)
+	bool IsCase3EligibleRoadKind(const uint64 qwLinkID);
+
 	// 폴리곤 기하 유틸 — 원래 .cpp 파일 내부 static 함수였으나, 주정차 경계 통과 시각 보간
 	//   (CRawLogWorker::InterpolateZoneCrossingTime)에서도 같은 판정을 써야 해서 공개 static
 	//   메서드로 승격 (2026-08-24 최정우 추가). 순수 함수 — 인스턴스 상태 없음
@@ -224,11 +233,20 @@ private:
 																			//   LoadZones() 가 link_ids 파싱 후 구성 (2026-08-14 최정우 부활)
 	unordered_map<uint64, vector<string> >	m_mapOpenLinkToRoadId;			// 개방형(ROAD_KIND=1) link_id → road_id 역인덱스,
 																			//   LoadZones() 가 link_ids 파싱 후 구성 (2026-08-25 최정우 추가)
+	unordered_map<uint64, vector<string> >	m_mapSpeedLinkToRoadId;			// 구간단속(ROAD_KIND=3) link_id → road_id 역인덱스 — 기존엔
+																			//   게이트 기반이라 불필요했으나, IsCase3EligibleRoadKind() 의
+																			//   "이 링크가 구간단속 구역 소속인가" O(1) 판정에 필요해 추가
+																			//   (2026-09-01 최정우 추가)
+	unordered_set<uint64>			m_setAllRegisteredLinkIds;				// ROAD_KIND 0/1/2/3/5 link_ids 전체 합집합 — "어떤 과금유형에도
+																			//   등록 안 된 도로"(NODE_STEP 케이스2) 판정용. PARKING(4)은
+																			//   폴리곤 기반이라 제외 (2026-09-01 최정우 추가)
 	bool							m_bLoad;
 	mutable CMutex					m_cGateCacheMutex;						// m_mapGateInfo 재조회(swap)/조회 동시접근 보호 (2026-08-14 최정우 추가)
-	mutable CMutex					m_cZoneCacheMutex;						// m_mapZoneInfo+m_mapNodeStepLinkToRoadId+m_mapExemptLinkToRoadId+m_mapOpenLinkToRoadId
-																			//   재조회(swap)/조회 동시접근 보호 — 셋 다 LoadZones() 에서 항상 같이
-																			//   swap 되므로 락도 하나로 공유(항상 일관된 스냅샷 보장) (2026-08-14 최정우 추가)
+	mutable CMutex					m_cZoneCacheMutex;						// m_mapZoneInfo+m_mapNodeStepLinkToRoadId+m_mapExemptLinkToRoadId+
+																			//   m_mapOpenLinkToRoadId+m_mapSpeedLinkToRoadId+m_setAllRegisteredLinkIds
+																			//   재조회(swap)/조회 동시접근 보호 — 전부 LoadZones() 에서 항상 같이
+																			//   swap 되므로 락도 하나로 공유(항상 일관된 스냅샷 보장) (2026-08-14 최정우 추가,
+																			//   2026-09-01 최정우 수정 — 신규 멤버 2개 추가)
 	int								m_nParkFineMinSec;						// base_parking_fine 최소 from_min(분)*60 — 0=임계 비활성 (2026-08-24 최정우 추가)
 	mutable CMutex					m_cParkFineMutex;						// m_nParkFineMinSec 재조회/조회 동시접근 보호 (2026-08-24 최정우 추가)
 };

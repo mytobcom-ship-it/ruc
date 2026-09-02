@@ -557,6 +557,7 @@ def _query_trip_charges_postgis(conn, trip_id, line_buf_m):
             )
             SELECT ch.trip_seq, ch.charge_type, ch.zone_id, ch.zone_name,
                    ch.tollgate_id, ch.entry_tollgate_id, ch.exit_tollgate_id,
+                   ch.from_id, ch.to_id,
                    ch.dist_m, ch.speed_kmh, ch.speed_limit_kmh, ch.stay_seconds,
                    ch.occur_dt, ch.charge_yn,
                    NULLIF(ch.start_gps_seq, 0) AS g_from,
@@ -650,6 +651,7 @@ def _query_trip_charges_no_postgis(conn, trip_id):
             )
             SELECT ch.trip_seq, ch.charge_type, ch.zone_id, ch.zone_name,
                    ch.tollgate_id, ch.entry_tollgate_id, ch.exit_tollgate_id,
+                   ch.from_id, ch.to_id,
                    ch.dist_m, ch.speed_kmh, ch.speed_limit_kmh, ch.stay_seconds,
                    ch.occur_dt, ch.charge_yn,
                    NULLIF(ch.start_gps_seq, 0) AS g_from,

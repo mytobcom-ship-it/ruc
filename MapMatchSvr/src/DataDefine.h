@@ -295,6 +295,14 @@ typedef struct sAltitudeScoreConfig
 //   최정우 추가, 사용자 지시)
 #define MM_RAWGPS_EXIT_MARGIN_M		30.0								// (단위: m) 출구 게이트 대비 이 이상 멀어지면 확정
 
+// ── NON_CHARGE_REASON 코드 (PRIM_CHARGEHAND.non_charge_reason, smallint) ──
+//   임시 코드 체계 — 정식 에러코드 정리 시 값 재배정 예정. 각 코드는 "이 레코드의 dist_m/
+//   speed_kmh/stay_seconds 중 일부를 신뢰할 수 없어 근사·생략 처리했다"는 예외사유 기록용
+//   (2026-09-01 최정우 추가)
+#define NCR_NODE_STEP_GAP_ANCHOR_LOST	1									// NODE_STEP SKIP구간 브릿지(케이스3) 시 직전 확정위치 소실
+																			//   (세션갭 30초 초과 리셋 등)로 dist_m 은 실측 누적값,
+																			//   speed_kmh/stay_seconds 는 산출 근거 없어 0으로 기록
+
 /**
  * @enum eCoordinateType
  * @brief 측지계 코드

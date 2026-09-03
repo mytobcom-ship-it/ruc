@@ -275,11 +275,6 @@
       <div class="charge-panel">
         <h2>과금 유형 표시</h2>
         <label class="charge-check">
-          <input type="checkbox" id="chk-node" data-layer="node" checked />
-          <span class="dot" style="background:#afb42b;"></span>
-          일반도로 <span class="charge-desc">— base_roadlink(0)</span>
-        </label>
-        <label class="charge-check">
           <input type="checkbox" id="chk-open" data-layer="open" checked />
           <span class="dot" style="background:#3949ab;"></span>
           개방형 <span class="charge-desc">— base_roadlink(1) + base_tollgate(M)</span>
@@ -300,11 +295,6 @@
           주정차단속 <span class="charge-desc">— base_roadlink(4)</span>
         </label>
         <label class="charge-check">
-          <input type="checkbox" id="chk-parking-proposed" data-layer="parkingProposed" checked />
-          <span class="dot" style="background:transparent; border:2px dashed #e53935;"></span>
-          제안 폴리곤(실측 클러스터) <span class="charge-desc">— RL-Z00014/RL-Z00001 실제 체류 GPS 컨벡스헐+5m, DB 미반영 비교용</span>
-        </label>
-        <label class="charge-check">
           <input type="checkbox" id="chk-exempt" data-layer="exempt" checked />
           <span class="dot" style="background:#d81b60;"></span>
           면제도로 <span class="charge-desc">— base_roadlink(5)</span>
@@ -314,11 +304,7 @@
       <div class="issue-panel">
         <h2>과금 유형별 이슈·대응방안 <span style="font-weight:400;text-transform:none;letter-spacing:normal;">(미해결만 표시)</span></h2>
 
-        <div class="issue-card" style="border-left-color:#fdd835;">
-          <div class="issue-title" style="color:#f57f17;">주정차단속 <span style="font-weight:400;font-size:11px;color:var(--muted);">CHARGE_TYPE=4</span></div>
-          <div class="issue-row"><b class="label-issue">이슈(미해결)</b> park_buf(15m) 상한이 추정치. ACCURACY_M 이 그보다 크면 15m 로 캡되는데, 정차 시 정확도가 78~346m 까지 나빠져 실효성 미검증</div>
-          <div class="issue-row"><b class="label-fix">대응</b> 폴리곤 크기 대비 버퍼 비율로 재검토 — RL-Z00001 은 대각선 약 110m, RL-Z00014 는 약 750m 구간. 2026-08-23 park_accmax(50m) 도입으로 부정확 좌표는 애초에 판정에서 빠져 이 값의 역할이 줄었으므로 우선순위는 낮음</div>
-        </div>
+        <div class="issue-row" style="color:var(--muted);">현재 미해결 이슈 없음 — park_pad(구 park_buf) 는 2026-09-03 실측 검증 완료(판교/강릉 4트립, 최대 이탈 3.8m 확인 후 15m→10m 조정, 이름도 개명)</div>
 
       </div>
 
@@ -396,39 +382,7 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 }).addTo(map);
 
 // ==== 과금 4유형 레이어 — 체크박스로 토글, 기본 숨김 ====
-const chargeLayers = { open: L.layerGroup(), closed: L.layerGroup(), speed: L.layerGroup(), parking: L.layerGroup(), node: L.layerGroup(), exempt: L.layerGroup(), parkingProposed: L.layerGroup() };
-
-// 주정차 폴리곤 재검토용 임시 비교 레이어(DB 미반영) — RL-Z00014/RL-Z00001 실제 체류 구간
-//   원시 GPS(ACCURACY_M<=15) 컨벡스헐 + 5m 버퍼. 두 구역 다 기존 등록 폴리곤 안에 원시좌표가
-//   단 1건도 안 들어가는 게 확인돼(2026-09-02), 실제 체류 위치 기준으로 다시 그려야 하는지
-//   검토하기 위한 시각적 비교 목적 — DB(base_roadlink)는 건드리지 않았다 (사용자 지시 추가)
-const PROPOSED_PARKING_ZONES = [
-  {
-    road_id: 'RL-Z00014(제안)', road_nm: '강릉 — 실측 클러스터 기준',
-    coords: [[128.906626,37.757178],[128.906616,37.757182],[128.906505,37.757267],[128.906496,37.757416],
-             [128.906663,37.757599],[128.906861,37.757737],[128.907070,37.757778],[128.907225,37.757713],
-             [128.907235,37.757665],[128.906888,37.757334],[128.906656,37.757190],[128.906631,37.757179]]
-  },
-  {
-    road_id: 'RL-Z00001(제안)', road_nm: '판교 — 실측 클러스터 기준',
-    coords: [[127.089847,37.406592],[127.089704,37.406796],[127.089614,37.406923],[127.089563,37.407012],
-             [127.089613,37.407133],[127.089933,37.407788],[127.089972,37.407844],[127.090062,37.407963],
-             [127.090280,37.407947],[127.090530,37.407911],[127.090745,37.407813],[127.090853,37.407685],
-             [127.090816,37.407559]]
-  }
-];
-function renderProposedParkingZones() {
-  PROPOSED_PARKING_ZONES.forEach(function (z) {
-    const latlngs = z.coords.map(function (c) { return [c[1], c[0]]; });
-    const tip = '<b>' + z.road_id + '</b><br/>' + z.road_nm +
-      '<br/>실측 GPS 컨벡스헐(ACCURACY_M≤15) + 5m 버퍼<br/>DB 미반영 — 비교용 제안';
-    L.polygon(latlngs, {
-      color: '#e53935', weight: 2.5, opacity: 0.95, dashArray: '6,4',
-      fillColor: '#e53935', fillOpacity: 0.08
-    }).bindTooltip(tip, { sticky: true, className: 'link-label' }).addTo(chargeLayers.parkingProposed);
-  });
-}
-renderProposedParkingZones();
+const chargeLayers = { open: L.layerGroup(), closed: L.layerGroup(), speed: L.layerGroup(), parking: L.layerGroup(), node: L.layerGroup(), exempt: L.layerGroup() };
 
 // 게이트 마커 마우스오버 정보 표시(gate_div/소속구역/좌표) — 항상 보이는 permanent 짧은
 //   라벨은 그대로 두고, 추가 상세정보는 hover 시 popup으로 표시 (2026-08-20 최정우 추가)
@@ -465,9 +419,60 @@ const ZONE_KIND = {
   '2': { layer: 'closed',  nm: '폐쇄형',     color: '#b71c1c', weight: 13, dash: null      },
   '3': { layer: 'speed',   nm: '구간단속',   color: '#8e24aa', weight: 13, dash: '10 6'    },
   '4': { layer: 'parking', nm: '주정차단속', color: '#f57f17', weight: 3,  dash: null      },
-  '5': { layer: 'exempt',  nm: '면제도로',   color: '#d81b60', weight: 13, dash: null      }
+  '5': { layer: 'exempt',  nm: '면제도로',   color: '#afb42b', weight: 13, dash: null      }
 };
 const PARKING_FILL = '#fdd835';
+// 주정차단속 구역판정 바깥 확장 허용거리 — MapMatchSvr config.ini [charge] park_pad 값(10m)과 동일
+//   (2026-09-03 park_buf 에서 개명 — 폴리곤 안쪽은 무조건 인정, 바깥쪽으로만 확장 허용하는
+//   방향성을 이름에 명시). 실제 판정 시 min(park_pad, ACCURACY_M) 이라 이 점선은 "최대" 확장
+//   범위를 보여준다. 2026-09-03 실측 검증(판교/강릉 4트립, 정상 정확도 구간 최대 이탈 3.8m)
+//   근거로 15→10 조정
+const PARK_PAD_M = 10;
+
+// 폴리곤을 bufferM(미터)만큼 바깥으로 확장한 근사 폴리곤 반환(마이터 조인) — coords/반환값 모두
+//   [lon,lat] 순서. 위경도를 폴리곤 중심 기준 평면(m)으로 투영해 각 변의 바깥 법선을 구하고,
+//   인접한 두 법선의 평균 방향으로 꼭짓점을 밀어낸다. 꺾임이 예리한 꼭짓점은 마이터 길이가
+//   과도하게 튀는 것을 막기 위해 buffer*4 로 제한(시각화 목적의 근사치, 과금 판정 로직과 무관)
+function bufferPolygonMeters(coords, bufferM) {
+  const n = coords.length;
+  if (n < 3) return coords;
+  let lon0 = 0, lat0 = 0;
+  coords.forEach(function (c) { lon0 += c[0]; lat0 += c[1]; });
+  lon0 /= n; lat0 /= n;
+  const mPerDegLat = 110540;
+  const mPerDegLon = 111320 * Math.cos(lat0 * Math.PI / 180);
+  const pts = coords.map(function (c) { return [(c[0] - lon0) * mPerDegLon, (c[1] - lat0) * mPerDegLat]; });
+  let cx = 0, cy = 0;
+  pts.forEach(function (p) { cx += p[0]; cy += p[1]; });
+  cx /= n; cy /= n;
+
+  function edgeOutwardNormal(a, b) {
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    const len = Math.hypot(dx, dy) || 1;
+    let nx = dy / len, ny = -dx / len;
+    const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+    if (nx * (mx - cx) + ny * (my - cy) < 0) { nx = -nx; ny = -ny; }
+    return [nx, ny];
+  }
+
+  const normals = [];
+  for (let i = 0; i < n; i++) normals.push(edgeOutwardNormal(pts[i], pts[(i + 1) % n]));
+
+  const MITER_LIMIT = 4;
+  const outPts = pts.map(function (p, i) {
+    const nPrev = normals[(i - 1 + n) % n];
+    const nNext = normals[i];
+    let mx = nPrev[0] + nNext[0], my = nPrev[1] + nNext[1];
+    const mLen = Math.hypot(mx, my);
+    if (mLen < 1e-6) return [p[0] + nNext[0] * bufferM, p[1] + nNext[1] * bufferM];
+    mx /= mLen; my /= mLen;
+    const cosHalf = mx * nNext[0] + my * nNext[1];
+    const miterLen = Math.min(bufferM / Math.max(cosHalf, 0.2), bufferM * MITER_LIMIT);
+    return [p[0] + mx * miterLen, p[1] + my * miterLen];
+  });
+
+  return outPts.map(function (p) { return [lon0 + p[0] / mPerDegLon, lat0 + p[1] / mPerDegLat]; });
+}
 
 const tgGateMarkers = [];
 // 줌이 커질수록 게이트 마커도 커지되 3~9 범위로 제한 (2026-08-12 최정우 추가)
@@ -518,9 +523,7 @@ let zoneList = [];
 
 function renderZones(zones) {
   zoneList = zones || [];
-  // parkingProposed 는 서버 zones 응답과 무관한 정적 비교 오버레이라 매번 지우지 않는다
-  //   (DB 미반영 제안 폴리곤 — 트립 전환/새로고침 때마다 사라지면 비교 용도를 못 함)
-  Object.keys(chargeLayers).forEach(function (k) { if (k !== 'parkingProposed') chargeLayers[k].clearLayers(); });
+  Object.keys(chargeLayers).forEach(function (k) { chargeLayers[k].clearLayers(); });
   tgGateMarkers.length = 0;
 
   zoneList.forEach(function (z) {
@@ -539,6 +542,15 @@ function renderZones(zones) {
         color: kind.color, weight: kind.weight, opacity: 0.95,
         fillColor: PARKING_FILL, fillOpacity: 0.45
       }).bindTooltip(tip, { sticky: true, className: 'link-label' }).addTo(layer);
+
+      if (kind.layer === 'parking') {
+        const bufLatlngs = bufferPolygonMeters(z.coords, PARK_PAD_M).map(function (c) { return [c[1], c[0]]; });
+        const bufTip = '<b>' + z.road_id + '</b> 버퍼(+' + PARK_PAD_M + 'm)<br/>' + z.road_nm
+          + '<br/>구역판정 바깥 확장 허용거리(park_pad) — 실제 판정은 min(park_pad, ACCURACY_M)';
+        L.polygon(bufLatlngs, {
+          color: kind.color, weight: 1.5, opacity: 0.85, dashArray: '6 4', fill: false
+        }).bindTooltip(bufTip, { sticky: true, className: 'link-label' }).addTo(layer);
+      }
     } else {
       const opt = { color: kind.color, weight: kind.weight, opacity: 0.9,
                     lineCap: 'round', lineJoin: 'round' };
@@ -1446,7 +1458,7 @@ function renderChargeRows(rows) {
     return;
   }
   if (cnt) cnt.textContent = rows.length + '건';
-  body.innerHTML = rows.map(function (r) {
+  body.innerHTML = rows.map(function (r, idx) {
     const t = CHARGE_TYPE_LABEL[r.charge_type] || { nm: '유형' + r.charge_type, color: '#78909c' };
     const na = '<span class="ch-na">—</span>';
     // G 범위 클릭 시 그 구간으로 지도 확대·이동 — 트립 전체 범위로 자동맞춤(fitBounds)되다 보니
@@ -1458,7 +1470,11 @@ function renderChargeRows(rows) {
       ? ' class="ch-row-clickable" data-g-from="' + gFrom + '" data-g-to="' + gTo + '" title="클릭하면 이 구간으로 지도 확대"'
       : '';
     return '<tr' + rowAttrs + '>'
-      + '<td class="num">' + r.trip_seq + '</td>'
+      // 화면 표시용 순번은 배열 위치(1,2,3...)로 순차 부여 — 실제 DB trip_seq는 미등록(최소기준
+      //   미달 등)으로 INSERT 안 된 이벤트도 카운터를 소비해(PK 충돌 방지 목적) 1,3,4,5처럼
+      //   구멍이 남는 게 정상이라, 화면까지 그 값을 그대로 보여주면 사용자가 결번을 유실로
+      //   오인하기 쉽다. 실제 trip_seq는 title 툴팁으로 추적 가능하게 남겨둠 (2026-09-03 최정우 추가)
+      + '<td class="num" title="실제 trip_seq=' + r.trip_seq + '">' + (idx + 1) + '</td>'
       + '<td><span class="ch-type" style="background:' + t.color + '">' + t.nm + '</span></td>'
       + '<td class="mono">' + fmtSeqRange(r.g_from, r.g_to) + '</td>'
       + '<td class="mono">' + (r.zone_id || na) + '</td>'

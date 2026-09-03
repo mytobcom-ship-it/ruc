@@ -112,6 +112,8 @@ private:
 	string							m_strChargeInsertSQL;				// 개방형 게이트 통과 과금 INSERT SQL, 비어 있으면 비활성
 	string							m_strTripEndUpdateSQL;				// 트립 종료 시 trip_end_dt UPDATE SQL, 비어 있으면 비활성 (2026-08-12 최정우 추가)
 	string							m_strAbnormalTripEndSQL;			// TTL 만료(비정상 종료) 시 개방형 미확정 레코드 마감 UPDATE SQL (2026-08-13 최정우 추가)
+	string							m_strTripSeqOffSQL;					// 트립 종료 시 TRIP_SEQ 재부여 1단계(오프셋) UPDATE SQL (2026-09-03 최정우 추가)
+	string							m_strTripSeqFinSQL;				// 트립 종료 시 TRIP_SEQ 재부여 2단계(확정) UPDATE SQL (2026-09-03 최정우 추가)
 	string							m_strGateSelectSQL;				// 과금 게이트 전량 조회 SQL (2026-08-12 최정우 추가)
 	string							m_strZoneSelectSQL;				// 과금 구역 전량 조회 SQL (2026-08-12 최정우 추가)
 	string							m_strParkFineSelectSQL;				// 주정차 과태료 최소 FROM_MIN 조회 SQL, 비어 있으면 체류시간 임계 비활성 (2026-08-24 최정우 추가)
@@ -120,7 +122,7 @@ private:
 	int								m_nStaleSec;				// [server] stale_sec — 좀비 PROCESSING 회수 주기 겸 임계(sec, 0=비활성) (2026-08-29 최정우 추가)
 	time_t							m_dtLastStaleRecover;				// 마지막 좀비 PROCESSING 회수 시각 (2026-08-29 최정우 추가)
 	string							m_strStaleRecoverSQL;				// 좀비 PROCESSING 운영 중 회수 SQL (2026-08-29 최정우 추가)
-	int								m_nParkBuf;							// [charge] park_buf — 구역판정 버퍼 상한(m) (2026-08-13 최정우 추가)
+	int								m_nParkPad;							// [charge] park_pad — 구역판정 시 폴리곤 바깥 확장 허용거리(m) (2026-08-13 최정우 추가, 2026-09-03 park_buf 에서 개명)
 	int								m_nIgnoreRawVld;					// [mapmatch] ignore_rawvld — RAW_VLD 무시 전량 매칭(검증용) (2026-08-23 최정우 추가)
 	int								m_nParkAccMax;						// [charge] park_accmax — 주정차 판정 좌표 정확도 상한(m), 0=비활성 (2026-08-23 최정우 추가)
 	int								m_nParkExitCnt;						// [charge] park_exitcnt — 구역 이탈 확정 연속 GPS 건수(디바운스) (2026-08-13 최정우 추가)

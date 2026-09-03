@@ -422,6 +422,39 @@ FROM UNNEST(
 ) AS V(TRIP_ID, TRIP_END_DT, UPD_DT)
 WHERE T.TRIP_ID = V.TRIP_ID AND T.TRIP_END_DT IS NULL;
 
+-- ── 8. 트립 종료 시 TRIP_SEQ 를 실제 GPS 주행 순서대로 재부여 ────────────────
+-- [trip_seqoff]/[trip_seqfin] CRawLogWorker::UpdateTripSeqOrder() 가 [trip_end]/[trip_abend]
+-- 직후 같은 TRIP_ID 목록으로 실행(2026-09-03 최정우 추가). 6개 과금유형(개방형/폐쇄형/구간단속/
+-- 주정차/면제/일반도로)이 각자 독립된 상태머신으로 실시간 마감·INSERT 되다 보니, TRIP_SEQ는
+-- "DB에 몇 번째로 기록됐는지"일 뿐 실제 주행 순서(START_GPS_SEQ)와 다를 수 있음 — 다른
+-- 어플리케이션이 TRIP_SEQ 컬럼을 과금 순번으로 그대로 불러 쓸 예정이라(사용자 지시), 트립이
+-- 완전히 끝난 시점에 START_GPS_SEQ 기준으로 TRIP_SEQ를 다시 1,2,3... 순서로 매긴다. 웹뷰어가
+-- 이미 쓰고 있는 정렬 기준(NULLIF(START_GPS_SEQ,0) ASC NULLS LAST, 기존 TRIP_SEQ)과 동일하게 맞춤.
+-- TRIP_SEQ가 PK(TRIP_ID,DEVICE_KEY,TRIP_SEQ) 일부라 한 번의 UPDATE로 값을 서로 맞바꾸면 중간에
+-- 일시적 중복이 생겨 제약조건 위반이 나므로, 큰 오프셋을 거치는 2단계로 나눔 — [trip_seqoff]가
+-- 먼저 +100000 오프셋을 줘서 기존 값과 절대 안 겹치게 한 뒤, [trip_seqfin]가 원래 자리로 되돌림.
+-- 이미 순서가 맞는 트립도 재실행 시 같은 결과가 나오는 멱등 연산이라 반복 호출해도 안전.
+-- $1=TRIP_ID[]
+[trip_seqoff]
+WITH RANKED AS (
+	SELECT C.TRIP_ID, C.DEVICE_KEY, C.TRIP_SEQ AS OLD_SEQ,
+		ROW_NUMBER() OVER (
+			PARTITION BY C.TRIP_ID, C.DEVICE_KEY
+			ORDER BY NULLIF(C.START_GPS_SEQ, 0) ASC NULLS LAST, C.TRIP_SEQ ASC
+		) AS NEW_SEQ
+	FROM RUC.PRIM_CHARGEHAND C
+	WHERE C.TRIP_ID = ANY($1::TEXT[])
+)
+UPDATE RUC.PRIM_CHARGEHAND T
+SET TRIP_SEQ = R.NEW_SEQ + 100000
+FROM RANKED R
+WHERE T.TRIP_ID = R.TRIP_ID AND T.DEVICE_KEY = R.DEVICE_KEY AND T.TRIP_SEQ = R.OLD_SEQ;
+
+[trip_seqfin]
+UPDATE RUC.PRIM_CHARGEHAND
+SET TRIP_SEQ = TRIP_SEQ - 100000
+WHERE TRIP_ID = ANY($1::TEXT[]) AND TRIP_SEQ > 100000;
+
 -- [server_status] CServer::UpdateServerStatus() 가 [server] status_interval(기본
 --   600초=10분) 주기로 실행 — 이 서버(SERVER_ID=[server] id, 기본 "location") 1행만 갱신.
 --   $1=SERVER_ID, $2=CPU_PCT, $3=MEM_PCT, $4=MEM_USED_MB, $5=MEM_TOTAL_MB

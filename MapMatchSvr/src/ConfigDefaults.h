@@ -55,7 +55,7 @@
 // ── [charge] ─────────────────────────────────────────────────────────────────────
 #define CFG_DEF_GATE_RELOAD			0									// [charge]	gate_reload (단위: sec, 0=재조회 없음) (2026-08-12 최정우 추가)
 #define CFG_DEF_STALE_SEC			3600								// [server]	stale_sec (단위: sec, 0=비활성) — 좀비 PROCESSING 회수 주기 겸 임계. ttl_sec 이상이어야 함 (2026-08-29 최정우 추가)
-#define CFG_DEF_PARK_BUF			15									// [charge]	park_buf (단위: m) — 구역판정 버퍼 상한(ACCURACY_M 캡) (2026-08-13 최정우 추가)
+#define CFG_DEF_PARK_PAD			15									// [charge]	park_pad (단위: m) — 구역판정 시 폴리곤 바깥으로 확장 허용하는 최대 거리(ACCURACY_M 캡) (2026-08-13 최정우 추가, 2026-09-03 park_buf 에서 개명)
 #define CFG_DEF_PARK_ACCMAX			50									// [charge]	park_accmax (단위: m) — 주정차 판정 좌표 정확도 상한, 0=비활성 (2026-08-23 최정우 추가)
 #define CFG_DEF_IGNORE_RAWVLD		0									// [mapmatch] ignore_rawvld — 1이면 RAW_VLD 무시하고 전량 맵매칭 시도(검증용) (2026-08-23 최정우 추가)
 #define CFG_DEF_PARK_EXITCNT		3									// [charge]	park_exitcnt — 구역 이탈 확정 연속 GPS 건수(디바운스) (2026-08-13 최정우 추가)

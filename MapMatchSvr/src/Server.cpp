@@ -113,7 +113,7 @@ CServer::CServer() :
 	m_dtLastGateReload(0),
 	m_nStaleSec(CFG_DEF_STALE_SEC),
 	m_dtLastStaleRecover(0),
-	m_nParkBuf(CFG_DEF_PARK_BUF),
+	m_nParkPad(CFG_DEF_PARK_PAD),
 	m_nIgnoreRawVld(CFG_DEF_IGNORE_RAWVLD),
 	m_nParkAccMax(CFG_DEF_PARK_ACCMAX),
 	m_nParkExitCnt(CFG_DEF_PARK_EXITCNT),
@@ -221,7 +221,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	m_nRetryMax = stConfig.nRetryMax;
 	m_nGateReloadSec = stConfig.nGateReloadSec;					// (2026-08-12 최정우 추가)
 	m_nStaleSec = stConfig.nStaleSec;		// (2026-08-29 최정우 추가)
-	m_nParkBuf = stConfig.nParkBuf;								// (2026-08-13 최정우 추가)
+	m_nParkPad = stConfig.nParkPad;								// (2026-08-13 최정우 추가)
 	m_nParkAccMax = stConfig.nParkAccMax;						// (2026-08-23 최정우 추가)
 	m_nIgnoreRawVld = stConfig.nIgnoreRawVld;					// (2026-08-23 최정우 추가)
 	m_nParkExitCnt = stConfig.nParkExitCnt;						// (2026-08-13 최정우 추가)
@@ -363,6 +363,20 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	else
 	{
 		LOGFMTW("trip_abend session not configured — abnormal trip end update disabled");
+	}
+
+	// 트립 종료 시 TRIP_SEQ 재부여 UPDATE SQL (2026-09-03 최정우 추가)
+	if (!stConfig.strTripSeqOffSession.empty() && !stConfig.strTripSeqFinSession.empty())
+	{
+		m_strTripSeqOffSQL = m_pcSQLAccessor->GetSQL(stConfig.strTripSeqOffSession);
+		m_strTripSeqFinSQL = m_pcSQLAccessor->GetSQL(stConfig.strTripSeqFinSession);
+		if (m_strTripSeqOffSQL.empty() || m_strTripSeqFinSQL.empty())
+			LOGFMTW("trip_seqoff session=[%s]/[%s] sql is empty — trip_seq reorder disabled",
+				stConfig.strTripSeqOffSession.c_str(), stConfig.strTripSeqFinSession.c_str());
+	}
+	else
+	{
+		LOGFMTW("trip_seqoff session not configured — trip_seq reorder disabled");
 	}
 
 	// 서버 상태(CPU/메모리) 하트비트 UPDATE SQL (세션 미지정·SQL 없으면 비활성) (2026-08-20 최정우 추가)
@@ -557,6 +571,8 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	stWorkerConfig.strChargeInsertSQL = m_strChargeInsertSQL;
 	stWorkerConfig.strTripEndUpdateSQL = m_strTripEndUpdateSQL;			// (2026-08-12 최정우 추가)
 	stWorkerConfig.strAbnormalTripEndSQL = m_strAbnormalTripEndSQL;		// (2026-08-13 최정우 추가)
+	stWorkerConfig.strTripSeqOffSQL = m_strTripSeqOffSQL;				// (2026-09-03 최정우 추가)
+	stWorkerConfig.strTripSeqFinSQL = m_strTripSeqFinSQL;				// (2026-09-03 최정우 추가)
 	stWorkerConfig.nWorkerThreads = m_nWorkerThread;
 	stWorkerConfig.nTtlSec = m_nTtlSec;
 	stWorkerConfig.nMatchTimeoutMs = m_nMatchTimeout;
@@ -570,7 +586,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	stWorkerConfig.nReverseConfirm = m_nReverseConfirm;
 	stWorkerConfig.nOppStreakMax = m_nOppStreakMax;
 	stWorkerConfig.nHeadingMaxDist = static_cast<int>(m_dwMaxDistance);	// [mapmatch] distance → live heading 거리 상한 (2026-07-15 최정우 추가)
-	stWorkerConfig.nParkBuf = m_nParkBuf;						// (2026-08-13 최정우 추가)
+	stWorkerConfig.nParkPad = m_nParkPad;						// (2026-08-13 최정우 추가)
 	stWorkerConfig.nParkAccMax = m_nParkAccMax;					// (2026-08-23 최정우 추가)
 	stWorkerConfig.nIgnoreRawVld = m_nIgnoreRawVld;				// (2026-08-23 최정우 추가)
 	stWorkerConfig.nParkExitCnt = m_nParkExitCnt;				// (2026-08-13 최정우 추가)

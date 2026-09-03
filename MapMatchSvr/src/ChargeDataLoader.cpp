@@ -688,10 +688,10 @@ PZONE_INFO CChargeDataLoader::GetZoneByRoadId(const string& strRoadID)
  *   POLY 전량 순회 (2026-08-13 최정우 추가)
  * @param[in] dfLon 판정 경도(raw GPS, 맵매칭 전)
  * @param[in] dfLat 판정 위도
- * @param[in] dfBufM 폴리곤 경계 버퍼(m). 0 이하면 버퍼 미적용(폴리곤 내부만 인정)
+ * @param[in] dfPadM 폴리곤 경계 바깥 확장 허용거리(m). 0 이하면 미적용(폴리곤 내부만 인정)
  * @return 포함 구역, 없으면 nullptr
 */
-PZONE_INFO CChargeDataLoader::GetParkingZoneContaining(const double dfLon, const double dfLat, const double dfBufM)
+PZONE_INFO CChargeDataLoader::GetParkingZoneContaining(const double dfLon, const double dfLat, const double dfPadM)
 {
 	lock_guard<CMutex> cLock(m_cZoneCacheMutex);
 	for (mapZoneInfo::iterator it = m_mapZoneInfo.begin(); it != m_mapZoneInfo.end(); ++it)
@@ -703,7 +703,7 @@ PZONE_INFO CChargeDataLoader::GetParkingZoneContaining(const double dfLon, const
 		if (IsPointInPolygon(dfLon, dfLat, stZone.vtCoords))
 			return &stZone;
 
-		if ((dfBufM > 0.0) && (DistanceToPolygonBoundaryMeters(dfLon, dfLat, stZone.vtCoords) <= dfBufM))
+		if ((dfPadM > 0.0) && (DistanceToPolygonBoundaryMeters(dfLon, dfLat, stZone.vtCoords) <= dfPadM))
 			return &stZone;
 	}
 	return nullptr;
@@ -715,7 +715,7 @@ PZONE_INFO CChargeDataLoader::GetParkingZoneContaining(const double dfLon, const
  * @param[out] pvtOut 좌표를 포함하는 구역 전부(없으면 빈 목록)
 */
 void CChargeDataLoader::GetParkingZonesContaining(const double dfLon, const double dfLat,
-		const double dfBufM, vector<PZONE_INFO> *pvtOut)
+		const double dfPadM, vector<PZONE_INFO> *pvtOut)
 {
 	if (pvtOut == nullptr) return;
 	lock_guard<CMutex> cLock(m_cZoneCacheMutex);
@@ -726,8 +726,8 @@ void CChargeDataLoader::GetParkingZonesContaining(const double dfLon, const doub
 		if (stZone.vtCoords.size() < 3) continue;
 
 		if (IsPointInPolygon(dfLon, dfLat, stZone.vtCoords)
-			|| ((dfBufM > 0.0)
-				&& (DistanceToPolygonBoundaryMeters(dfLon, dfLat, stZone.vtCoords) <= dfBufM)))
+			|| ((dfPadM > 0.0)
+				&& (DistanceToPolygonBoundaryMeters(dfLon, dfLat, stZone.vtCoords) <= dfPadM)))
 			pvtOut->push_back(&stZone);
 	}
 }

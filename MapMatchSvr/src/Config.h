@@ -44,6 +44,8 @@ typedef struct sConfig
 	string							strParkFineSelectSession;			// 주정차 과태료(BASE_PARKING_FINE) 최소 FROM_MIN 조회 SQL, 비어 있으면 체류시간 임계 비활성 (2026-08-24 최정우 추가)
 	string							strTripEndUpdateSession;			// 트립 종료 시 trip_end_dt UPDATE SQL, 비어 있으면 비활성 (2026-08-12 최정우 추가)
 	string							strAbnormalTripEndSession;			// TTL 만료(비정상 종료) 시 개방형 미확정 레코드 마감 UPDATE SQL, 비어 있으면 비활성 (2026-08-13 최정우 추가)
+	string							strTripSeqOffSession;				// 트립 종료 시 TRIP_SEQ 재부여 1단계(오프셋) UPDATE SQL, 비어 있으면 비활성 (2026-09-03 최정우 추가)
+	string							strTripSeqFinSession;				// 트립 종료 시 TRIP_SEQ 재부여 2단계(확정) UPDATE SQL, 비어 있으면 비활성 (2026-09-03 최정우 추가)
 	string							strServerStatusSession;				// 서버 상태(CPU/메모리) 하트비트 UPDATE SQL, 비어 있으면 비활성 (2026-08-20 최정우 추가)
 	string							strStaleRecoverSession;				// 좀비 PROCESSING 운영 중 회수 SQL, 비어 있으면 비활성 (2026-08-29 최정우 추가)
 
@@ -89,13 +91,13 @@ typedef struct sConfig
 
 	int								nGateReloadSec;						// [charge] gate_reload (단위: sec, 0=재조회 없음) (2026-08-12 최정우 추가)
 	int								nStaleSec;				// [server] stale_sec (단위: sec, 0=비활성) — 이 시간 이상 PROCESSING(2) 인 행 회수 (2026-08-29 최정우 추가)
-	int								nParkBuf;							// [charge] park_buf (단위: m) — 구역판정 버퍼 상한 (2026-08-13 최정우 추가)
+	int								nParkPad;							// [charge] park_pad (단위: m) — 구역판정 시 폴리곤 바깥으로 확장 허용하는 최대 거리 (2026-08-13 최정우 추가, 2026-09-03 park_buf 에서 개명)
 	// [charge] park_accmax (단위: m) — 주정차 판정에 쓸 좌표의 ACCURACY_M 상한. 0=비활성
 	//   측위에 실패한 단말은 셀 기반 대체 위치로 점프한 뒤 그 좌표에 얼어붙는다. 실측
 	//   (실주행 11트립, analysis/rawvld_realcheck.py): accuracy_m>100 구간은 좌표 동결률
 	//   64.6%, 보간 추정 참위치 대비 오차 중앙 189m(최대 486m)였다. 이 좌표로 폴리곤 포함을
 	//   판정하면 51~100 구간 17건이 전부 허위 진입, 101~ 구간은 허위진입 20·누락 20 이었다.
-	//   park_buf(버퍼 상한)로는 못 막는다 — 버퍼는 "얼마나 여유를 줄까"이지 "이 좌표를
+	//   park_pad(확장 허용거리)로는 못 막는다 — 이 값은 "얼마나 여유를 줄까"이지 "이 좌표를
 	//   믿을까"가 아니라서, 좌표 자체가 200m 틀리면 버퍼를 좁혀도 엉뚱한 자리에서 판정한다.
 	//   16~50 구간은 오차 중앙 8.6m·폴리곤 오판정 0건이라 살린다 — RAW_VLD=false 도 주정차
 	//   판정은 수행한다는 2026-08-22 확정은 그대로 유지된다 (2026-08-23 최정우 추가)

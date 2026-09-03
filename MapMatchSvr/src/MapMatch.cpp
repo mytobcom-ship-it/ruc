@@ -258,6 +258,15 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 		SGMT_MATCH_INPUT stBeginSgmtMatchInput;
 		MATCH_ENTRY stBeginMatchEntry;
 		uint16 wBeginErrorCode = NO_ERROR;
+		// Begin은 bIgnoreHeading이라 bReverseSuspect를 절대 계산하지 않는다(항상 false) — 아래서
+		//   Begin이 채택되면 Continue가 이미 정확히 감지한 역행 판정을 무조건 지워버리는 문제가
+		//   있었다(실측 000376_20260826150010 seq131 — Continue가 suspect=1로 정확히 감지했는데,
+		//   같은 링크를 heading 없이 재평가한 Begin이 더 싸다는 이유로(각도비용이 없으니까) 통째로
+		//   대체해 역행이 사라짐). Begin이 채택한 링크가 Continue와 "다른" 링크(진짜 갈림길 구제
+		//   목적)라면 원래 의도대로 그대로 두고, "같은" 링크를 재확인한 것뿐이라면 좌표/비용만
+		//   Begin 걸 쓰고 역행 판정은 Continue 걸 보존한다 (2026-09-03 최정우 추가)
+		const uint64 qwContinueLinkID = stMatchEntry.qwLinkID;
+		const bool bContinueReverseSuspect = stMatchEntry.bReverseSuspect;
 
 		stBeginSgmtMatchInput.stPoint.dfX = dfX;
 		stBeginSgmtMatchInput.stPoint.dfY = dfY;
@@ -283,6 +292,8 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 		{
 			stMatchEntry = stBeginMatchEntry;
 			bUsedContinuePath = false;		// Begin 채택 — Continue 경유 경로는 무효 (2026-08-20 최정우 추가)
+			if (stBeginMatchEntry.qwLinkID == qwContinueLinkID)
+				stMatchEntry.bReverseSuspect = bContinueReverseSuspect;
 		}
 	}
 

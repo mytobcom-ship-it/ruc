@@ -160,9 +160,10 @@ public:
 	PGATE_INFO GetGateByRoadId(const string& strRoadID, const char cGateDiv);
 	PZONE_INFO GetZoneByRoadId(const string& strRoadID);
 	// 주정차(POLY) 구역 중 (dfLon,dfLat) 을 포함하는 구역 — 게이트가 없어 road_id 를 미리 알 수 없으므로
-	//   POLY 전량을 순회하며 판정. dfBufM>0 이면 폴리곤 경계까지 거리가 그 이내인 경우도 포함(ACCURACY_M
-	//   오차 버퍼 — 서행/정차 중 GPS 튐으로 경계 근처에서 순간 이탈로 오판되는 것 방지) (2026-08-13 최정우 추가)
-	PZONE_INFO GetParkingZoneContaining(const double dfLon, const double dfLat, const double dfBufM);
+	//   POLY 전량을 순회하며 판정. dfPadM>0 이면 폴리곤 경계까지 거리가 그 이내인 경우도 포함(ACCURACY_M
+	//   오차만큼 바깥으로 확장 허용 — 서행/정차 중 GPS 튐으로 경계 근처에서 순간 이탈로 오판되는 것 방지)
+	//   (2026-08-13 최정우 추가, 2026-09-03 dfBufM 에서 개명)
+	PZONE_INFO GetParkingZoneContaining(const double dfLon, const double dfLat, const double dfPadM);
 	// 일반도로(ROAD_KIND=0, NODE_STEP) — 게이트가 없어 매칭 링크 ID로 직접 역인덱스 조회. 없으면 nullptr
 	//   (2026-08-14 최정우 추가)
 	PZONE_INFO GetNodeStepZoneByLinkId(const uint64 qwLinkID);
@@ -177,7 +178,7 @@ public:
 	//   과금 유효성(charge_yn/status) 판정에만 씀). 매칭 링크 ID로 역인덱스 조회 (2026-08-25 최정우 추가)
 	void GetOpenZonesByLinkId(const uint64 qwLinkID, vector<PZONE_INFO> *pvtOut);
 	// 폴리곤이 겹쳐 설정될 수 있어 포함하는 구역을 전부 돌려준다 (2026-08-23 최정우 추가)
-	void GetParkingZonesContaining(const double dfLon, const double dfLat, const double dfBufM,
+	void GetParkingZonesContaining(const double dfLon, const double dfLat, const double dfPadM,
 		vector<PZONE_INFO> *pvtOut);
 
 	// NODE_STEP 일반도로 등록 확장(케이스1~3) 스코프 판정 — 매칭 링크가 "어떤 과금유형에도 등록

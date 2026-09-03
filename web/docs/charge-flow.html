@@ -318,7 +318,7 @@ flowchart TD
     <h2>4. PARKING (주정차, ROAD_KIND=4)</h2>
     <div class="src">기준정보: ruc.base_roadlink(road_kind='4', geom_type='POLY', coords jsonb 폴리곤).
       구현: RawLogWorker.cpp::ProcessParkingCharge() / AppendExpiredParkingCharge().
-      config: [charge] park_buf / park_entrycnt / park_speedmax / park_exitcnt / park_regrace / park_ttl</div>
+      config: [charge] park_pad / park_entrycnt / park_speedmax / park_exitcnt / park_regrace / park_ttl</div>
     <div class="easy-name">쉬운 이름: 폴리곤 안에 연속으로 머물면 세션 시작 → 벗어나거나 트립종료 시 마감 → 체류시간·이동거리·평균속도 기록</div>
     <div class="note">
       <b>2026-08-22~23 전면 재작성.</b> 이전 문서(2026-08-06)는 "point-in-polygon 미구현, DRIVE_STATUS_PARKED
@@ -332,7 +332,7 @@ flowchart TD
     <div class="card">
 <pre class="mermaid">
 flowchart TD
-    In(["원시 GPS 1건&lt;br/&gt;(RAW_VLD 무관 — 아래 주석 참고)"]) --> InPoly{"원시 좌표가 폴리곤 내?&lt;br/&gt;(버퍼 = min(park_buf, ACCURACY_M))"}
+    In(["원시 GPS 1건&lt;br/&gt;(RAW_VLD 무관 — 아래 주석 참고)"]) --> InPoly{"원시 좌표가 폴리곤 내?&lt;br/&gt;(바깥 확장 허용거리 = min(park_pad, ACCURACY_M))"}
     InPoly -->|"아니오"| NoZone(["구역 밖"])
     InPoly -->|"예"| Rule{"맵매칭 성공?"}
     Rule -->|"실패(규칙1)"| Slow{"속도 ≤ park_speedmax ?&lt;br/&gt;(0=비활성이면 항상 통과)"}

@@ -177,6 +177,9 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileStr("sql", "trip_end", "", pstConfig->strTripEndUpdateSession);
 	// [sql] trip_abend (선택, 비어 있으면 비활성) (2026-08-13 최정우 추가, 2026-08-21 최정우 수정 — key명 abnormal_trip_end→trip_abend)
 	cIniReader.GetProfileStr("sql", "trip_abend", "", pstConfig->strAbnormalTripEndSession);
+	// [sql] trip_seqoff/trip_seqfin (선택, 비어 있으면 TRIP_SEQ 재부여 비활성) (2026-09-03 최정우 추가)
+	cIniReader.GetProfileStr("sql", "trip_seqoff", "", pstConfig->strTripSeqOffSession);
+	cIniReader.GetProfileStr("sql", "trip_seqfin", "", pstConfig->strTripSeqFinSession);
 	// [sql] server_status (선택, 비어 있으면 서버 상태 하트비트 비활성) (2026-08-20 최정우 추가)
 	cIniReader.GetProfileStr("sql", "server_status", "", pstConfig->strServerStatusSession);
 	// [sql] stale_recover (선택, 비어 있으면 좀비 PROCESSING 운영 중 회수 비활성) (2026-08-29 최정우 추가)
@@ -195,14 +198,14 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileInt("server", "stale_sec", CFG_DEF_STALE_SEC, pstConfig->nStaleSec);
 	if (pstConfig->nStaleSec < 0)
 		pstConfig->nStaleSec = CFG_DEF_STALE_SEC;
-	// [charge] park_buf (단위: m) — 구역판정 버퍼 상한(ACCURACY_M 캡) (2026-08-13 최정우 추가)
-	cIniReader.GetProfileInt("charge", "park_buf", CFG_DEF_PARK_BUF, pstConfig->nParkBuf);
+	// [charge] park_pad (단위: m) — 구역판정 시 폴리곤 바깥으로 확장 허용하는 최대 거리(ACCURACY_M 캡) (2026-08-13 최정우 추가, 2026-09-03 park_buf 에서 개명)
+	cIniReader.GetProfileInt("charge", "park_pad", CFG_DEF_PARK_PAD, pstConfig->nParkPad);
 	// [charge] park_accmax (단위: m) — 주정차 판정 좌표 정확도 상한, 0=비활성 (2026-08-23 최정우 추가)
 	cIniReader.GetProfileInt("charge", "park_accmax", CFG_DEF_PARK_ACCMAX, pstConfig->nParkAccMax);
 	// [mapmatch] ignore_rawvld — RAW_VLD 무시 전량 매칭(검증용, 기본 0) (2026-08-23 최정우 추가)
 	cIniReader.GetProfileInt("mapmatch", "ignore_rawvld", CFG_DEF_IGNORE_RAWVLD, pstConfig->nIgnoreRawVld);
-	if (pstConfig->nParkBuf < 0)
-		pstConfig->nParkBuf = CFG_DEF_PARK_BUF;
+	if (pstConfig->nParkPad < 0)
+		pstConfig->nParkPad = CFG_DEF_PARK_PAD;
 	// [charge] park_exitcnt — 구역 이탈 확정 연속 GPS 건수(디바운스) (2026-08-13 최정우 추가)
 	cIniReader.GetProfileInt("charge", "park_exitcnt", CFG_DEF_PARK_EXITCNT, pstConfig->nParkExitCnt);
 

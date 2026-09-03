@@ -297,6 +297,42 @@ typedef struct sVehicleTripSession
 	//   디바운스로 세션을 안 끊는데 NODE_STEP은 디바운스 없이 즉시 표출하던 불일치)
 	bool							bNodeStepParkTouch;
 	int								nNodeStepParkExitTicks;
+	// 위 디바운스 유예 중(park_exitcnt 미만) tick들의 매칭 위치를 임시로 쌓아두는 버퍼 — 이탈이
+	//   "확정"되면 이 버퍼의 첫 tick을 새 NODE_STEP run의 진입점으로 소급 적용해, 유예 기간
+	//   자체가 통째로 NODE_STEP에서 빠지는 것을 막는다. 확정 안 되고 폴리곤으로 복귀하면
+	//   bHasParkTouchCarry=false 로 그냥 버려진다(노이즈는 여전히 안 남음)
+	//   (2026-09-03 최정우 추가 — 실측 000376_20260826150010 seq126,127)
+	bool							bHasParkTouchCarry;
+	ZONE_RUN_SESSION				stParkTouchCarry;
+	// 위 접촉 구간 동안 "매칭좌표" 기준으로 폴리곤 안쪽이 한 번이라도 확인됐는지 — 접촉이 확정
+	//   이탈될 때, 한 번이라도 안쪽이 확인됐으면(진짜 주정차 접촉) 기존 그대로 소급 등록하고,
+	//   한 번도 확인 안 됐으면(접근로만 스친 오검출) 이 접촉 구간 자체를 통째로 취소해 그 전후
+	//   run을 끊김 없이 이어붙인다. 원시좌표가 아니라 매칭좌표 기준인 이유: 판교 실측
+	//   000376_20260819094414 seq55,56은 원시좌표는 폴리곤 안이지만 매칭좌표는 계속 밖 —
+	//   원시좌표 기준으로 판정하면 진짜 오검출 구간까지 "확정 접촉"으로 오분류된다
+	//   (사용자 지시, 2026-09-03 최정우 추가)
+	bool							bParkTouchEverMatchedInside;
+	// 접촉 중 이탈 디바운스(node_exitcnt)로 조기 마감된 run — 위 접촉 확정 판정이 나올 때까지
+	//   즉시 등록하지 않고 보류한다. 확정 접촉이면 그대로 등록, 미확정이면 폐기하고 진입정보·
+	//   누적거리를 접촉 구간의 이월값에 합쳐 다음 run으로 이어붙인다(위와 동일 근거,
+	//   2026-09-03 최정우 추가 — 실측 000376_20260819094414 seq54 조기마감)
+	bool							bHasHeldNodeStepRun;
+	ZONE_RUN_SESSION				stHeldNodeStepRun;
+	// 이번 접촉이 시작된 주정차 구역의 road_id — held run을 마감할 때 누락 링크가 이 구역
+	//   폴리곤과 교차하는 지점까지의 부분 거리를 계산하는 데 쓴다(FindLinkPolygonCrossing).
+	//   접촉 시작 시(bHasParkTouchCarry 새로 열릴 때) 채움 (사용자 지시, 2026-09-03 최정우 추가)
+	char							szParkTouchZoneRoadId[20+1];
+	// 이번 접촉에서 인수인계 구간(handoff gap) 탐색을 이미 시도했는지 — 접촉 시작 tick엔 아직
+	//   링크가 안 바뀌어 있을 수 있어(구간단속 마지막 tick과 같은 링크) 매 tick 재시도하다가,
+	//   qwLastConfirmedLinkID 가 실제로 바뀌는 tick에서 한 번만 시도하고 끈다(2026-09-03 최정우 추가)
+	bool							bHasHandoffGapChecked;
+	// 구간단속 마감 시 같이 등록되는 일반도로 미러 레코드 — 곧바로 등록하지 않고 잠깐 보류한다.
+	//   구간단속 마지막 링크 바로 다음에 누락 링크를 거쳐 주정차 폴리곤에 닿는 경우(인수인계 구간,
+	//   위 bHasHandoffGapChecked 로직 참고), 별도 레코드로 쪼개지 않고 이 미러에 합쳐서 하나로
+	//   등록하기 위함 — 합칠 대상이 없으면(접촉이 없거나 인수인계 탐색이 실패하면) 원래 값 그대로
+	//   등록한다(사용자 지시, 2026-09-03 최정우 추가)
+	bool							bHasHeldSpeedMirrorRun;
+	ZONE_RUN_SESSION				stHeldSpeedMirrorRun;
 
 	// 비과금도로 트랙(ROAD_KIND=5) — 게이트가 없어 매칭 링크→구역 역인덱스로 진입/이탈 판정.
 	//   정상 진행/정상 이탈 시에는 아무것도 INSERT 안 함(어차피 비과금이라 기록할 요금이 없음) —
@@ -460,6 +496,11 @@ typedef struct sVehicleTripSession
 		bHasPrevTickRaw(false),	// (2026-09-02 최정우 추가)
 		bNodeStepParkTouch(false),	// (2026-09-02 최정우 추가)
 		nNodeStepParkExitTicks(0),	// (2026-09-02 최정우 추가)
+		bHasParkTouchCarry(false),	// (2026-09-03 최정우 추가)
+		bParkTouchEverMatchedInside(false),	// (2026-09-03 최정우 추가)
+		bHasHeldNodeStepRun(false),	// (2026-09-03 최정우 추가)
+		bHasHandoffGapChecked(false),	// (2026-09-03 최정우 추가)
+		bHasHeldSpeedMirrorRun(false),	// (2026-09-03 최정우 추가)
 		bHasPendingCommit(false),	// (2026-08-21 최정우 추가)
 		nPendingFinalStatus(MATCH_STATUS_PENDING),	// (2026-08-21 최정우 추가)
 		nPendingIntersectLen(-1),	// (2026-08-21 최정우 추가)
@@ -484,6 +525,7 @@ typedef struct sVehicleTripSession
 		szClosedRoadId[0] = '\0';							// (2026-08-12 최정우 추가)
 		szSpeedZoneRoadId[0] = '\0';							// (2026-08-12 최정우 추가)
 		szSpeedEntryTollgateId[0] = '\0';						// (2026-08-20 최정우 추가)
+		szParkTouchZoneRoadId[0] = '\0';						// (2026-09-03 최정우 추가)
 		memset(reinterpret_cast<void *>(&stPendingRawLogInfo), 0, RAW_LOG_INFO_SIZE);		// (2026-08-21 최정우 추가)
 		memset(reinterpret_cast<void *>(&stPendingMatchLinkInfo), 0, MATCH_LINK_INFO_SIZE);	// (2026-08-21 최정우 추가)
 	}
@@ -590,6 +632,8 @@ typedef struct sRawLogWorkerConfig
 	string							strChargeInsertSQL;					// [charge_insert] 개방형 게이트 통과 bulk INSERT (비어있으면 비활성) (2026-08-12 최정우 수정)
 	string							strTripEndUpdateSQL;				// [trip_end] 트립 종료 시 trip_end_dt UPDATE (비어있으면 비활성) (2026-08-12 최정우 추가)
 	string							strAbnormalTripEndSQL;				// [trip_abend] TTL 만료 시 미확정 레코드 마감 UPDATE, 4유형 공용 (비어있으면 비활성) (2026-08-13 최정우 추가, 2026-08-13 수정 — 개방형 한정 해제)
+	string							strTripSeqOffSQL;					// [trip_seqoff] 트립종료 시 TRIP_SEQ 재부여 1단계(오프셋) UPDATE (비어있으면 비활성) (2026-09-03 최정우 추가)
+	string							strTripSeqFinSQL;					// [trip_seqfin] 트립종료 시 TRIP_SEQ 재부여 2단계(확정) UPDATE (비어있으면 비활성) (2026-09-03 최정우 추가)
 	int								nWorkerThreads;
 	int								nTtlSec;							// trip_id 세션 유지 시간 (초, 0=비활성)
 	int								nMatchTimeoutMs;					// 1 GPS 맵매칭 처리 임계 (ms, 초과 시 ERROR 격리, 0=비활성)
@@ -602,7 +646,7 @@ typedef struct sRawLogWorkerConfig
 	int								nSpeedMargin;						// config speed_margin (km/h) — 노이즈 허용 여유분 (2026-07-20 최정우 추가)
 	int								nReverseConfirm;					// config reverse_confirm — 연속 역행 확정 포인트 수 (2026-07-21 최정우 추가)
 	int								nOppStreakMax;						// config opp_streakmax — 왕복분리 반대편 링크 연속 오매칭 허용 틱 수 (2026-08-24 최정우 추가)
-	int								nParkBuf;							// config park_buf — 구역판정 버퍼 상한(m) (2026-08-13 최정우 추가)
+	int								nParkPad;							// config park_pad — 구역판정 시 폴리곤 바깥 확장 허용거리(m) (2026-08-13 최정우 추가, 2026-09-03 park_buf 에서 개명)
 	int								nIgnoreRawVld;						// config ignore_rawvld — RAW_VLD 무시 전량 매칭(검증용) (2026-08-23 최정우 추가)
 	int								nParkAccMax;						// config park_accmax — 주정차 판정 좌표 정확도 상한(m), 0=비활성 (2026-08-23 최정우 추가)
 	int								nParkExitCnt;						// config park_exitcnt — 구역 이탈 확정 연속 GPS 건수(디바운스) (2026-08-13 최정우 추가)
@@ -792,7 +836,18 @@ private:
 		const string& strDeviceKey, int nChargeSeq, time_t dtEnd, uint32 dwEndGpsSeq,
 		const char *pszChargeYn, const char *pszChargeStatus, CHARGE_INSERT_ROW *pstRow);
 	void AppendExpiredNodeStepCharge(int nThreadId, const string& strDeviceKey,
-		const VEHICLE_TRIP_SESSION& stSession, vector<CHARGE_INSERT_ROW> *pvtOut);
+		const VEHICLE_TRIP_SESSION& stSession, time_t dtEnd, uint32 dwEndGpsSeq,
+		vector<CHARGE_INSERT_ROW> *pvtOut);
+	// 트립종료(TRIP_EVENT=END) 처리 중 "이번 틱이 신뢰 못할 매칭(bUntrustedMatch)이거나 매칭 자체를
+	//   못 한" 조기 반환 경로들 전용 — CommitPendingRow() 가 이번 틱이 아니라 훨씬 이전에 보류돼있던
+	//   행을 커밋하면서 그 행 자신의(트립종료 아닌) TRIP_EVENT 기준으로 bTrustedTripEnd 를 다시 판정해
+	//   버려, 정작 지금 끝나는 트립의 열려있는 NODE_STEP run 은 아무도 안 닫아주는 사각지대를 막는
+	//   안전망. ProcessRawLog() 안에서 bTrustedTripEnd 인 조기 반환 지점마다 *pbTripEnded=true 옆에
+	//   같이 호출한다(트립종료 트리거로 정상 확정되는 경로는 CommitPendingRow 가 이미 처리하므로
+	//   호출 불필요 — 중복 호출 시 원래 정상 처리되던 값을 이 함수의 N/3(AUDIT) 값으로 덮어써버리는
+	//   회귀가 실측 확인됨, 2026-09-03) (2026-09-03 최정우 추가)
+	void FlushNodeStepRunsAtTripEnd(int nThreadId, const sRawLogInfo& stRawLogInfo,
+		VEHICLE_TRIP_SESSION *pstSession, vector<CHARGE_INSERT_ROW> *pvtChargeInserts);
 	// NODE_STEP 일반도로 등록 확장(2026-09-01 최정우 추가) — LINK_ID 를 FROM_ID~TO_ID 로 삼는
 	//   신규 스코프(구간단속 위반 추가분/SKIP 구간 브릿지) 공용 row 생성. BuildNodeStepRow() 와 달리
 	//   road_id 기반 ZONE_RUN_SESSION 없이 호출측이 이미 계산해둔 값을 그대로 채운다.
@@ -813,6 +868,12 @@ private:
 	//   fallback용 순수 그래프탐색(맵매칭 스코어링 없음). pvtPathOut 은 qwFromLink~qwToLink 포함
 	//   순서대로, 실패 시 비움 (2026-09-01 최정우 추가)
 	bool FindLinkPathBounded(uint64 qwFromLink, uint64 qwToLink, int nMaxHops, vector<uint64> *pvtPathOut);
+	// 링크의 시작 노드부터 세그먼트를 순회하며 폴리곤과 처음 교차하는 지점까지의 부분 거리·좌표를
+	//   구한다 — 주정차 접촉으로 마감되는 NODE_STEP run의 누락 링크 보정 전용(사용자 지시,
+	//   2026-09-03 최정우 추가). 링크 전체가 폴리곤 밖이면 false(호출측이 전체 길이를 더하고
+	//   다음 링크로 진행)
+	bool FindLinkPolygonCrossing(uint64 qwLinkID, const vector<POINT>& vtPolyCoords,
+		double *pdfPartialDistM, double *pdfCrossX, double *pdfCrossY);
 	// 개방형 과금 1행 생성 — 정상 이탈과 TTL 만료 공용. bStartedByTrip 에 따라 dist_m 산출
 	//   방식·charge_yn/status 가 갈린다 — ZONE_RUN_SESSION 상단 주석 참고 (2026-08-25 최정우 추가)
 	void BuildOpenZoneRow(const ZONE_RUN_SESSION& stRun, const string& strTripId,
@@ -845,6 +906,10 @@ private:
 	//   N/3(AUDIT) + TRIP_END_DT(마지막 확인 시각)으로 마감(사용자 지시, 2026-08-13 추가,
 	//   2026-08-13 수정 — 개방형 한정 해제, status 4→3 정정)
 	bool UpdateAbnormalTripEnd(PGconn *pcConn, const vector<TRIP_END_UPDATE_ROW>& vtRows);
+	// [trip_end]/[trip_abend] 직후 같은 trip_id 목록으로 실행 — TRIP_SEQ 를 START_GPS_SEQ 기준
+	//   실제 주행 순서로 재부여(다른 어플리케이션이 TRIP_SEQ 를 과금 순번으로 그대로 불러 쓸
+	//   예정이라는 사용자 지시, 2026-09-03 추가). best-effort — 실패해도 배치 자체는 성공 처리
+	bool UpdateTripSeqOrder(PGconn *pcConn, const vector<string>& vtTripIds);
 	static string FormatDateTime14(time_t dtValue);
 	// TRIP_ID({6자리 숫자}_{YYYYMMDDHH24MISS}) 에서 시각 부분만 추출 — TRIP_ID 안의 첫 '_'
 	//   위치를 직접 찾아 그 다음부터 반환(DEVICE_KEY 길이에 의존하지 않음). 형식이 안 맞으면

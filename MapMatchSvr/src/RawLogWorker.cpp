@@ -2576,7 +2576,8 @@ void CRawLogWorker::ResolveSkipGapNodeStep(int nThreadId, VEHICLE_TRIP_SESSION *
 */
 void CRawLogWorker::CommitPendingRow(int nThreadId, VEHICLE_TRIP_SESSION *pstSession,
 		bool bHasNextLinkID, uint64 qwNextLinkID,
-		vector<RAW_LOG_UPDATE_ROW> *pvtUpdates, vector<CHARGE_INSERT_ROW> *pvtChargeInserts)
+		vector<RAW_LOG_UPDATE_ROW> *pvtUpdates, vector<CHARGE_INSERT_ROW> *pvtChargeInserts,
+		double dfNextMatchX, double dfNextMatchY)
 {
 	if ((pstSession == nullptr) || !pstSession->bHasPendingCommit)
 		return;
@@ -2769,9 +2770,62 @@ void CRawLogWorker::CommitPendingRow(int nThreadId, VEHICLE_TRIP_SESSION *pstSes
 					static_cast<unsigned long long>(qwNextLinkID));
 			}
 		}
+		else if (pstSession->bClampRunEntryValid)
+		{
+			// ── 전.후 확정좌표 방향검증 대안 경로 (2026-09-04 최정우 추가, 사용자 지시) ──
+			//   f_node/t_node 직접 공유(bConnected)만 "인접"으로 인정하면, 회전차로 등으로 실제로는
+			//   이어지지만 지도 데이터상 노드가 안 겹치는 구간을 놓친다(실측 000376_20260819094414
+			//   seq20 — 2040426801→2040426101, t_node=2040156302 ≠ f_node=2040156304 라 위 bConnected
+			//   경로가 아예 시도조차 안 됨). 대신 "전(前, 클램프 런 시작 직전 신뢰 매칭좌표) → 후
+			//   (後, 이번에 확정된 다음 링크 매칭좌표)"를 이은 실측 이동방향을, 클램프 런 각 tick의
+			//   raw heading과 비교한다 — 도로 세그먼트 방향(회전 중이라 애매)이나 기기 순간속도
+			//   게이트(MM_SPEED_HIGH_KMH=20km/h 이상 요구, bClampTrustedByHeading)에 기대지 않고
+			//   "확정된 두 지점을 잇는 실제 궤적"이라는 더 안정적인 신호를 쓰므로 저속에서도 유효.
+			//   신뢰되면 원래 링크(qwClampRunLinkID) 그대로 두고(재매칭 없이 이미 SgmtMatch 가 계산해
+			//   DB에 참고용으로 남겨둔 좌표/INTERSECT_LEN 그대로) MATCH_STATUS 만 복원한다 — "다음
+			//   링크로 넘기는" 위 bConnected 경로와 달리 원래 위치를 그대로 신뢰 회복시키는 것.
+			//   실측 검증(같은 트립 seq20): 전.후 방향 220.0°, raw heading 244° → 차이 24°(<
+			//   MM_CLAMP_HEADING_MAX_DIFF=30°) → 신뢰 성공
+			POINT stEntryPoint, stNextPoint;
+			stEntryPoint.dfX = pstSession->dfClampRunEntryX;  stEntryPoint.dfY = pstSession->dfClampRunEntryY;
+			stNextPoint.dfX = dfNextMatchX;  stNextPoint.dfY = dfNextMatchY;
+
+			if ((m_stConfig.pcDataLoader != nullptr)
+				&& (HaversineMeters(stEntryPoint, stNextPoint) >= MM_CALC_MIN_DIST))
+			{
+				sint16 nTrajBearing = m_cGISUtil.GetDirAngleDegree(stEntryPoint, stNextPoint);
+				size_t nBridged = 0;
+				for (size_t i = 0; i < pstSession->vtClampRunUpdateIdx.size(); ++i)
+				{
+					size_t idx = pstSession->vtClampRunUpdateIdx[i];
+					if (idx >= pvtUpdates->size()) continue;
+
+					sint16 nRawHeading = pstSession->vtClampRunRawLogInfo[i].nAngle;
+					if (nRawHeading < 0) continue;					// heading 없음 — 검증 불가, 건드리지 않음(SKIP 유지)
+
+					sint16 nDiff = m_cGISUtil.GetAngleDiff(nTrajBearing, nRawHeading);
+					if (abs(nDiff) > MM_CLAMP_HEADING_MAX_DIFF) continue;	// 방향 안 맞음 — SKIP 유지
+
+					// 링크·좌표·INTERSECT_LEN 은 이미 SgmtMatch 가 계산해 DB에 참고용으로 남겨둔
+					//   값 그대로 — 재매칭 없이 신뢰 상태(MATCH_STATUS)만 복원
+					(*pvtUpdates)[idx].strMatchStatus = "1";
+					++nBridged;
+				}
+				if (nBridged > 0)
+				{
+					LOGFMTW("[#%02d] clamp-low-conf %zu/%zu-tick trajectory-direction bridge!"
+						"device=[%s] trip_id=[%s] link=[%llu] traj_bearing=[%d] "
+						"(original position restored, charge not retroactively processed)",
+						nThreadId, nBridged, pstSession->vtClampRunUpdateIdx.size(), stRawLogInfo.szDeviceKey,
+						stRawLogInfo.szTripID, static_cast<unsigned long long>(pstSession->qwClampRunLinkID),
+						static_cast<int>(nTrajBearing));
+				}
+			}
+		}
 		pstSession->qwClampRunLinkID = 0;
 		pstSession->vtClampRunUpdateIdx.clear();
 		pstSession->vtClampRunRawLogInfo.clear();
+		pstSession->bClampRunEntryValid = false;
 	}
 	else if (bHasNextLinkID && (pstSession->qwClampRunLinkID != 0) && (qwNextLinkID == pstSession->qwClampRunLinkID))
 	{
@@ -3606,8 +3660,10 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		}
 
 		// 기존에 보류돼 있던 행을 먼저 확정(commit) — 이번 행의 확정 링크를 "다음" 참고로 보정
-		//   판단(반대편 짝 링크 1틱 오매칭이면 SKIP 처리) (2026-08-21 최정우 추가)
-		CommitPendingRow(nThreadId, &stSession, true, stMatchLinkInfo.qwLinkID, pvtUpdates, pvtChargeInserts);
+		//   판단(반대편 짝 링크 1틱 오매칭이면 SKIP 처리) (2026-08-21 최정우 추가). 매칭좌표도 함께
+		//   넘겨 클램프 브릿지의 전.후 확정좌표 방향검증 대안 경로가 쓸 수 있게 한다 (2026-09-04 최정우 추가)
+		CommitPendingRow(nThreadId, &stSession, true, stMatchLinkInfo.qwLinkID, pvtUpdates, pvtChargeInserts,
+			stMatchLinkInfo.dfMatchX, stMatchLinkInfo.dfMatchY);
 
 		// 이번 행은 즉시 과금 처리·DB 반영하지 않고 세션에 1틱 보류 — 다음 GPS 가 오면 그때 위
 		//   로직으로 확정된다(반대편 짝 링크 1틱 오매칭 보정, [[project_mapmatch_opposite_link_and_begin_heading]]
@@ -3691,6 +3747,13 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 			stSession.qwClampRunLinkID = stMatchLinkInfo.qwLinkID;
 			stSession.vtClampRunUpdateIdx.clear();
 			stSession.vtClampRunRawLogInfo.clear();
+			// 런 시작 시점의 직전 신뢰 매칭 좌표 스냅샷 — bClampLowConf 는 bUntrustedMatch 구성요소라
+			//   dfLastMatchX/Y 가 이 tick 으로는 전진하지 않으므로, 지금 읽는 값이 곧 "런 시작 전
+			//   마지막으로 신뢰됐던 위치"다. 트립 첫 tick부터 바로 클램프면 아직 신뢰 매칭 자체가
+			//   없어(bHasLastMatch=false) 무효로 표시 (2026-09-04 최정우 추가)
+			stSession.dfClampRunEntryX = stSession.dfLastMatchX;
+			stSession.dfClampRunEntryY = stSession.dfLastMatchY;
+			stSession.bClampRunEntryValid = stSession.bHasLastMatch;
 		}
 		stSession.vtClampRunUpdateIdx.push_back(pvtUpdates->size() - 1);
 		stSession.vtClampRunRawLogInfo.push_back(stRawLogInfo);

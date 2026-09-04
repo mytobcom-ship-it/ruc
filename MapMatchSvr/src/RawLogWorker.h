@@ -420,6 +420,18 @@ typedef struct sVehicleTripSession
 	uint64							qwClampRunLinkID;
 	vector<size_t>					vtClampRunUpdateIdx;
 	vector<RAW_LOG_INFO>			vtClampRunRawLogInfo;
+	// 클램프 런이 "시작"되던 시점의 직전 신뢰 매칭 좌표(dfLastMatchX/Y) 스냅샷 — 노드가 직접
+	//   안 이어지는(회전차로 등으로 실제론 연결됐지만 f_node/t_node 비교로는 안 잡히는) 경우까지
+	//   구제하기 위해, "다음 확정 링크"로의 강제 재매칭 대신 전(前, 이 좌표)·후(後, 다음 확정
+	//   매칭좌표) 확정 좌표를 이어 만든 실측 이동방향으로 클램프 런의 raw heading을 검증하는
+	//   대안 경로에 쓴다 — 실측 000376_20260819094414 seq20(2040426801→2040426101, 노드 불일치로
+	//   기존 인접 브릿지 실패)에서 이 방향(seq19→seq21 매칭좌표 bearing 220°)이 seq20의 raw
+	//   heading(244°)과 24°차(임계 MM_CLAMP_HEADING_MAX_DIFF=30° 이내)로 검증 성공 확인
+	//   (2026-09-04 최정우 추가, 사용자 지시)
+	double							dfClampRunEntryX;
+	double							dfClampRunEntryY;
+	bool							bClampRunEntryValid;					// dfClampRunEntryX/Y 가 실좌표인지(트립 첫 tick부터
+																			//   바로 클램프면 아직 신뢰 매칭 자체가 없어 무효)
 	// 역행 의심(bReverseSkip, reverse_confirm 미만) SKIP 브릿지 — 클램프 브릿지와 동일 패턴이나
 	//   "다음 확정 링크와 인접" 사전조건 대신, 스트릭이 reverse_confirm 미달로 끊기고 정상(비역행)
 	//   매칭으로 복귀한 순간 자체가 이미 "노이즈였다"는 판정이므로, 그 시점(직전 확정 링크→복귀
@@ -532,6 +544,9 @@ typedef struct sVehicleTripSession
 		qwOppStreakAnchorLinkID(0),	// (2026-08-24 최정우 추가)
 		qwAmbigReverseRunLinkID(0),	// (2026-08-28 최정우 추가)
 		qwClampRunLinkID(0),	// (2026-08-28 최정우 추가)
+		dfClampRunEntryX(0.0),	// (2026-09-04 최정우 추가)
+		dfClampRunEntryY(0.0),	// (2026-09-04 최정우 추가)
+		bClampRunEntryValid(false),	// (2026-09-04 최정우 추가)
 		qwReverseSkipRunAnchorLinkID(0),	// (2026-09-04 최정우 추가)
 		qwSkipRunAnchorLinkID(0),	// (2026-09-01 최정우 추가)
 		qwStartCandLinkA(0),	// (2026-08-24 최정우 추가)
@@ -843,9 +858,13 @@ private:
 	//   보정 후, 과금 함수 호출(직전 매칭 위치·시각은 보류 시점 스냅샷으로 잠깐 바꿔치기 후 원복) +
 	//   rawgps_update 큐잉까지 수행. bHasNextLinkID/qwNextLinkID=보정판단용 "다음" 확정 링크,
 	//   없으면 false/0(보정 시도 안 함, 계산된 값 그대로 커밋) (2026-08-21 최정우 추가)
+	// dfNextMatchX/Y — bHasNextLinkID 일 때 "다음" 확정 링크의 매칭좌표(호출측 stMatchLinkInfo.
+	//   dfMatchX/Y). 클램프 브릿지의 전.후 확정좌표 방향검증 대안 경로 전용 — bHasNextLinkID=false
+	//   면 안 쓰임(기본값 그대로 둬도 무방) (2026-09-04 최정우 추가, 사용자 지시)
 	void CommitPendingRow(int nThreadId, VEHICLE_TRIP_SESSION *pstSession,
 		bool bHasNextLinkID, uint64 qwNextLinkID,
-		vector<RAW_LOG_UPDATE_ROW> *pvtUpdates, vector<CHARGE_INSERT_ROW> *pvtChargeInserts);
+		vector<RAW_LOG_UPDATE_ROW> *pvtUpdates, vector<CHARGE_INSERT_ROW> *pvtChargeInserts,
+		double dfNextMatchX = 0.0, double dfNextMatchY = 0.0);
 	// TTL 만료로 세션이 지워지기 직전, 아직 열려있는 일반도로 세션이면 N/3(AUDIT)로 1건 기록 —
 	//   실제 과금 대상이라 폐쇄형/구간단속/주정차와 동일하게 AUDIT(3), 비과금도로의 SKIP(4)과는 다름
 	//   (사용자 지시 패턴 계승, 2026-08-14 추가)

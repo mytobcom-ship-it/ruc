@@ -116,6 +116,10 @@ typedef struct sAltMatchCtx
 	//   강제전진을 걸면 정지 중에도 위치가 계속 앞으로 밀리는 누적 드리프트가 생긴다
 	//   (사용자 지시, 2026-09-02 최정우 추가)
 	bool							bSameRawAndHeadingAsPrev;
+	// 직전 확정 매칭 GPS 시각 → 현재 GPS 시각 경과초 — dfHorizMove 와 짝을 이뤄, depth 탐색
+	//   재구성 경로의 절대 물리속도(km/h) 타당성 판정에 사용. 계산 불가(직전 매칭 없음·역전 등)
+	//   시 음수 유지 (2026-09-04 최정우 추가)
+	double							dfGapSec;
 
 	sAltMatchCtx() :
 		nPrevAltitude(NO_ALTITUDE),
@@ -127,7 +131,8 @@ typedef struct sAltMatchCtx
 		bHasPrevMatchPos(false),
 		dfPrevMatchX(0.0),
 		dfPrevMatchY(0.0),
-		bSameRawAndHeadingAsPrev(false)
+		bSameRawAndHeadingAsPrev(false),
+		dfGapSec(-1.0)
 	{}
 } ALT_MATCH_CTX, *PALT_MATCH_CTX;
 
@@ -164,6 +169,8 @@ typedef struct sMapMatchInput
 	double							dfPrevMatchY;						// 직전(신뢰 가능) 매칭 성공 Y(위도, WGS84) (2026-07-22 최정우 추가)
 	bool							bSameRawAndHeadingAsPrev;			// 원시좌표·방향이 직전 tick과 완전히 동일 — true 면 노이즈
 																		//   보정(1m 강제전진) 미적용 (2026-09-02 최정우 추가)
+	double							dfGapSec;							// 직전 확정 매칭 GPS 시각→현재 GPS 시각 경과초(ALT_MATCH_CTX.dfGapSec
+																		//   전달용) — 재구성 경로 절대속도 타당성 판정. 음수=계산 불가 (2026-09-04 최정우 추가)
 
 	sMapMatchInput() :
 		nCoordinateType(WGS84GEO),
@@ -187,7 +194,8 @@ typedef struct sMapMatchInput
 		bHasPrevMatchPos(false),
 		dfPrevMatchX(0.0),
 		dfPrevMatchY(0.0),
-		bSameRawAndHeadingAsPrev(false)
+		bSameRawAndHeadingAsPrev(false),
+		dfGapSec(-1.0)
 	{}
 } MAP_MATCH_INPUT, *PMAP_MATCH_INPUT;
 
@@ -232,6 +240,22 @@ typedef struct sMatchLinkInfo
 	bool							bReverseSuspect;					// 위치 역행 + heading 도 역방향 일치 — 연속역행(reverse_confirm) 스트릭 판정 전용 (2026-07-21 최정우 추가)
 	bool							bClampLowConf;						// 경계 클램프 + INTERSECT_LEN 초과 — 신뢰도 낮은 매칭 SKIP 처리용 (2026-07-21 최정우 추가)
 	bool							bAmbiguousReverse;					// 같은 링크 역행인데 heading 없음/애매해 노이즈 단정 불가 — SKIP 처리용 (2026-07-22 최정우 추가)
+	bool							bContinueFallback;					// 직전 확정 위치와의 연결성(위상 그래프)이 검증되지 않고 순수 근접 거리만으로 채택된 결과 —
+																		//   ① Continue 완전 실패 후 Begin(반경 최근접) 폴백(ProcessManager::AttemptMatch), 또는
+																		//   ② Continue 성공했으나 방위각 비용 초과로 병행 Begin 재평가가 덮어씀(MapMatch.cpp
+																		//   bBeginOverrode) 두 경우 공용. 이동거리 타당성(SKIP) 판정 대상 한정용 (2026-09-04 최정우 추가)
+	bool							bImplausiblePath;					// depth 탐색 재구성 경로 길이가 경과시간(dfGapSec) 대비 물리적으로 불가능한 절대속도
+																		//   (MM_PATH_ABS_MAX_KMH 초과, MapMatch.cpp)로 나온 경우 — 최종 링크 자체를 SKIP 판정용으로
+																		//   표시 (2026-09-04 최정우 추가)
+	bool							bImplausibleDirection;				// depth 탐색 재구성 경로(직전 신뢰 위치→이번 확정 위치)의 전체 진행방향이 현재 heading
+																		//   과 크게 어긋난 경우 — 시간·거리는 타당해도 실제 주행 동작(회전 등)으로 보기 어려움
+																		//   (MM_DIR_MAX_DEG 재사용, MapMatch.cpp). bImplausiblePath 와 동일하게 SKIP 판정용
+																		//   (2026-09-04 최정우 추가)
+	bool							bImplausibleSpeedLimit;			// depth 탐색 재구성 경로 구간(hop)별 등록 제한속도 기준 최소 소요시간 합이 실제
+																		//   경과시간(dfGapSec)보다 큰 경우 — 평균속도(bImplausiblePath)는 상한 이내여도
+																		//   경로 중 유독 느린 구간(좁은 길 등) 하나만으로 물리적으로 불가능함을 잡아낸다
+																		//   (MM_PATH_SPEEDLIMIT_MARGIN 재사용, MapMatch.cpp). bImplausiblePath 와 동일하게
+																		//   SKIP 판정용 (2026-09-04 최정우 추가)
 	// 직전 확정 링크 다음부터 이번 확정 링크까지 실제 경유한 링크 ID 목록(최소 1개=qwLinkID) —
 	//   게이트/구역 판정이 qwLinkID 하나만이 아니라 경유 링크 전부를 확인하게 함. 이 구조체가
 	//   다른 곳에서 memset(0, MATCH_LINK_INFO_SIZE) 로 리셋되는 관례라 vector 대신 고정 배열

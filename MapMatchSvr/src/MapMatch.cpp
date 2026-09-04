@@ -199,6 +199,10 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 	//   (Begin은 그래프 경로 개념이 없어 경유 링크를 모름 — bUsedContinuePath 로 표시)
 	vector<uint64> vtContinuePath;
 	bool bUsedContinuePath = true;
+	// Continue 결과가 아래 병행 Begin 재평가로 덮어써졌는지 — 덮어써지면 위상(그래프) 검증 없이
+	//   순수 근접 거리만으로 채택된 것이므로, 호출측 이동거리 타당성 검사(RawLogWorker
+	//   IsFallbackJumpImplausible) 대상 표시용 (2026-09-04 최정우 추가)
+	bool bBeginOverrode = false;
 	// Continue depth 탐색(maxstep 이내)으로 실제 방문한 링크 UID 집합 — 아래 Begin 병행폴백에서
 	//   "진짜 갈림길(형제) 링크"와 "그래프상 전혀 무관한 링크"를 구분하는 데 재사용한다.
 	//   새 거리 임계값을 따로 두지 않고 기존 maxstep 탐색 결과를 그대로 활용 (2026-08-21 최정우 추가)
@@ -253,7 +257,15 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 	//   Continue 후보로도 한 번은 걸러졌을 것이므로 기존 구제 목적은 그대로 유지되고, 탐색
 	//   범위 밖의 무관한 링크만 차단된다. 새 거리 임계값을 따로 두지 않고 기존 maxstep 탐색
 	//   결과를 그대로 재사용.
-	if (stMatchEntry.dfAngleCost >= (MM_DIR_MAX_PENALTY - 0.01))
+	//   2026-09-04 수정 — 이 구제는 "짧은 크로스오버 지선으로 1틱 튐"(교차로 한복판) 전용인데
+	//   실제 발동 조건엔 이동거리가 전혀 없어, 실측 000376_20260826150010 seq405(직전 확정
+	//   위치 대비 raw GPS 40m/3초 이동 — 실제로는 멀리 이동한 상황)에서도 그대로 발동해 Continue가
+	//   위상 그래프로 4-hop 확장해 찾은 후보(2520216300, 방위각만 안 맞음)를, 위상 검증이 전혀
+	//   없는 순수 거리 기반 Begin 후보가 덮어써버렸다. dfHorizMove(직전 확정 위치→현재 GPS 이동거리)가
+	//   MM_NODE_BRIDGE_MAX_M(15m, 교차로 근접 브릿지 인정 거리와 동일 척도) 이내일 때만 — 즉 원래
+	//   설계 의도대로 "짧게 튄" 경우에만 — 이 구제를 적용한다.
+	if ((stMatchEntry.dfAngleCost >= (MM_DIR_MAX_PENALTY - 0.01))
+		&& (stMapMatchInput.dfHorizMove <= MM_NODE_BRIDGE_MAX_M))
 	{
 		SGMT_MATCH_INPUT stBeginSgmtMatchInput;
 		MATCH_ENTRY stBeginMatchEntry;
@@ -292,6 +304,7 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 		{
 			stMatchEntry = stBeginMatchEntry;
 			bUsedContinuePath = false;		// Begin 채택 — Continue 경유 경로는 무효 (2026-08-20 최정우 추가)
+			bBeginOverrode = true;			// (2026-09-04 최정우 추가)
 			if (stBeginMatchEntry.qwLinkID == qwContinueLinkID)
 				stMatchEntry.bReverseSuspect = bContinueReverseSuspect;
 		}
@@ -301,6 +314,17 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 	if (!SetResponseValue(wErrorCode, stMatchEntry, pstMatchLinkInfo))
 		return false;
 
+	// Begin 재평가로 덮어써진 결과 표시 — 위상 그래프 검증이 아니라 순수 근접 거리로 채택됐다는 뜻.
+	//   실측 000376_20260826150010 seq405: Continue가 depth 4까지 확장해 2520216300 을 찾았지만
+	//   방위각 비용 상한(MM_DIR_MAX_PENALTY) 도달로 병행 Begin이 heading 무시·순수 거리(18m)로
+	//   재평가해 더 싼 비용으로 덮어썼다. 그 결과 직전 확정 위치(강릉 주정차구역 이탈 직후) 대비
+	//   3초/44m(≈53km/h, 신고속도 11~14km/h) 점프가 위상 검증도 거리 타당성 검증도 없이 그대로
+	//   MATCHED 확정되는 구멍이었다 — ProcessManager::AttemptMatch 의 Continue 완전실패→Begin
+	//   폴백(bContinueFallback)과 위상은 다르지만 "근접 거리만으로 채택" 이라는 성질은 동일해
+	//   같은 플래그를 재사용한다 (2026-09-04 최정우 추가)
+	if (bBeginOverrode)
+		pstMatchLinkInfo->bContinueFallback = true;
+
 	// SetResponseValue가 채운 기본 경로(최종 링크 1개)를, Continue가 실제 경유한 전체 경로로 교체
 	//   (2026-08-20 최정우 추가) — 배열 크기(MATCH_LINK_INFO_MAX_PATH) 초과분은 자름
 	//   교체 전 "그럴듯함" 검증 — 경로 링크 길이 합이 실제 이동거리(dfHorizMove) 대비 비정상적으로
@@ -308,14 +332,52 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 	//   탐색은 두 확정 링크를 잇는 "어떤" 경로만 찾을 뿐 실제 주행 여부는 검증하지 않아, 복잡한
 	//   교차로에서 실제로 가지 않은 갈림길이 경유 링크로 잘못 포함될 수 있다 — 그 갈림길이 우연히
 	//   과금구역 링크면 오등록으로 이어진다(2026-08-24 최정우 추가)
-	if (bUsedContinuePath && !vtContinuePath.empty())
+	//   2026-09-04 수정 — vtContinuePath 가 크기 1이어도 그 유일한 원소가 직전 세션 링크(qwLinkID)와
+	//   같으면(=ReconstructPath 가 "확장 없이 그대로 확정"으로 기록한 경우, ContinueMapMatch.cpp
+	//   ReconstructPath 주석 참고) 이건 "여러 링크를 거친 재구성 경로"가 아니라 "긴 링크 위를
+	//   계속 달리는 중 링크 시작점부터 지금까지의 누적거리"일 뿐이다. 실측 000376_20260826150010
+	//   seq46·seq77: 289m대 긴 링크 위를 정상 주행(raw 16.5~40.8m/3초) 중이었는데, 누적거리
+	//   (235.5m·289.0m)를 그 틱의 이동거리로 오인해 절대속도 280~350km/h대로 오판정, SKIP시켰다.
+	//   최초 시도(pstTraceCtx->nMatchedStep>0 가드)는 부정확했다 — StartMapMatch 의 nBestStep 은
+	//   "실제 채택된 후보의 depth"가 아니라 "마지막으로 depth 확장을 시도해 후보가 발견된 depth"라,
+	//   depth=0 후보가 그대로 채택돼도(경계클램프·각도부적합으로 확장은 했지만 depth=0이 그대로 이김)
+	//   nMatchedStep 이 >0 으로 남아 위 오탐을 못 걸렀다. 대신 "재구성 경로 시작 링크가 직전 세션
+	//   링크와 다른가"(=진짜 다른 링크로 그래프 확장됐는가)로 직접 판정한다.
+	if (bUsedContinuePath && !vtContinuePath.empty() && (vtContinuePath.front() != qwLinkID))
 	{
 		double dfPathLenSum = 0.0;
+		// 구간(hop)별 등록 제한속도 기준 최소 소요시간 합산 — MM_PATH_SPEEDLIMIT_MARGIN 주석 참고
+		//   (2026-09-04 최정우 추가)
+		double dfMinTimeSec = 0.0;
+		const size_t nLastIdx = vtContinuePath.size() - 1;
 		for (size_t i = 0; i < vtContinuePath.size(); ++i)
 		{
-			PLINK_INFO pstPathLink = m_pcDataLoader->GetLinkInfo(vtContinuePath[i]);
-			if (pstPathLink != nullptr)
-				dfPathLenSum += pstPathLink->dfLen;
+			double dfHopLenM = 0.0;
+			uint8 nHopMaxSpeed = 0;
+			// 최종 확정 링크(경로의 마지막 원소)는 링크 시작점부터 끝까지가 아니라 "시작점부터
+			//   실제 매핑된 지점까지"만 이동했다 — 전체 링크 길이(dfLen)를 그대로 더하면 링크가
+			//   길수록(예: 400m대) 실제 이동거리와 무관하게 과대평가된다. 실측 확인: hops=1인데
+			//   pathLen=416.3m로 나와 절대속도 500km/h로 오판정된 사례 다수(2026-09-04). 중간
+			//   경유 링크는 처음부터 끝까지 통과한 게 맞아 전체 길이 그대로 쓴다 (2026-09-04 최정우 추가)
+			if ((i == nLastIdx) && (vtContinuePath[i] == stMatchEntry.qwLinkID))
+			{
+				dfHopLenM = static_cast<double>(stMatchEntry.wLenFromLink) + stMatchEntry.dfSgmtMatchLen;
+				nHopMaxSpeed = stMatchEntry.nMaxSpeed;
+			}
+			else
+			{
+				PLINK_INFO pstPathLink = m_pcDataLoader->GetLinkInfo(vtContinuePath[i]);
+				if (pstPathLink != nullptr)
+				{
+					dfHopLenM = pstPathLink->dfLen;
+					nHopMaxSpeed = pstPathLink->nMaxSpeed;
+				}
+			}
+			dfPathLenSum += dfHopLenM;
+			const double dfHopSpeedKmh = (nHopMaxSpeed > 0)
+				? (static_cast<double>(nHopMaxSpeed) * MM_PATH_SPEEDLIMIT_MARGIN)
+				: MM_PATH_SPEEDLIMIT_DEFAULT_KMH;
+			dfMinTimeSec += (dfHopLenM / dfHopSpeedKmh) * 3.6;
 		}
 		double dfPlausibleMax = stMapMatchInput.dfHorizMove * MM_PATH_PLAUSIBLE_SCALE;
 		if (dfPlausibleMax < MM_PATH_PLAUSIBLE_FLOOR_M)
@@ -332,6 +394,67 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 		{
 			LOGFMTW("implausible reconstructed path discarded!pathLen=[%.1f]m horizMove=[%.1f]m plausibleMax=[%.1f]m hops=[%zu]",
 				dfPathLenSum, stMapMatchInput.dfHorizMove, dfPlausibleMax, vtContinuePath.size());
+		}
+
+		// 위 배율식(dfHorizMove 상대)과 별개로 dfGapSec(경과초) 기준 절대 물리속도 검증 —
+		//   MM_PATH_ABS_MAX_KMH 주석 참고. dfGapSec 계산 불가(직전 매칭 없음·역전 등, 음수)면
+		//   판단 보류(2026-09-04 최정우 추가)
+		if (stMapMatchInput.dfGapSec > 0.0)
+		{
+			double dfImpliedKmh = (dfPathLenSum / stMapMatchInput.dfGapSec) * 3.6;
+			if (dfImpliedKmh > MM_PATH_ABS_MAX_KMH)
+			{
+				LOGFMTW("implausible reconstructed path abs speed!pathLen=[%.1f]m gapSec=[%.1f]s implied=[%.1f]km/h limit=[%.1f]km/h hops=[%zu]",
+					dfPathLenSum, stMapMatchInput.dfGapSec, dfImpliedKmh, MM_PATH_ABS_MAX_KMH, vtContinuePath.size());
+				pstMatchLinkInfo->bImplausiblePath = true;
+			}
+
+			// 위 평균속도 상한과 별개로, 구간(hop)별 등록 제한속도 기준 최소 소요시간 합(dfMinTimeSec)이
+			//   실제 경과시간보다 크면 비현실적 — 평균은 상한 이내여도 유독 느린 구간(좁은 길 등)
+			//   하나만으로 물리적으로 불가능한 경우를 잡는다. MM_PATH_SPEEDLIMIT_MARGIN 주석 참고
+			//   (2026-09-04 최정우 추가, 사용자 지시)
+			if (dfMinTimeSec > stMapMatchInput.dfGapSec)
+			{
+				LOGFMTW("implausible reconstructed path speed limit!pathLen=[%.1f]m gapSec=[%.1f]s minTimeSec=[%.1f]s hops=[%zu]",
+					dfPathLenSum, stMapMatchInput.dfGapSec, dfMinTimeSec, vtContinuePath.size());
+				pstMatchLinkInfo->bImplausibleSpeedLimit = true;
+			}
+		}
+
+		// 재구성 경로(직전 신뢰 위치→이번 확정 위치)의 전체 진행방향이 현재 heading 과 크게 어긋나면
+		//   비현실적 — 시간·거리(위 절대속도 검사)만으로는 "실제 주행 경로인가"를 못 잡는다. 예:
+		//   4-hop 경로가 시간상으로는 가능해도, 그 경로의 전체 방향이 지금 차량이 향하는 방향과
+		//   반대/직각이면 실제로 그 길을 달렸다고 보기 어렵다. heading·속도가 무의미한 저속/정지
+		//   구간(예: 주정차구역 내 공터 이동)은 판단 근거가 없어 제외 — MM_OPP_FIX_MIN_SPEED 재사용
+		//   (실측 기준: 시속 3km 미만은 heading 노이즈로 취급, IsAntiHeadingOpposite 와 동일 전제)
+		//   (2026-09-04 최정우 추가, 사용자 지시)
+		if ((stMapMatchInput.nAngle >= 0) && (stMapMatchInput.nSpeed >= 0)
+			&& (stMapMatchInput.nSpeed >= MM_OPP_FIX_MIN_SPEED) && stMapMatchInput.bHasPrevMatchPos)
+		{
+			POINT stPathStart; stPathStart.dfX = stMapMatchInput.dfPrevMatchX; stPathStart.dfY = stMapMatchInput.dfPrevMatchY;
+			POINT stPathEnd;   stPathEnd.dfX = pstMatchLinkInfo->dfMatchX;     stPathEnd.dfY = pstMatchLinkInfo->dfMatchY;
+			// 시작·끝이 사실상 같은 점(정지에 가까움)이면 방향 자체가 노이즈라 판단 보류.
+			//   RawLogWorker::HaversineMeters 와 동일한 표준 하버사인 공식(WGS84 도 단위 좌표 그대로,
+			//   내부 스케일(*360000) 미적용) — 별도 인라인 계산(2026-09-04 최정우 추가)
+			const double dfEarthR = 6378137.0;
+			const double dfLat1 = stPathStart.dfY * M_PI / 180.0, dfLat2 = stPathEnd.dfY * M_PI / 180.0;
+			const double dfDLat = (stPathEnd.dfY - stPathStart.dfY) * M_PI / 180.0;
+			const double dfDLon = (stPathEnd.dfX - stPathStart.dfX) * M_PI / 180.0;
+			const double dfA = sin(dfDLat/2)*sin(dfDLat/2) + cos(dfLat1)*cos(dfLat2)*sin(dfDLon/2)*sin(dfDLon/2);
+			const double dfPathMoveM = 2.0 * dfEarthR * asin(sqrt(dfA));
+			if (dfPathMoveM >= MM_CALC_MIN_DIST)
+			{
+				sint16 nPathBearing = m_cGISUtil.GetDirAngleDegree(stPathStart, stPathEnd);
+				sint16 nHeading = stMapMatchInput.nAngle;
+				sint16 nDirDiff = m_cGISUtil.GetAngleDiff(nPathBearing, nHeading);
+				if (abs(nDirDiff) > MM_DIR_MAX_DEG)
+				{
+					LOGFMTW("implausible reconstructed path direction!pathBearing=[%d] heading=[%d] diff=[%d] limit=[%d] hops=[%zu]",
+						static_cast<int>(nPathBearing), static_cast<int>(nHeading), static_cast<int>(nDirDiff),
+						MM_DIR_MAX_DEG, vtContinuePath.size());
+					pstMatchLinkInfo->bImplausibleDirection = true;
+				}
+			}
 		}
 	}
 

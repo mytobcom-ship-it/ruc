@@ -752,6 +752,9 @@ bool CContinueMapMatch::GetLinkDepthInfo(set<uint64> *psetSearchHistoryLinkList,
 		//   저속 전체(MM_SPEED_LOW_KMH 이하 — 방위각 자체를 안 믿는 기존 기준과 동일 임계 재사용)로
 		//   범위를 넓힘). qwErasedLinkID 는 위에서 erase(it++) 전에 미리 보관해둔 값(끝점 좌표는
 		//   GetLinkInfo() 로 다시 조회).
+		//   2026-09-04 시도 — 연쇄 지리적 브릿지 차단(bGeometricBridge 링크에서는 재브릿지 금지)을
+		//   시도했으나 특정 트립(000370/000382)에서 메모리가 수십 초 만에 GB 단위로 폭증하는 심각한
+		//   회귀가 실측 확인돼(원인 미파악) 즉시 롤백. 이 최적화는 보류 (2026-09-04 최정우 롤백)
 		if ((nSpeed < 0) || (nSpeed > MM_SPEED_LOW_KMH))
 		{
 			PLINK_INFO pstFromLinkInfo = m_pcDataLoader->GetLinkInfo(qwErasedLinkID);

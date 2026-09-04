@@ -199,6 +199,7 @@ void CProcessManager::BuildMapMatchInput(const sRawLogInfo& stRawLogInfo,
 		pstMapMatchInput->nPrevAltitude = pstAltCtx->nPrevAltitude;
 		pstMapMatchInput->nPrevRoadType = pstAltCtx->nPrevRoadType;
 		pstMapMatchInput->dfHorizMove = pstAltCtx->dfHorizMove;
+		pstMapMatchInput->dfGapSec = pstAltCtx->dfGapSec;	// (2026-09-04 최정우 추가)
 	}
 
 	// 연속 맵매칭 + 직전 매칭 위치 보유 시 역행 페널티용 위치 전달 (2026-07-20 최정우 추가)
@@ -295,7 +296,7 @@ bool CProcessManager::ProcessRawLog(const sRawLogInfo& stRawLogInfo, uint64& qwI
  *         MATCHED 아님 — SKIP·세션 미갱신·DB 참고용만 (2026-07-10 최정우 수정)
 */
 bool CProcessManager::FindNearestSegment(const sRawLogInfo& stRawLogInfo,
-		MATCH_LINK_INFO *pstMatchLinkInfo)
+		MATCH_LINK_INFO *pstMatchLinkInfo, bool bIgnoreHeading)
 {
 	if ((m_pcMapMatch == nullptr) || (pstMatchLinkInfo == nullptr))
 		return false;
@@ -304,7 +305,8 @@ bool CProcessManager::FindNearestSegment(const sRawLogInfo& stRawLogInfo,
 	// 입력 재구성(고도 컨텍스트 없음, 시작) 후 방위각 무시·최대 반경으로 최근접 탐색 (2026-07-10 최정우 추가)
 	BuildMapMatchInput(stRawLogInfo, &stDiagInput, 0, nullptr);
 	stDiagInput.qwLinkID = 0;
-	stDiagInput.nAngle = NO_ANGLE;					// 순수 기하 최근접(방위각 필터 미적용)
+	if (bIgnoreHeading)
+		stDiagInput.nAngle = NO_ANGLE;				// 순수 기하 최근접(방위각 필터 미적용)
 	stDiagInput.nRadius = MM_DIAG_RADIUS;			// 반경 밖 후보까지 포함하도록 최대 반경
 
 	MATCH_TRACE_CTX stTraceCtx;
@@ -345,6 +347,43 @@ bool CProcessManager::RematchBeginBiased(const sRawLogInfo& stRawLogInfo,
 	MATCH_TRACE_CTX stTraceCtx;
 	FillMatchTraceCtx(stTraceCtx, m_nThreadId, stRawLogInfo, stInput, 0, false, nullptr);
 	return m_pcMapMatch->BeginMapMatch(stInput, pstMatchLinkInfo, &stTraceCtx);
+}
+
+/**
+ * @brief RematchBeginBiased + heading 신뢰성 검증 — SKIP 구간 개별 틱 소급 MATCHED 승격 전용
+ * @param[in] stRawLogInfo 원시 GPS 로그 (SKIP 런 버퍼에 보관돼 있던 tick)
+ * @param[in] qwBiasLinkID 편향 기준 링크 (다음 확정 링크)
+ * @param[out] pstMatchLinkInfo 재매칭 결과
+ * @return true(성공 — heading 검증까지 통과), false(실패 또는 heading 신뢰 불가로 시도 자체를 포기)
+ * @remark
+ * \tRematchBeginBiased 는 BEGIN 매칭 특성상 후보 정렬에 heading 을 안 써서(순수 거리+연결성 편향),
+ * \t10m 옆 반대방향(왕복분리) 링크가 채택될 수 있다(BeginMapMatch.cpp FixOppositePairByHeading
+ * \t주석, 실측 000376_20260819094414 M79 — 개방형 톨게이트 오과금까지 발생한 전례).
+ * \tACCURACY_M SKIP 틱은 정지·저속 구간이 많아 heading 자체가 무의미(예: 0)한 경우가 흔하다 —
+ * \t그런 틱까지 재매칭을 강행하면 이 위험이 가장 커지므로, heading·속도가 신뢰할 만할 때만
+ * \t(IsAntiHeadingOpposite 와 동일 기준 MM_OPP_FIX_MIN_SPEED 재사용) 시도하고, 결과가 짝 링크
+ * \t반대방향이면 실패 처리해 SKIP 을 유지한다 (2026-09-04 최정우 추가, 사용자 지시)
+*/
+bool CProcessManager::RematchBeginBiasedDirectional(const sRawLogInfo& stRawLogInfo,
+		uint64 qwBiasLinkID, MATCH_LINK_INFO *pstMatchLinkInfo)
+{
+	if ((m_pcMapMatch == nullptr) || (pstMatchLinkInfo == nullptr) || (qwBiasLinkID == 0))
+		return false;
+
+	// heading 신뢰 전제 — NO_ANGLE·SPEED 없음·저속(MM_OPP_FIX_MIN_SPEED 미만)이면 반대편 판별
+	//   근거가 없어 안전하게 포기(SKIP 유지)
+	if ((stRawLogInfo.nAngle < 0) || (stRawLogInfo.fSpeed < 0.0f)
+		|| (stRawLogInfo.fSpeed < static_cast<float>(MM_OPP_FIX_MIN_SPEED)))
+		return false;
+
+	if (!RematchBeginBiased(stRawLogInfo, qwBiasLinkID, pstMatchLinkInfo))
+		return false;
+
+	const sint16 nSpeedRounded = static_cast<sint16>(stRawLogInfo.fSpeed + 0.5f);
+	if (m_pcMapMatch->IsAntiHeadingOpposite(pstMatchLinkInfo->qwLinkID, stRawLogInfo.nAngle, nSpeedRounded))
+		return false;			// 짝 링크 반대방향 채택 — 신뢰 불가, SKIP 유지
+
+	return true;
 }
 
 /**
@@ -425,6 +464,10 @@ bool CProcessManager::AttemptMatch(const sRawLogInfo& stRawLogInfo, MAP_MATCH_IN
 		&& !m_pcMapMatch->IsAntiHeadingOpposite(pstMatchLinkInfo->qwLinkID, nOrigAngle, stMapMatchInput.nSpeed))
 	{
 		qwInOutLinkID = pstMatchLinkInfo->qwLinkID;
+		// 직전 세션 링크가 있었는데도(Continue 시도 대상) 여기(Begin 폴백)로 확정됐다는 것은
+		//   위상 그래프상 직전 링크와의 연결을 못 찾았다는 뜻 — 호출측 이동거리 타당성 검사 대상 표시
+		//   (2026-09-04 최정우 추가)
+		pstMatchLinkInfo->bContinueFallback = (qwPrevLinkId != 0);
 		LOGFMTD("[#%02d] begin map match ok!device=[%s] link=[%llu]",
 			m_nThreadId, stRawLogInfo.szDeviceKey,
 			static_cast<unsigned long long>(qwInOutLinkID));

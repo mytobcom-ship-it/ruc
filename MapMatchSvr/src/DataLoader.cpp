@@ -72,6 +72,11 @@ void CDataLoader::Uninitialize()
 */
 bool CDataLoader::SetDataUpdate()
 {
+	// 기동 시 지도 데이터 로딩 시작 지점 — 어느 파일을 읽기 시작하는지 먼저 남겨야 아래
+	//   SetDataInfoDisplay() 요약(끝난 뒤 결과만 표시)과 짝을 이뤄 로딩 시작~완료 구간이
+	//   로그만으로 구분된다 (2026-09-04 최정우 추가, 사용자 지시)
+	LOGFMTI("map data load start!file=[%s] maxstep=[%d]", m_strDataFile.c_str(), m_nMaxStep);
+
 	if (access(m_strDataFile.c_str(), F_OK) != 0)
 	{
 		LOGFMTE("data binary file not found!file=[%s]", m_strDataFile.c_str());

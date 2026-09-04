@@ -64,6 +64,7 @@ private:
 	CCoordinate						m_cCoordinate;
 	CBeginMapMatch					m_cBeginMapMatch;
 	CContinueMapMatch				m_cContinueMapMatch;
+	CGISUtil						m_cGISUtil;							// 재구성 경로 매크로 방향 검증용, stateless (2026-09-04 최정우 추가)
 	CDataLoader						*m_pcDataLoader;
 };
 

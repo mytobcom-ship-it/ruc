@@ -385,6 +385,12 @@ typedef struct sVehicleTripSession
 																			//   매 tick(SKIP 포함) 갱신돼 SKIP 구간 동안 못 쓰므로 별도 보관.
 																			//   NODE_STEP 케이스3(SKIP 구간 브릿지) start_gps_seq 원본
 																			//   (2026-09-01 최정우 추가)
+	float							fLastConfirmedLinkSpeed;				// dtLastConfirmedLinkTime 과 동일 tick 에 기기가 보고한 순간속도
+																			//   (km/h, raw) — NODE_STEP 인수인계 구간(handoff gap)처럼 이 tick 을
+																			//   유일한 실측 시각·앵커로 재사용하는 레코드는 dtEntryTime==dtEnd 라
+																			//   dist/시간 평균속도 계산이 성립하지 않는다 — 그 대신 쓸 "그 tick
+																			//   자체의" 실측 속도(현재 처리 중인 다른 tick 값을 쓰면 값이 새 버림,
+																			//   실측 000376/000382 강릉 두 트립에서 확인) (2026-09-04 최정우 추가)
 	// 왕복분리 반대편 링크 N틱 연속 오매칭 보정용 (2026-08-24 최정우 추가, opp_streakmax 설정).
 	//   스트릭이 시작될 때의 "진짜" 확정 링크를 앵커로 고정해두고(qwLastConfirmedLinkID 는 매 틱
 	//   갱신되므로 별도 보관 필요), 스트릭 동안 pvtUpdates 에 커밋한 인덱스를 쌓아뒀다가 앵커로
@@ -414,6 +420,15 @@ typedef struct sVehicleTripSession
 	uint64							qwClampRunLinkID;
 	vector<size_t>					vtClampRunUpdateIdx;
 	vector<RAW_LOG_INFO>			vtClampRunRawLogInfo;
+	// 역행 의심(bReverseSkip, reverse_confirm 미만) SKIP 브릿지 — 클램프 브릿지와 동일 패턴이나
+	//   "다음 확정 링크와 인접" 사전조건 대신, 스트릭이 reverse_confirm 미달로 끊기고 정상(비역행)
+	//   매칭으로 복귀한 순간 자체가 이미 "노이즈였다"는 판정이므로, 그 시점(직전 확정 링크→복귀
+	//   링크 방향검증 재매칭)에 소급 재기록한다. G40류 실측(000376_20260826150010) — 커브 구간에서
+	//   위상적 역행 신호(후보 링크의 종료 노드가 직전 링크 종료 노드와 동일)가 1틱만 오탐한 경우를
+	//   구제 (2026-09-04 최정우 추가, 사용자 지시)
+	uint64							qwReverseSkipRunAnchorLinkID;
+	vector<size_t>					vtReverseSkipRunUpdateIdx;
+	vector<RAW_LOG_INFO>			vtReverseSkipRunRawLogInfo;
 	// 완전 매칭실패(진짜 SKIP, bMatched==false) 구간 raw tick 버퍼 — 위 클램프 브릿지와 별개.
 	//   NODE_STEP 일반도로 확장 케이스3(SKIP 구간 등록)용 — 클램프는 "매칭은 됐으나 저신뢰"라 매
 	//   tick 마다 링크가 있지만, 완전 SKIP은 링크 자체가 없어 지금까지 아무 버퍼도 없었다. SKIP 런
@@ -423,6 +438,10 @@ typedef struct sVehicleTripSession
 	//   순으로 대체) (2026-09-01 최정우 추가)
 	uint64							qwSkipRunAnchorLinkID;
 	vector<RAW_LOG_INFO>			vtSkipRunRawLogInfo;
+	// vtSkipRunRawLogInfo 와 1:1 대응하는 pvtUpdates 인덱스 — ACCURACY_M SKIP 틱 개별 소급 MATCHED
+	//   승격(RematchBeginBiasedDirectional)에서, 성공한 틱의 DB 갱신행을 직접 찾아 고쳐쓰는 용도.
+	//   vtClampRunUpdateIdx 와 동일 패턴 (2026-09-04 최정우 추가)
+	vector<size_t>					vtSkipRunUpdateIdx;
 	// 트립 시작(또는 장시간 SKIP 후) 첫 매칭이 왕복분리 어느 쪽인지 불확실한 구간의 "경쟁 후보"
 	//   추적용 (2026-08-24 최정우 추가, 실측 21트립 중 3건꼴로 재현 확인). qwLastConfirmedLinkID·
 	//   qwOppStreakAnchorLinkID 가 둘 다 0(진짜 앵커도, 확정된 스트릭도 없음)일 때만 쓰인다 —
@@ -509,9 +528,11 @@ typedef struct sVehicleTripSession
 		qwLastConfirmedLinkID(0),	// (2026-08-21 최정우 추가)
 		dtLastConfirmedLinkTime(0),	// (2026-08-24 최정우 추가)
 		dwLastConfirmedLinkGpsSeq(0),	// (2026-09-01 최정우 추가)
+		fLastConfirmedLinkSpeed(0.0f),	// (2026-09-04 최정우 추가)
 		qwOppStreakAnchorLinkID(0),	// (2026-08-24 최정우 추가)
 		qwAmbigReverseRunLinkID(0),	// (2026-08-28 최정우 추가)
 		qwClampRunLinkID(0),	// (2026-08-28 최정우 추가)
+		qwReverseSkipRunAnchorLinkID(0),	// (2026-09-04 최정우 추가)
 		qwSkipRunAnchorLinkID(0),	// (2026-09-01 최정우 추가)
 		qwStartCandLinkA(0),	// (2026-08-24 최정우 추가)
 		qwStartCandLinkB(0),	// (2026-08-24 최정우 추가)
@@ -940,6 +961,16 @@ private:
 	// 이동거리 환산속도 vs SPEED_KMH 정합성 검사 — 이상치 GPS SKIP 판정 (2026-07-20 최정우 추가)
 	bool ShouldSkipImplausibleSpeed(int nThreadId, const sRawLogInfo& stRawLogInfo,
 		const VEHICLE_TRIP_SESSION& stSession, int *pnImpliedSpeedKmh);
+	// Begin 폴백(위상 연결 미검증) 확정 결과 — 직전 확정 위치→신규 매칭 위치 거리가 raw GPS 이동거리
+	//   대비 비현실적인지 검사 (MM_PATH_PLAUSIBLE_SCALE/FLOOR_M 재사용) — SKIP 판정용 (2026-09-04 최정우 추가)
+	bool IsFallbackJumpImplausible(int nThreadId, const sRawLogInfo& stRawLogInfo,
+		const VEHICLE_TRIP_SESSION& stSession, const MATCH_LINK_INFO& stMatchLinkInfo);
+	// raw GPS가 등록된 주정차구역 폴리곤 안인데, 매칭된 좌표는 그 구역 밖으로 나온 경우 — 그래프
+	//   탐색 코드는 전혀 건드리지 않고 결과만 사후 비교(ChargeDataLoader::GetParkingZonesContaining
+	//   재사용, ProcessParkingCharge 규칙4 로직과 대칭) — SKIP 판정용. MM_ZONE_OUTSIDE_SPEED_MAX_KMH
+	//   이하 속도에서만 대상(2026-09-04 최정우 추가, 사용자 지시)
+	bool IsMatchOutsideRawZonePolygon(int nThreadId, const sRawLogInfo& stRawLogInfo,
+		const MATCH_LINK_INFO& stMatchLinkInfo);
 	static bool IsValidTripIdForDevice(const sRawLogInfo& stRawLogInfo);
 	static bool IsValidTripEvent(sint16 nTripEvent);
 	// pbSeqRollback: GPS_SEQ 역전(과거·중복 seq) 감지 시 true — 이 경우 반환값은 false(BEGIN 강등 안 함)

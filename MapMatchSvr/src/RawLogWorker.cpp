@@ -1605,6 +1605,113 @@ bool CRawLogWorker::ShouldSkipImplausibleSpeed(int nThreadId, const sRawLogInfo&
 }
 
 /**
+ * @brief Begin 폴백(위상 연결 미검증) 확정 결과의 이동거리 타당성 검사
+ * @param[in] nThreadId 워커 스레드 ID
+ * @param[in] stRawLogInfo 원시 GPS
+ * @param[in] stSession 현재 trip_id 세션
+ * @param[in] stMatchLinkInfo 이번 틱 맵매칭 결과
+ * @return true(비현실적 — SKIP 처리 필요), false(정상)
+ * @remark
+ *   ShouldSkipImplausibleSpeed()가 SPEED_KMH 배율(speed_factor/speed_margin, 노이즈 허용폭 넓음)로
+ *   raw GPS 튐을 잡는 것과 달리, 이 함수는 Continue(위상 그래프 연속매칭)가 직전 확정 링크와의
+ *   연결을 못 찾아 Begin(반경 최근접) 폴백으로 떨어진 결과에 한해(stMatchLinkInfo.bContinueFallback)
+ *   "직전 확정 위치 → 신규 매칭 위치" 거리를 raw GPS 이동거리 기준 배율(MM_PATH_PLAUSIBLE_SCALE)+
+ *   바닥값(MM_PATH_PLAUSIBLE_FLOOR_M)과 비교한다 — FindLinkPathBounded 재구성 경로 타당성 검사
+ *   (RawLogWorker.cpp 상단 MM_PATH_PLAUSIBLE_SCALE 주석 참고)와 동일 기준선을, 위상 연결이 아예
+ *   끊긴 단일 틱 전이에도 적용한 것. (실측 000376_20260826150010 seq404→405: 강릉 주정차구역
+ *   이탈 직후 매칭점간 44m/3초 점프, 직전 링크와 공유 노드 없음·최단 우회조차 15m 브릿지 기준
+ *   초과 — Continue는 정상적으로 거부했으나 Begin 폴백이 연결성 검증 없이 그대로 채택했다)
+ *   (2026-09-04 최정우 추가)
+*/
+bool CRawLogWorker::IsFallbackJumpImplausible(int nThreadId, const sRawLogInfo& stRawLogInfo,
+		const VEHICLE_TRIP_SESSION& stSession, const MATCH_LINK_INFO& stMatchLinkInfo)
+{
+	if (!stMatchLinkInfo.bContinueFallback)
+		return false;			// Continue 정상 연결 — 대상 아님
+	if (!stSession.bHasLastMatch)
+		return false;			// 비교 기준(직전 매칭 위치) 없음 — START 등
+	if (!stSession.bLastPointOk)
+		return false;			// 직전 포인트가 매칭 실패 — 갭이 정상 1구간보다 넓어져 판단 불신 (ShouldSkipImplausibleSpeed 와 동일 가드)
+
+	double dfGapSec = difftime(stRawLogInfo.dtGPS, stSession.dtLastMatchGps);
+	if (dfGapSec <= 0.0 || dfGapSec > static_cast<double>(MM_CALC_MAX_GAP_SEC))
+		return false;			// 공백·역전 구간 — 판단 불신
+
+	POINT stPrevMatch; stPrevMatch.dfX = stSession.dfLastMatchX; stPrevMatch.dfY = stSession.dfLastMatchY;
+	POINT stCurRaw;    stCurRaw.dfX = stRawLogInfo.dfX;          stCurRaw.dfY = stRawLogInfo.dfY;
+	POINT stNewMatch;  stNewMatch.dfX = stMatchLinkInfo.dfMatchX; stNewMatch.dfY = stMatchLinkInfo.dfMatchY;
+
+	// 판정 기준값(raw GPS 실이동) — 직전 확정 위치→이번 raw GPS 하버사인 거리
+	double dfRawMoveM = HaversineMeters(stPrevMatch, stCurRaw);
+	// 실제 검사 대상 — 직전 확정 위치→이번 신규 매칭 위치 거리(도로망 스냅 결과)
+	double dfMatchJumpM = HaversineMeters(stPrevMatch, stNewMatch);
+
+	double dfPlausibleMaxM = (dfRawMoveM * MM_PATH_PLAUSIBLE_SCALE) + MM_PATH_PLAUSIBLE_FLOOR_M;
+	if (dfMatchJumpM <= dfPlausibleMaxM)
+		return false;
+
+	LOGFMTW("[#%02d] reject implausible fallback jump!device=[%s] trip_id=[%s] seq=[%u] "
+		"link=[%llu] match_jump=[%.1fm] raw_move=[%.1fm] gap=[%.1fs] limit=[%.1fm]",
+		nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRawLogInfo.dwSeqNo,
+		static_cast<unsigned long long>(stMatchLinkInfo.qwLinkID),
+		dfMatchJumpM, dfRawMoveM, dfGapSec, dfPlausibleMaxM);
+	return true;
+}
+
+/**
+ * @brief raw GPS가 등록된 주정차구역 폴리곤 안인데 매칭 좌표는 그 밖으로 나온 경우 판정
+ * @param[in] nThreadId 워커 스레드 ID(로그용)
+ * @param[in] stRawLogInfo 원시 GPS
+ * @param[in] stMatchLinkInfo 맵매칭 결과(bMatched 확인 후 호출)
+ * @return true(비현실적 — SKIP 판정), false(정상 또는 판단 대상 아님)
+ * @remark 그래프탐색(ContinueMapMatch/BeginMapMatch)은 전혀 건드리지 않고, 이미 나온 매칭 결과를
+ *   등록된 주정차구역 폴리곤과 사후 비교만 한다 — ProcessParkingCharge 규칙4("이동 중엔 매칭좌표가
+ *   raw보다 신뢰할 만하다")와 정확히 대칭: 이 함수는 그 전제가 성립 안 하는 저속 구간에서 "raw가
+ *   매칭보다 신뢰할 만하다"고 보고, 매칭이 raw가 속한 구역 밖으로 나가면 그 매칭을 못 믿는다.
+ *   MM_ZONE_OUTSIDE_SPEED_MAX_KMH 이하 속도에서만 적용 — 이동 중 정상 도로 통과까지 오탐하지
+ *   않기 위함(2026-09-04 최정우 추가, 사용자 지시)
+*/
+bool CRawLogWorker::IsMatchOutsideRawZonePolygon(int nThreadId, const sRawLogInfo& stRawLogInfo,
+		const MATCH_LINK_INFO& stMatchLinkInfo)
+{
+	if (m_stConfig.pcChargeDataLoader == nullptr)
+		return false;
+
+	vector<PZONE_INFO> vtRawZones;
+	m_stConfig.pcChargeDataLoader->GetParkingZonesContaining(stRawLogInfo.dfX, stRawLogInfo.dfY, 0.0, &vtRawZones);
+	if (vtRawZones.empty())
+		return false;			// raw 자체가 등록 구역 밖 — 대상 아님
+
+	vector<PZONE_INFO> vtMatchZones;
+	m_stConfig.pcChargeDataLoader->GetParkingZonesContaining(stMatchLinkInfo.dfMatchX, stMatchLinkInfo.dfMatchY, 0.0, &vtMatchZones);
+
+	for (size_t r = 0; r < vtRawZones.size(); ++r)
+	{
+		for (size_t m = 0; m < vtMatchZones.size(); ++m)
+		{
+			if (strcmp(vtRawZones[r]->szRoadID, vtMatchZones[m]->szRoadID) == 0)
+				return false;	// raw가 속한 구역에 매칭좌표도 속함 — 정상
+		}
+	}
+
+	// (F-2)에서 수선의 발 거리(intersect_len)로 속도 게이트를 대체해봤으나, 판교/강릉 실측 결과
+	//   SKIP 구간이 넓어지며 ResolveSkipGapNodeStep/handoff-gap 등 "SKIP 구간을 사후에 메우는"
+	//   로직들이 감당 못 하고 실패 — 이미 확정(Y/0, 경로기반 거리)돼 있던 과금 레코드가 감사대상
+	//   (N/3, 직선거리)으로 다운그레이드되거나(000370 실측) 아예 소실되는(000376 실측) 부작용을
+	//   확인해 롤백. 국소적 매칭 개선보다 확정 과금 훼손이 더 큰 비용이라 판단 (2026-09-04
+	//   최정우 확인, 사용자 지시로 검증 후 원복) — ① speed<=1.0km/h 게이트로 복귀
+	if ((stRawLogInfo.fSpeed >= 0.0f) && (stRawLogInfo.fSpeed > static_cast<float>(MM_ZONE_OUTSIDE_SPEED_MAX_KMH)))
+		return false;
+
+	LOGFMTW("[#%02d] match outside raw zone polygon!device=[%s] trip_id=[%s] seq=[%u] "
+		"rawZone=[%s] link=[%llu] speed=[%.1f]km/h intersect_len=[%.1f]m -> SKIP",
+		nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRawLogInfo.dwSeqNo,
+		vtRawZones[0]->szRoadID, static_cast<unsigned long long>(stMatchLinkInfo.qwLinkID),
+		static_cast<double>(stRawLogInfo.fSpeed), stMatchLinkInfo.dfIntersectLenSgmt);
+	return true;
+}
+
+/**
  * @brief Begin 맵매칭(초기 맵매칭) 필요 여부 판단
  * @param[in] nThreadId 워커 스레드 ID
  * @param[in] stRawLogInfo 원시 GPS
@@ -2829,10 +2936,60 @@ void CRawLogWorker::CommitPendingRow(int nThreadId, VEHICLE_TRIP_SESSION *pstSes
 			&& (pstSession->qwLastConfirmedLinkID != stMatchLinkInfo.qwLinkID)
 			&& !pstSession->vtSkipRunRawLogInfo.empty())
 		{
+			// ACCURACY_M SKIP 개별 틱 소급 MATCHED 승격 — NODE_STEP 브릿지(구간 단위 과금)와 별개로,
+			//   다음 확정 링크(TO)가 실제로 알려진 지금 시점에 각 틱을 TO 쪽으로 편향 재매칭한다.
+			//   heading 신뢰성 검증까지 통과(RematchBeginBiasedDirectional)하고 결과가 정확히 TO
+			//   링크로 떨어지는 틱만 MATCH_STATUS 를 소급 재기록 — 클램프 브릿지(vtClampRunUpdateIdx)
+			//   와 동일 패턴이나, "1-hop 인접" 사전조건 대신 재매칭 결과 자체(및 반대편 heading 검증)로
+			//   신뢰도를 확보한다. 실패한 틱은 SKIP 유지 — NODE_STEP 브릿지가 구간 전체를 별도로 커버
+			//   (2026-09-04 최정우 추가, 사용자 지시)
+			if ((m_stConfig.pcProcessManager != nullptr)
+				&& (pstSession->vtSkipRunUpdateIdx.size() == pstSession->vtSkipRunRawLogInfo.size()))
+			{
+				CProcessManager& cPM = m_stConfig.pcProcessManager[nThreadId];
+				size_t nBridged = 0;
+				for (size_t i = 0; i < pstSession->vtSkipRunRawLogInfo.size(); ++i)
+				{
+					size_t idx = pstSession->vtSkipRunUpdateIdx[i];
+					if (idx >= pvtUpdates->size()) continue;
+
+					MATCH_LINK_INFO stRematched;
+					if (!cPM.RematchBeginBiasedDirectional(pstSession->vtSkipRunRawLogInfo[i],
+							stMatchLinkInfo.qwLinkID, &stRematched)
+						|| (stRematched.qwLinkID != stMatchLinkInfo.qwLinkID))
+						continue;		// 재매칭 실패·TO 불일치·heading 신뢰 불가 — SKIP 유지
+
+					int nNewIntersectLen = CalcIntersectLen(pstSession->vtSkipRunRawLogInfo[i],
+						stRematched.dfMatchX, stRematched.dfMatchY);
+					char szMatchLat[32], szMatchLon[32], szIntersectLen[16], szMatchLinkId[24];
+					snprintf(szMatchLat, sizeof(szMatchLat), "%.06lf", stRematched.dfMatchY);
+					snprintf(szMatchLon, sizeof(szMatchLon), "%.06lf", stRematched.dfMatchX);
+					snprintf(szIntersectLen, sizeof(szIntersectLen), "%d", nNewIntersectLen);
+					snprintf(szMatchLinkId, sizeof(szMatchLinkId), "%llu",
+						static_cast<unsigned long long>(stMatchLinkInfo.qwLinkID));
+
+					(*pvtUpdates)[idx].strMatchStatus = "1";
+					(*pvtUpdates)[idx].strMatchLat = szMatchLat;
+					(*pvtUpdates)[idx].strMatchLon = szMatchLon;
+					(*pvtUpdates)[idx].strIntersectLen = szIntersectLen;
+					(*pvtUpdates)[idx].strMatchLinkId = szMatchLinkId;
+					++nBridged;
+				}
+				if (nBridged > 0)
+				{
+					LOGFMTW("[#%02d] accuracy-skip %zu/%zu-tick directional bridge!device=[%s] trip_id=[%s] "
+						"link=[%llu] (rematched, charge not retroactively processed)",
+						nThreadId, nBridged, pstSession->vtSkipRunRawLogInfo.size(),
+						stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID,
+						static_cast<unsigned long long>(stMatchLinkInfo.qwLinkID));
+				}
+			}
+
 			ResolveSkipGapNodeStep(nThreadId, pstSession, pstSession->qwLastConfirmedLinkID,
 				stMatchLinkInfo.qwLinkID, stRawLogInfo, stMatchLinkInfo, pvtChargeInserts);
 		}
 		pstSession->vtSkipRunRawLogInfo.clear();
+		pstSession->vtSkipRunUpdateIdx.clear();
 
 		pstSession->dfLastMatchX = dfCurX;
 		pstSession->dfLastMatchY = dfCurY;
@@ -2847,6 +3004,7 @@ void CRawLogWorker::CommitPendingRow(int nThreadId, VEHICLE_TRIP_SESSION *pstSes
 			pstSession->qwLastConfirmedLinkID = stMatchLinkInfo.qwLinkID;
 			pstSession->dtLastConfirmedLinkTime = stRawLogInfo.dtGPS;
 			pstSession->dwLastConfirmedLinkGpsSeq = stRawLogInfo.dwSeqNo;
+			pstSession->fLastConfirmedLinkSpeed = stRawLogInfo.fSpeed;
 		}
 	}
 	else
@@ -3083,20 +3241,42 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 			FlushNodeStepRunsAtTripEnd(nThreadId, stRawLogInfo, &stSession, pvtChargeInserts);
 		}
 
-		// 정확도 SKIP — 최근접 있으면 참고용 MATCH_LAT/LON·INTERSECT_LEN(GPS↔세그먼트 교차점 거리) 저장
+		// 정확도 SKIP — 최근접 있으면 참고용 MATCH_LAT/LON·INTERSECT_LEN(GPS↔세그먼트 교차점 거리) 저장.
+		//   ACCURACY_M 자체가 나빠 매칭 확정(MATCH_STATUS=MATCHED)은 여전히 못 하지만(정확도 우선
+		//   원칙 유지, 사용자 지시), heading 을 무시한 순수 기하 최근접 대신 heading 을 살려 방향이
+		//   맞는 후보를 우선하면 참고 좌표 품질이 개선된다 — "완전히 못 믿진 않되 전적으로 믿지도
+		//   않는" 참고용 활용 (2026-09-04 최정우 추가, 사용자 지시)
 		MATCH_LINK_INFO stNear;
 		memset(reinterpret_cast<void *>(&stNear), 0, MATCH_LINK_INFO_SIZE);
 		stNear.dfIntersectLenSgmt = -1.0;
 		CProcessManager& cPM = m_stConfig.pcProcessManager[nThreadId];
 		// 보정판단용 "다음" 링크 없음(정확도 SKIP이라 신뢰 못함) — 보류 행 계산된 값 그대로 커밋 (2026-08-21 최정우 추가)
 		CommitPendingRow(nThreadId, &stSession, false, 0, pvtUpdates, pvtChargeInserts);
-		if (cPM.FindNearestSegment(stRawLogInfo, &stNear))
+		// NODE_STEP 케이스3(SKIP 구간 브릿지)용 raw tick 버퍼 적립 — 완전 매칭실패(!bMatched)와 동일
+		//   메커니즘을 ACCURACY_M SKIP(매칭 시도 자체를 안 함)에도 확장 적용. 다음 신뢰매칭이 확정되면
+		//   (CommitPendingRow) 이 구간이 "이전 확정 링크(FROM)→다음 확정 링크(TO)" 를 근거로 재매칭·
+		//   그래프탐색·직선거리 3단계 fallback(ResolveSkipGapNodeStep)을 거쳐 일반도로 과금으로
+		//   등록 시도된다 — MATCH_STATUS 자체는 여전히 SKIP 이지만(정확도 우선 원칙 유지), 과금
+		//   판정에는 그 구간이 반영된다 (2026-09-04 최정우 추가, 사용자 지시)
+		static const size_t MM_SKIPGAP_MAX_BUFFER_TICKS = 300;
+		if (stSession.vtSkipRunRawLogInfo.size() < MM_SKIPGAP_MAX_BUFFER_TICKS)
+			stSession.vtSkipRunRawLogInfo.push_back(stRawLogInfo);
+		bool bAccSkipAppended;
+		if (cPM.FindNearestSegment(stRawLogInfo, &stNear, false))
 		{
 			int nNearLen = CalcIntersectLen(stRawLogInfo, stNear.dfMatchX, stNear.dfMatchY);
-			return AppendUpdateRow(pvtUpdates, stRawLogInfo, MATCH_STATUS_SKIP, nNearLen,
+			bAccSkipAppended = AppendUpdateRow(pvtUpdates, stRawLogInfo, MATCH_STATUS_SKIP, nNearLen,
 				&stNear.dfMatchY, &stNear.dfMatchX, stNear.qwLinkID);
 		}
-		return AppendUpdateRow(pvtUpdates, stRawLogInfo, MATCH_STATUS_SKIP);
+		else
+		{
+			bAccSkipAppended = AppendUpdateRow(pvtUpdates, stRawLogInfo, MATCH_STATUS_SKIP);
+		}
+		// vtSkipRunRawLogInfo 와 1:1 대응 인덱스 — 소급 MATCHED 승격 시 이 행을 직접 찾아 고쳐씀
+		//   (2026-09-04 최정우 추가)
+		if (bAccSkipAppended && (stSession.vtSkipRunUpdateIdx.size() < MM_SKIPGAP_MAX_BUFFER_TICKS))
+			stSession.vtSkipRunUpdateIdx.push_back(pvtUpdates->size() - 1);
+		return bAccSkipAppended;
 	}
 
 	// 이동거리 환산속도 vs SPEED_KMH 정합성 검사 — 이상치 GPS SKIP. 세션 앵커 미갱신 (2026-07-20 최정우 추가)
@@ -3155,6 +3335,9 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 	// 맵매칭 처리 시간 측정 시작 (2026-07-08 최정우 주석 추가)
 	CClock cMatchClock;
 	cMatchClock.Start();
+	// 역행 스트릭 종료(=노이즈였음) 감지용 — RunMapMatch 가 내부에서 nReverseStreak 를 갱신해버리므로
+	//   호출 "전" 값을 미리 스냅샷해둔다 (2026-09-04 최정우 추가)
+	const int nPrevReverseStreak = stSession.nReverseStreak;
 	// ProcessManager 경유 시작/Continue 맵매칭 (2026-07-08 최정우 주석 추가)
 	bool bMatched = RunMapMatch(nThreadId, stRawLogInfo, &stSession, &stMatchLinkInfo);
 	// 맵매칭 처리 시간 측정 종료 (2026-07-08 최정우 주석 추가)
@@ -3166,6 +3349,71 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 	//   bReverseSuspect(위치+heading 둘 다 역행) 기준으로 GPS 노이즈로 인한 오탐을 줄임 (2026-07-21 최정우 수정)
 	const bool bReverseSkip = bMatched && stMatchLinkInfo.bReverseSuspect
 		&& (stSession.nReverseStreak < m_stConfig.nReverseConfirm);
+	// Continue 실패 후 Begin 폴백(위상 연결 미검증)으로 확정된 결과의 이동거리 타당성 — SKIP 판정용
+	//   (2026-09-04 최정우 추가)
+	const bool bFallbackJumpImplausible = bMatched
+		&& IsFallbackJumpImplausible(nThreadId, stRawLogInfo, stSession, stMatchLinkInfo);
+	// raw GPS가 등록 주정차구역 폴리곤 안인데 매칭 좌표는 그 밖 — SKIP 판정용 (2026-09-04 최정우 추가)
+	const bool bOutsideRawZone = bMatched
+		&& IsMatchOutsideRawZonePolygon(nThreadId, stRawLogInfo, stMatchLinkInfo);
+
+	// 역행 스트릭이 reverse_confirm 미달로 끊기고 정상(비역행) 매칭으로 복귀 — 그 사이 SKIP됐던
+	//   틱들은 결국 노이즈였다는 뜻이므로, 스트릭 시작 전 마지막 확정 링크(FROM, 아직 이번 틱으로
+	//   덮어써지기 전)→이번 복귀 링크(TO)로 방향검증 재매칭(RematchBeginBiasedDirectional, heading
+	//   신뢰 불가 시 자동 포기)해 성공한 틱만 소급 MATCHED. 클램프 브릿지와 달리 "인접" 사전조건이
+	//   없다 — 스트릭 종료 자체가 이미 "노이즈였다"는 판정이고, 재매칭 결과가 TO와 정확히 일치할
+	//   때만 채택하는 이중 검증으로 신뢰도를 확보한다 (2026-09-04 최정우 추가, 사용자 지시)
+	//   nPrevReverseStreak 가 버퍼 크기와 정확히 같아야 한다 — 스트릭이 중간에 reverse_confirm 에
+	//   도달해 "진짜 역행"으로 한 번이라도 확정된 적이 있으면(그 확정 틱 이후로도 bReverseSuspect
+	//   가 이어지면 스트릭은 계속 증가하지만 확정 틱 자체는 버퍼링되지 않아 크기가 안 맞음) 앞의
+	//   버퍼된 틱들도 진짜 역행이었을 가능성이 높으므로 소급재기록 대상에서 제외한다
+	if (bMatched && !stMatchLinkInfo.bReverseSuspect && (nPrevReverseStreak > 0)
+		&& (stSession.nReverseStreak == 0) && !stSession.vtReverseSkipRunRawLogInfo.empty()
+		&& (nPrevReverseStreak == static_cast<int>(stSession.vtReverseSkipRunRawLogInfo.size()))
+		&& (m_stConfig.pcProcessManager != nullptr)
+		&& (stSession.vtReverseSkipRunUpdateIdx.size() == stSession.vtReverseSkipRunRawLogInfo.size()))
+	{
+		CProcessManager& cPM = m_stConfig.pcProcessManager[nThreadId];
+		size_t nBridged = 0;
+		for (size_t i = 0; i < stSession.vtReverseSkipRunRawLogInfo.size(); ++i)
+		{
+			size_t idx = stSession.vtReverseSkipRunUpdateIdx[i];
+			if (idx >= pvtUpdates->size()) continue;
+
+			MATCH_LINK_INFO stRematched;
+			if (!cPM.RematchBeginBiasedDirectional(stSession.vtReverseSkipRunRawLogInfo[i],
+					stMatchLinkInfo.qwLinkID, &stRematched)
+				|| (stRematched.qwLinkID != stMatchLinkInfo.qwLinkID))
+				continue;		// 재매칭 실패·TO 불일치·heading 신뢰 불가 — SKIP 유지
+
+			int nNewIntersectLen = CalcIntersectLen(stSession.vtReverseSkipRunRawLogInfo[i],
+				stRematched.dfMatchX, stRematched.dfMatchY);
+			char szMatchLat[32], szMatchLon[32], szIntersectLen[16], szMatchLinkId[24];
+			snprintf(szMatchLat, sizeof(szMatchLat), "%.06lf", stRematched.dfMatchY);
+			snprintf(szMatchLon, sizeof(szMatchLon), "%.06lf", stRematched.dfMatchX);
+			snprintf(szIntersectLen, sizeof(szIntersectLen), "%d", nNewIntersectLen);
+			snprintf(szMatchLinkId, sizeof(szMatchLinkId), "%llu",
+				static_cast<unsigned long long>(stMatchLinkInfo.qwLinkID));
+
+			(*pvtUpdates)[idx].strMatchStatus = "1";
+			(*pvtUpdates)[idx].strMatchLat = szMatchLat;
+			(*pvtUpdates)[idx].strMatchLon = szMatchLon;
+			(*pvtUpdates)[idx].strIntersectLen = szIntersectLen;
+			(*pvtUpdates)[idx].strMatchLinkId = szMatchLinkId;
+			++nBridged;
+		}
+		if (nBridged > 0)
+		{
+			LOGFMTW("[#%02d] reverse-skip %zu/%zu-tick directional bridge!device=[%s] trip_id=[%s] "
+				"link=[%llu] (rematched, charge not retroactively processed)",
+				nThreadId, nBridged, stSession.vtReverseSkipRunRawLogInfo.size(),
+				stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID,
+				static_cast<unsigned long long>(stMatchLinkInfo.qwLinkID));
+		}
+		stSession.qwReverseSkipRunAnchorLinkID = 0;
+		stSession.vtReverseSkipRunUpdateIdx.clear();
+		stSession.vtReverseSkipRunRawLogInfo.clear();
+	}
 
 	if (!bMatched && bOut)
 	{
@@ -3256,11 +3504,60 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 				static_cast<unsigned long long>(stMatchLinkInfo.qwLinkID));
 			nFinalStatus = MATCH_STATUS_SKIP;
 		}
+
+		// Continue(위상 그래프 연속매칭)가 직전 링크와의 연결을 못 찾아 Begin(반경 최근접) 폴백으로
+		//   확정된 결과인데, 직전 확정 위치 대비 이동거리가 비현실적이면 SKIP 처리 — "확신 없는
+		//   매칭보다 SKIP" 원칙 (2026-09-04 최정우 추가)
+		if (bMatched && bFallbackJumpImplausible)
+			nFinalStatus = MATCH_STATUS_SKIP;
+
+		// depth 탐색 재구성 경로가 경과시간 대비 절대 물리속도로 불가능한 경우 — 최종 링크 자체를
+		//   신뢰 못 함. SKIP 처리 (2026-09-04 최정우 추가, MM_PATH_ABS_MAX_KMH 주석 참고)
+		if (bMatched && stMatchLinkInfo.bImplausiblePath)
+		{
+			LOGFMTW("[#%02d] implausible path abs speed! device=[%s] trip_id=[%s] seq=[%u] link=[%llu] -> SKIP",
+				nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRawLogInfo.dwSeqNo,
+				static_cast<unsigned long long>(stMatchLinkInfo.qwLinkID));
+			nFinalStatus = MATCH_STATUS_SKIP;
+		}
+
+		// 재구성 경로 전체 방향이 현재 heading 과 크게 어긋나는 경우 — 시간·거리는 타당해도 실제
+		//   주행 경로로 보기 어려움. SKIP 처리 (2026-09-04 최정우 추가, 사용자 지시)
+		if (bMatched && stMatchLinkInfo.bImplausibleDirection)
+		{
+			LOGFMTW("[#%02d] implausible path direction! device=[%s] trip_id=[%s] seq=[%u] link=[%llu] -> SKIP",
+				nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRawLogInfo.dwSeqNo,
+				static_cast<unsigned long long>(stMatchLinkInfo.qwLinkID));
+			nFinalStatus = MATCH_STATUS_SKIP;
+		}
+
+		// 재구성 경로 구간(hop)별 등록 제한속도 기준 최소 소요시간이 실제 경과시간보다 큰 경우 —
+		//   평균속도는 상한 이내여도 유독 느린 구간 하나만으로 물리적으로 불가능함. SKIP 처리
+		//   (2026-09-04 최정우 추가, 사용자 지시)
+		if (bMatched && stMatchLinkInfo.bImplausibleSpeedLimit)
+		{
+			LOGFMTW("[#%02d] implausible path speed limit! device=[%s] trip_id=[%s] seq=[%u] link=[%llu] -> SKIP",
+				nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRawLogInfo.dwSeqNo,
+				static_cast<unsigned long long>(stMatchLinkInfo.qwLinkID));
+			nFinalStatus = MATCH_STATUS_SKIP;
+		}
+
+		// raw GPS가 등록 주정차구역 폴리곤 안인데 매칭 좌표는 그 밖 — 저속에서 raw가 매칭보다
+		//   신뢰할 만함. SKIP 처리. 세션 앵커(qwLinkID)는 bClampLowConf 와 동일 관례로 그대로 전진
+		//   (2026-09-04 최정우 추가, 사용자 지시)
+		if (bOutsideRawZone)
+			nFinalStatus = MATCH_STATUS_SKIP;
 	}
 
-	// 신뢰 못 하는 좌표(역행 미확정·클램프 저신뢰·역행 판단불가)는 다음 포인트의 HEADING/SPEED/
-	//   이상속도 검사 기준으로 쓰지 않음 (2026-07-22 최정우 수정 — 역행 판단불가 케이스 추가)
-	const bool bUntrustedMatch = bReverseSkip || stMatchLinkInfo.bClampLowConf || stMatchLinkInfo.bAmbiguousReverse;
+	// 신뢰 못 하는 좌표(역행 미확정·클램프 저신뢰·역행 판단불가·연결성 미검증 이동거리 비현실·
+	//   재구성경로 절대속도·방향·구간제한속도 비현실·raw구역폴리곤 이탈)는 다음 포인트의
+	//   HEADING/SPEED/이상속도 검사 기준으로 쓰지 않음 (2026-07-22 최정우 수정 — 역행 판단불가
+	//   케이스 추가, 2026-09-04 최정우 수정 — 폴백 점프·재구성경로 절대속도·방향·구간제한속도·
+	//   raw구역폴리곤 이탈 케이스 추가)
+	const bool bUntrustedMatch = bReverseSkip || stMatchLinkInfo.bClampLowConf
+		|| stMatchLinkInfo.bImplausiblePath || stMatchLinkInfo.bImplausibleDirection
+		|| stMatchLinkInfo.bImplausibleSpeedLimit || bOutsideRawZone
+		|| stMatchLinkInfo.bAmbiguousReverse || bFallbackJumpImplausible;
 
 	stSession.dwLastGpsSeq = stRawLogInfo.dwSeqNo;
 	// 다음 포인트의 이상속도 검사 신뢰도 판단용 — 앵커 갱신 여부와 동일 조건 (2026-07-21 최정우 추가)
@@ -3399,6 +3696,22 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		stSession.vtClampRunRawLogInfo.push_back(stRawLogInfo);
 	}
 
+	// 역행 의심(bReverseSkip) SKIP 브릿지 후보 적립 — 스트릭이 reverse_confirm 미달로 끊기고
+	//   정상 매칭으로 복귀하는 순간(아래 RunMapMatch 직후 nPrevReverseStreak 비교부) 소급 재매칭한다.
+	//   qwLastConfirmedLinkID(신뢰 매칭에서만 갱신)를 앵커로 써 스트릭 시작 전 마지막 확정 링크를
+	//   자연히 유지한다 (2026-09-04 최정우 추가, 사용자 지시)
+	if (bReverseSkip)
+	{
+		if (stSession.qwReverseSkipRunAnchorLinkID != stSession.qwLastConfirmedLinkID)
+		{
+			stSession.qwReverseSkipRunAnchorLinkID = stSession.qwLastConfirmedLinkID;
+			stSession.vtReverseSkipRunUpdateIdx.clear();
+			stSession.vtReverseSkipRunRawLogInfo.clear();
+		}
+		stSession.vtReverseSkipRunUpdateIdx.push_back(pvtUpdates->size() - 1);
+		stSession.vtReverseSkipRunRawLogInfo.push_back(stRawLogInfo);
+	}
+
 	// NODE_STEP 케이스3(SKIP 구간 브릿지)용 raw tick 버퍼 적립 — 완전 매칭실패(!bMatched)만 대상,
 	//   위 두 브릿지(ambiguous-reverse/clamp)는 bMatched==true(매칭은 됐으나 저신뢰)라 겹치지 않음.
 	//   qwLastConfirmedLinkID 가 바뀔 때(=갭 해소)까지 계속 이어붙임 — ResolveSkipGapNodeStep() 이
@@ -3409,7 +3722,12 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 	{
 		static const size_t MM_SKIPGAP_MAX_BUFFER_TICKS = 300;
 		if (stSession.vtSkipRunRawLogInfo.size() < MM_SKIPGAP_MAX_BUFFER_TICKS)
+		{
 			stSession.vtSkipRunRawLogInfo.push_back(stRawLogInfo);
+			// ACCURACY_M SKIP 분기와 동일하게 인덱스도 같이 적립 — 소급 MATCHED 승격
+			//   (RematchBeginBiasedDirectional) 대상 인덱싱용 (2026-09-04 최정우 추가)
+			stSession.vtSkipRunUpdateIdx.push_back(pvtUpdates->size() - 1);
+		}
 	}
 
 	// END 이벤트면 MATCHED/ERROR/SKIP 무관 세션 종료 (bulk 성공 후 mapSessions.erase)
@@ -3529,6 +3847,7 @@ bool CRawLogWorker::RunMapMatch(int nThreadId, const sRawLogInfo& stRawLogInfo,
 			// 직전·현재 GPS 하버사인 수평 이동거리(m) (2026-07-08 최정우 주석 추가)
 			double dfMoveM = HaversineMeters(stPrev, stCur);
 			stAltCtx.dfHorizMove = dfMoveM;
+			stAltCtx.dfGapSec = dfGapSec;	// (2026-09-04 최정우 추가)
 
 			if (stAdjusted.fSpeed < 0.0f)
 				stAdjusted.fSpeed = static_cast<float>(dfMoveM / dfGapSec * 3.6);
@@ -3547,6 +3866,11 @@ bool CRawLogWorker::RunMapMatch(int nThreadId, const sRawLogInfo& stRawLogInfo,
 		POINT stCur;  stCur.dfX  = stAdjusted.dfX;           stCur.dfY  = stAdjusted.dfY;
 		// 고도 점수용 수평 이동거리(m) (2026-07-08 최정우 주석 추가)
 		stAltCtx.dfHorizMove = HaversineMeters(stPrev, stCur);
+		// (2026-09-04 최정우 추가) — 이 분기는 SPEED_KMH/HEADING 이 DB 값 그대로라 위 분기처럼
+		//   경과초를 계산할 필요가 없었으나, 재구성 경로 절대속도 판정에 필요해 동일하게 계산
+		double dfGapSec2 = difftime(stAdjusted.dtGPS, pstSession->dtLastMatchGps);
+		if (dfGapSec2 > 0.0 && dfGapSec2 <= static_cast<double>(MM_CALC_MAX_GAP_SEC))
+			stAltCtx.dfGapSec = dfGapSec2;
 	}
 
 	// ── 고도 앵커 → 연속 맵매칭 컨텍스트 (Begin 미적용) ──
@@ -3606,10 +3930,30 @@ bool CRawLogWorker::RunMapMatch(int nThreadId, const sRawLogInfo& stRawLogInfo,
 
 		const bool bConfirmed = (pstSession->nReverseStreak >= m_stConfig.nReverseConfirm);
 
-		pstSession->qwLinkID = qwLinkID;		// 성공 시에만 링크 전진(다음 점 연속 매칭 기준)
-		if (!pstMatchLinkInfo->bReverseSuspect || bConfirmed)
-			pstSession->dfLastMatchLinkPos = dfNewLinkPos;
-		pstSession->bHasPrevLinkPos = true;
+		// bImplausiblePath(재구성 경로 절대속도 비현실) — 이 링크 자체를 신뢰 못 하는 것이므로
+		//   qwLinkID(다음 틱 Continue 탐색 앵커)도 전진시키지 않는다 — bClampLowConf·bAmbiguousReverse·
+		//   bReverseSkip 등 "링크는 맞는데 위치·방향만 애매한" 경우는 여전히 무조건 전진(기존 관례,
+		//   세션이 실제 위치 근처에 계속 앵커링되도록 유지하려는 의도)하지만, bImplausiblePath는
+		//   "이 링크에 도달했다는 주장 자체"가 의심스러운 유일한 경우라 성격이 다르다. 전진시키지
+		//   않으면 다음 신뢰 틱은 "마지막 진짜 신뢰 지점"부터 다시 그래프 탐색하게 되고, 그 경로가
+		//   실제 누적 경과시간(여러 틱에 걸친 진짜 gap) 기준으로 재검증된다 — 링크 내 위치 기준점도
+		//   같은 이유로 무효화(실측 000376_20260826150010 seq133→134: 132에서 134까지 6초로 재계산하면
+		//   207.5km/h로 타당한데, 133이 이미 세션 링크·위치를 전진시켜놔서 134가 그 검증 자체를
+		//   건너뛰고 통과했었다 — 결과는 우연히 맞았지만 검증을 안 거친 것) (2026-09-04 최정우 추가, 사용자 지시)
+		//   bImplausibleDirection·bImplausibleSpeedLimit(재구성 경로 방향·구간제한속도 비현실)도
+		//   같은 이유로 동일 처리 (2026-09-04 최정우 추가)
+		if (pstMatchLinkInfo->bImplausiblePath || pstMatchLinkInfo->bImplausibleDirection
+			|| pstMatchLinkInfo->bImplausibleSpeedLimit)
+		{
+			pstSession->bHasPrevLinkPos = false;
+		}
+		else
+		{
+			pstSession->qwLinkID = qwLinkID;		// 성공 시에만 링크 전진(다음 점 연속 매칭 기준)
+			if (!pstMatchLinkInfo->bReverseSuspect || bConfirmed)
+				pstSession->dfLastMatchLinkPos = dfNewLinkPos;
+			pstSession->bHasPrevLinkPos = true;
+		}
 	}
 	return bMatched;
 }
@@ -5941,6 +6285,26 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 						BuildNodeStepRow(stHandoff, stRawLogInfo.szTripID, stRawLogInfo.szDeviceKey,
 							pstSession->nChargeSeq, stHandoff.dtLastInZoneTime,
 							stHandoff.dwLastInZoneGpsSeq, "Y", "0", &stHandoffRow);
+
+						// speed_kmh — 이 레코드는 dtEnd를 dtEntryTime과 동일값(마지막 실측 tick, 158 등
+						//   qwLastConfirmedLinkID 확정 시점)으로 넘기므로 BuildNodeStepRow 내부의
+						//   dist/elapsedSec 평균속도 계산이 elapsedSec=0 으로 항상 성립하지 않는다
+						//   (공백으로 남음). 대신 "그 확정 tick(158) 자체가" 기기로부터 보고받은
+						//   순간속도(fLastConfirmedLinkSpeed)를 쓴다 — stRawLogInfo.fSpeed 를 그대로
+						//   쓰면 안 됨: 이 코드가 실행되는 시점의 stRawLogInfo 는 158이 아니라 그 뒤
+						//   역행의심 스트릭이 풀리며 지금 막 커밋되는 더 나중 tick 이라 값이 다른
+						//   tick 걸로 새 버린다(실측 000376/000382 강릉 두 트립 모두 158/435 이 아닌
+						//   160/437(둘 다 24km/h)로 잘못 채워지는 걸로 확인). 0으로 보고됐거나(정차 등)
+						//   값이 없는 경우(-1)만 나눗셈 목적의 최소값 1로 보정한다(사용자 지시,
+						//   2026-09-04 최정우 추가)
+						{
+							int nAnchorSpeed = (pstSession->fLastConfirmedLinkSpeed > 0.0f)
+								? static_cast<int>(pstSession->fLastConfirmedLinkSpeed + 0.5f) : 1;
+							char szHandoffSpeedKmh[16];
+							snprintf(szHandoffSpeedKmh, sizeof(szHandoffSpeedKmh), "%d", nAnchorSpeed);
+							stHandoffRow.strSpeedKmh = szHandoffSpeedKmh;
+						}
+
 						pvtChargeInserts->push_back(stHandoffRow);
 						pstSession->nChargeSeq += 1;
 

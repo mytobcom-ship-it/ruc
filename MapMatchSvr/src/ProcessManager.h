@@ -125,9 +125,20 @@ public:
 	bool ProcessRawLog(const sRawLogInfo& stRawLogInfo, uint64& qwInOutLinkID,
 		MATCH_LINK_INFO *pstMatchLinkInfo, const ALT_MATCH_CTX *pstAltCtx = nullptr);
 	// 반경 밖 최근접 세그먼트 탐색(진단용) — INTERSECT_LEN(GPS↔세그먼트 교차점 거리) 확보
-	bool FindNearestSegment(const sRawLogInfo& stRawLogInfo, MATCH_LINK_INFO *pstMatchLinkInfo);
+	// bIgnoreHeading=false 면 원본 heading 을 살려 방향이 맞는 후보를 우선한다 — ACCURACY_M
+	// 초과로 참고 좌표만 남기는 경우, 순수 최근접보다 방향까지 고려한 편이 참고값 품질이 낫다
+	// (2026-09-04 최정우 추가)
+	bool FindNearestSegment(const sRawLogInfo& stRawLogInfo, MATCH_LINK_INFO *pstMatchLinkInfo,
+		bool bIgnoreHeading = true);
 	// 특정 링크로 편향해 BEGIN 재매칭 — 트립 첫 점 반대방향 오매칭 보정용 (2026-08-22 최정우 추가)
 	bool RematchBeginBiased(const sRawLogInfo& stRawLogInfo, uint64 qwBiasLinkID,
+			MATCH_LINK_INFO *pstMatchLinkInfo);
+	// RematchBeginBiased + heading 신뢰성 검증 — ACCURACY_M SKIP 구간 개별 틱을 소급 MATCHED 로
+	// 승격시킬 때 전용. RematchBeginBiased 자체는 BEGIN 매칭 특성상 heading 을 후보 정렬에 안 쓰므로
+	// (거리+편향만) 반대편(왕복분리) 링크가 채택될 위험이 있다 — 이 함수는 그 틱의 heading 이
+	// 신뢰할 만할 때만(NO_ANGLE·저속 아님) 시도하고, 결과가 heading과 정반대 짝 링크면 실패 처리한다
+	// (2026-09-04 최정우 추가, 사용자 지시)
+	bool RematchBeginBiasedDirectional(const sRawLogInfo& stRawLogInfo, uint64 qwBiasLinkID,
 			MATCH_LINK_INFO *pstMatchLinkInfo);
 	// 진단반경(MM_DIAG_RADIUS) 초과여도 기하 최근접 1건 (SKIP 참고용, 세션 미갱신) (2026-07-10 최정우 수정)
 	bool FindGeomNearestSegment(const sRawLogInfo& stRawLogInfo, MATCH_LINK_INFO *pstMatchLinkInfo);

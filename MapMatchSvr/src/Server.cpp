@@ -4,6 +4,7 @@
 */
 #include "Server.h"
 #include "RawLogWorker.h"
+#include "SingleInstanceLock.h"
 #include <signal.h>
 
 static CServer *g_pcServerInstance = nullptr;
@@ -665,7 +666,8 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	// 좀비 PROCESSING 복구는 기동 필수 안전망.
 	// 실패 시 재시도 후에도 실패면 기동 중단(fail-fast)
 	bool bRecovered = false;
-	for (int nAttempt=1; nAttempt<=RECOVER_RETRY_MAX; ++nAttempt)
+	int nRecoverAttempt = 1;
+	for (; nRecoverAttempt<=RECOVER_RETRY_MAX; ++nRecoverAttempt)
 	{
 		// 기동 시 PROCESSING→PENDING 좀비 행 일괄 복구 (2026-07-08 최정우 주석 추가)
 		if (CRawLogFetcher::RunRecover(m_pcPostgrePool, m_strRawLogRecoverSQL))
@@ -674,8 +676,8 @@ bool CServer::Initialize(const CONFIG& stConfig)
 			break;
 		}
 
-		LOGFMTW("raw log recover failed! attempt=[%d/%d]", nAttempt, RECOVER_RETRY_MAX);
-		if (nAttempt < RECOVER_RETRY_MAX)
+		LOGFMTW("raw log recover failed! attempt=[%d/%d]", nRecoverAttempt, RECOVER_RETRY_MAX);
+		if (nRecoverAttempt < RECOVER_RETRY_MAX)
 		{
 			// 복구 재시도 전 대기 (단위: ms) (2026-07-11 최정우 수정)
 			usleep(RECOVER_RETRY_INTERVAL * 1000);
@@ -688,6 +690,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 		Uninitialize();
 		return false;
 	}
+	LOGFMTI("raw log recover success!attempt=[%d/%d]", nRecoverAttempt, RECOVER_RETRY_MAX);
 
 	// RawLogFetcher 폴링 쓰레드 기동 (2026-07-08 최정우 주석 추가)
 	m_pcRawLogFetcher->start();
@@ -995,6 +998,17 @@ void CServer::run()
 */
 void CServer::ProcessPeriodSec(time_t dtNow)
 {
+	// 중복 기동 방지 잠금 무결성 재확인 — PID 파일이 기동 중 실수로 삭제되면(rm 등) 중복 기동
+	//   방지가 뚫리는 구멍이 있어(AppMain.cpp::IsSingleInstanceLockIntact 주석 참고, 실측
+	//   재현 확인됨) 매초 감지·즉시 재점유해 그 노출 창을 최대 1초로 좁힌다. stat 두 번뿐인
+	//   가벼운 검사라 매초 호출해도 무방 (2026-09-04 최정우 추가, 사용자 지시)
+	if (!IsSingleInstanceLockIntact())
+	{
+		LOGFMTE("single instance pid file was missing/replaced externally! re-acquired at "
+			"same path — if this was not intentional (e.g. manual rm), check for a duplicate "
+			"MapMatchSvr instance that may have started in the gap!");
+	}
+
 	// 설정 시각·보관일 기준 만료 로그 파일 삭제 (2026-07-08 최정우 주석 추가)
 	m_pcLoggerManager->LogDeleteRun(dtNow);
 

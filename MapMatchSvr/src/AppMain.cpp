@@ -6,6 +6,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <errno.h>
 #include <string>
 #include "Config.h"
 #include "ConfigDefaults.h"
@@ -13,9 +17,120 @@
 #include "IniReader.h"
 #include "Util.h"
 #include "Server.h"
+#include "SingleInstanceLock.h"
 
 using namespace zsummer::log4z;
 using namespace std;
+
+// 중복 기동 방지용 PID 파일 경로 — run_svr.sh 가 이미 같은 경로를 관례로 쓰고 있어(BIN_DIR 기준
+//   상대경로, cd 로 이미 실행 디렉터리로 이동한 뒤 기동) 그대로 재사용한다. run_svr.sh 자체의
+//   중복 감지(readlink /proc/$pid/exe = MM_BIN 비교)는 make install 로 바이너리가 교체되면
+//   exe 경로가 "(deleted)"로 나와 실패하는 걸로 이미 확인됨(2026-08-21) — 셸 스크립트가 아니라
+//   프로세스 자신이 직접 파일 잠금(flock)을 거는 방식이라야 바이너리 교체·비정상 종료(kill -9)에도
+//   항상 정확하다(잠금은 OS가 fd 를 들고 있는 프로세스가 살아있는 동안만 유효, 프로세스가 죽으면
+//   fd 가 자동으로 닫히며 즉시 풀림 — PID 파일 존재 여부만으로 판단하는 것보다 훨씬 견고)
+//   (2026-09-04 최정우 추가, 사용자 지시)
+static const char *SINGLE_INSTANCE_PID_FILE = "./MapMatchSvr.pid";
+
+// 잠금 fd — 파일 스코프 static(함수 로컬 아님). AppMain.cpp(main) 과 Server.cpp(1초 타이머)
+//   양쪽에서 같은 잠금 상태를 봐야 해서(IsSingleInstanceLockIntact 가 재점유 시 이 값을
+//   갱신) 함수 안이 아니라 번역 단위 스코프에 둔다. 절대 닫지 않음 — 프로세스 종료 시 OS 가
+//   자동 회수 (2026-09-04 최정우 추가)
+static int s_nLockFd = -1;
+
+/**
+ * @brief 중복 기동 방지 — 실행 디렉터리의 PID 파일에 배타적 flock 을 시도해 이미 살아있는
+ *   인스턴스가 있으면 즉시 실패시킨다. 로거 기동 전(config.ini 조차 읽기 전)에 가장 먼저
+ *   호출해야 무거운 초기화(DB 접속·지도 데이터 로딩 등)를 시작하기 전에 빠르게 실패한다.
+ * @return true(잠금 획득 성공, 유일한 인스턴스), false(이미 다른 인스턴스가 실행 중이거나 오류)
+ * @remark 성공 시 연 fd 를 프로세스 생명 주기 내내 열어둔 채로 반환한다 — fd 를 닫으면 그
+ *   순간 잠금이 풀려버리므로 프로세스가 살아있는 동안은 절대 close() 하면 안 된다. 정상/비정상
+ *   종료 모두 OS 가 프로세스 종료 시 자동으로 fd 를 닫아 잠금을 해제하므로 별도 해제 코드는
+ *   필요 없다 (2026-09-04 최정우 추가)
+*/
+bool AcquireSingleInstanceLock()
+{
+	s_nLockFd = open(SINGLE_INSTANCE_PID_FILE, O_CREAT | O_RDWR, 0644);
+	if (s_nLockFd < 0)
+	{
+		fprintf(stderr, "pid file open failed!file=[%s] errno=[%d:%s]\n",
+			SINGLE_INSTANCE_PID_FILE, errno, strerror(errno));
+		return false;
+	}
+
+	if (flock(s_nLockFd, LOCK_EX | LOCK_NB) != 0)
+	{
+		char szPrevPid[32] = {0,};
+		ssize_t nRead = read(s_nLockFd, szPrevPid, sizeof(szPrevPid) - 1);
+		if (nRead > 0)
+		{
+			// 개행 등 뒤쪽 공백류 제거 — 그대로 두면 에러 메시지에 줄바꿈이 섞여 출력됨
+			while ((nRead > 0) && ((szPrevPid[nRead - 1] == '\n') || (szPrevPid[nRead - 1] == '\r')))
+				--nRead;
+			szPrevPid[nRead] = '\0';
+		}
+		fprintf(stderr, "another MapMatchSvr instance is already running!pid_file=[%s] pid=[%s]\n",
+			SINGLE_INSTANCE_PID_FILE, (szPrevPid[0] != '\0') ? szPrevPid : "?");
+		close(s_nLockFd);
+		s_nLockFd = -1;
+		return false;
+	}
+
+	// 잠금 획득 성공 — 파일 내용을 이번 프로세스 PID 로 갱신(참고/디버깅용, run_svr.sh 도 이미
+	//   동일 파일에 같은 값을 써왔으므로 형식 호환)
+	if (ftruncate(s_nLockFd, 0) != 0) { /* 참고용 표시일 뿐, 실패해도 잠금 자체는 유효 */ }
+	char szPid[32];
+	int nPidLen = snprintf(szPid, sizeof(szPid), "%d\n", static_cast<int>(getpid()));
+	lseek(s_nLockFd, 0, SEEK_SET);
+	if (write(s_nLockFd, szPid, static_cast<size_t>(nPidLen)) < 0) { /* 참고용 표시일 뿐 */ }
+
+	return true;
+}
+
+/**
+ * @brief 잠금 중인 PID 파일이 여전히 그 경로에 그대로 존재하는지(삭제·교체되지 않았는지)
+ *   fstat(연 fd)·stat(현재 경로) 의 device+inode 를 비교해 확인한다.
+ * @remark flock 은 파일 "경로"가 아니라 fd 가 가리키는 inode 에 걸리므로, 이 프로세스가 잠근
+ *   뒤 외부에서(rm 등) 그 경로의 파일이 삭제되면 — 우리 fd 는 여전히(이제는 이름 없는) 옛
+ *   inode 를 유효하게 잠그고 있지만, 그 경로에 O_CREAT 로 새로 열리는 다음 프로세스는 완전히
+ *   다른 새 inode 를 잠그게 돼 서로 충돌하지 않고 둘 다 성공해버린다 — 중복 기동 방지가
+ *   뚫리는 것을 실측으로 재현·확인(2026-09-04, rm 직후 두 번째 인스턴스가 정상 기동돼 기존
+ *   인스턴스와 함께 같은 DB 를 동시에 처리하는 것까지 확인). 이 함수는 그 구멍을 완전히
+ *   막지는 못하지만(재발견까지의 짧은 시간차 동안은 여전히 취약) 최대 1회 호출 주기(Server.cpp
+ *   1초 타이머)만큼으로 창을 좁히고, 발생 시 강한 경고 로그를 남겨 운영자가 "PID 파일이 왜
+ *   없어졌는지"를 바로 알아챌 수 있게 한다 (2026-09-04 최정우 추가, 사용자 지시)
+ * @return true(정상), false(경로가 사라져 있었음 — 즉시 재점유 시도함)
+*/
+bool IsSingleInstanceLockIntact()
+{
+	if (s_nLockFd < 0)
+		return false;
+
+	struct stat stFdStat, stPathStat;
+	if ((fstat(s_nLockFd, &stFdStat) == 0)
+		&& (stat(SINGLE_INSTANCE_PID_FILE, &stPathStat) == 0)
+		&& (stFdStat.st_dev == stPathStat.st_dev)
+		&& (stFdStat.st_ino == stPathStat.st_ino))
+	{
+		return true;			// 경로가 여전히 우리가 잠근 그 inode 를 가리킴 — 정상
+	}
+
+	// 경로가 사라졌거나(삭제) 다른 파일로 바뀜 — 같은 경로에 즉시 새로 만들어 재점유한다.
+	//   원래 fd(s_nLockFd)의 잠금은 그대로 유효하므로 잃는 게 없다 — 이건 "다음 중복 기동
+	//   시도가 잠글 대상"을 다시 만들어주는 보강일 뿐
+	int nNewFd = open(SINGLE_INSTANCE_PID_FILE, O_CREAT | O_RDWR, 0644);
+	if (nNewFd >= 0)
+	{
+		flock(nNewFd, LOCK_EX | LOCK_NB);
+		char szPid[32];
+		int nPidLen = snprintf(szPid, sizeof(szPid), "%d\n", static_cast<int>(getpid()));
+		if (write(nNewFd, szPid, static_cast<size_t>(nPidLen)) < 0) { /* 참고용 표시일 뿐 */ }
+		close(s_nLockFd);
+		s_nLockFd = nNewFd;
+	}
+
+	return false;
+}
 
 /**
  * @brief 초기화 함수
@@ -405,11 +520,83 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 }
 
 /**
+ * @brief 기동 시 로딩된 환경설정(config.ini) 값을 config.ini 섹션 단위로 묶어 로그로 남긴다.
+ *   로거가 기동한 뒤(ILog4zManager::start() 이후)에만 호출 가능 — Initialize() 안에서는 로거가
+ *   아직 없어 perror 만 쓸 수 있다. 선택 항목(빈 문자열이면 해당 기능 비활성)은 "(비활성)"으로
+ *   표시해 실제로 어떤 기능이 켜져 있는지 한눈에 보이게 한다 (2026-09-04 최정우 추가, 사용자 지시)
+ * @param[in] stConfig 로딩된 환경설정 값
+ * @return void
+*/
+static void LogStartupConfig(const CONFIG& stConfig)
+{
+	auto OptStr = [](const string& s) -> const char *
+	{
+		return s.empty() ? "(비활성)" : s.c_str();
+	};
+
+	LOGFMTI("===================================================================");
+	LOGFMTI("MapMatchSvr 기동 — config.ini 로딩 완료");
+	LOGFMTI("-------------------------------------------------------------------");
+	LOGFMTI("[log] path=[%s] level=[%d] keep_runtime=[%d]h keep_day=[%d]d",
+		stConfig.strLogPath.c_str(), stConfig.nLogLevel, stConfig.nLogKeepRunTime, stConfig.nLogKeepDay);
+	LOGFMTI("[database] host=[%s] port=[%d] name=[%s] userid=[%s] minconnect=[%d] "
+		"maxconnect=[%d] retrymax=[%d] retrywait=[%d]ms",
+		stConfig.strDBHost.c_str(), stConfig.nDBPort, stConfig.strDBName.c_str(),
+		stConfig.strDBUserID.c_str(), stConfig.nDBMinConnect, stConfig.nDBMaxConnect,
+		stConfig.nConnRetryMax, stConfig.nConnRetryWait);
+	LOGFMTI("[query] file=[%s]", stConfig.strSQLFile.c_str());
+	LOGFMTI("[sql] rawlog_recover/select/update=[%s]/[%s]/[%s]",
+		OptStr(stConfig.strRawLogRecoverSession), OptStr(stConfig.strRawLogSelectSession),
+		OptStr(stConfig.strRawLogUpdateSession));
+	LOGFMTI("[sql] charge_insert=[%s] gate_select=[%s] zone_select=[%s] parkfine_select=[%s]",
+		OptStr(stConfig.strChargeInsertSession), OptStr(stConfig.strGateSelectSession),
+		OptStr(stConfig.strZoneSelectSession), OptStr(stConfig.strParkFineSelectSession));
+	LOGFMTI("[sql] trip_end=[%s] trip_abend=[%s] trip_seqoff/fin=[%s]/[%s]",
+		OptStr(stConfig.strTripEndUpdateSession), OptStr(stConfig.strAbnormalTripEndSession),
+		OptStr(stConfig.strTripSeqOffSession), OptStr(stConfig.strTripSeqFinSession));
+	LOGFMTI("[sql] server_status=[%s] stale_recover=[%s]",
+		OptStr(stConfig.strServerStatusSession), OptStr(stConfig.strStaleRecoverSession));
+	LOGFMTI("[server] id=[%s] status_interval=[%d]s stale_sec=[%d]s",
+		stConfig.strServerId.c_str(), stConfig.nServerStatusIntervalSec, stConfig.nStaleSec);
+	LOGFMTI("[charge] gate_reload=[%d]s park_pad=[%d]m park_accmax=[%d]m park_speedmax=[%d]km/h",
+		stConfig.nGateReloadSec, stConfig.nParkPad, stConfig.nParkAccMax, stConfig.nParkSpeedMax);
+	LOGFMTI("[charge] park_entrycnt=[%d] park_exitcnt=[%d] node_exitcnt=[%d] "
+		"park_regrace=[%d]s park_ttl=[%d]s exempt_regrace=[%d]s",
+		stConfig.nParkEntryCnt, stConfig.nParkExitCnt, stConfig.nNodeExitCnt,
+		stConfig.nParkRegraceSec, stConfig.nParkTtlSec, stConfig.nExemptRegraceSec);
+	LOGFMTI("[feeder] limit=[%d] fetch_interval=[%d]ms queue_pause/max=[%d]/[%d] "
+		"queue_busymin/max=[%d]/[%d]ms",
+		stConfig.nFetchLimit, stConfig.nFetchInterval, stConfig.nQueuePauseCount,
+		stConfig.nQueueMaxCount, stConfig.nQueueBusyMin, stConfig.nQueueBusyMax);
+	LOGFMTI("[worker] ttl_sec=[%d]s shutdown_wait=[%d]ms retry_max=[%d]",
+		stConfig.nTtlSec, stConfig.nShutdownWait, stConfig.nRetryMax);
+	LOGFMTI("[threads] count=[%d]", stConfig.nThreads);
+	LOGFMTI("[data] file=[%s]", stConfig.strDataFile.c_str());
+	LOGFMTI("[mapmatch] geodetic=[%d] radius=[%d](min[%d]~max[%d],scale[%.2f]) radius_skip=[%d]m "
+		"distance=[%d]m timeout=[%d]ms maxstep=[%d]",
+		stConfig.nGeodetic, stConfig.nRadius, stConfig.nRadiusMin, stConfig.nRadiusMax,
+		stConfig.dfRadiusScale, stConfig.nRadiusSkip, stConfig.nDistance, stConfig.nMatchTimeout,
+		stConfig.nMaxStep);
+	LOGFMTI("[mapmatch] alt_gap=[%d]m alt_penalty=[%d] alt_weight=[%.2f] alt_slope=[%.2f]",
+		stConfig.nAltGap, stConfig.nAltPenalty, stConfig.dfAltWeight, stConfig.dfAltSlope);
+	LOGFMTI("[mapmatch] hoppenalty=[%.2f] hoppenalty_lenratio=[%.2f] reverse_confirm=[%d] "
+		"opp_streakmax=[%d] speed_factor=[%.2f] speed_margin=[%d]km/h",
+		stConfig.dfHopPenalty, stConfig.dfHopLenRatio, stConfig.nReverseConfirm,
+		stConfig.nOppStreakMax, stConfig.dfSpeedFactor, stConfig.nSpeedMargin);
+	LOGFMTI("===================================================================");
+}
+
+/**
  * @brief main 함수
  * @return -1, 0
 */
 int main()
 {
+	// 중복 기동 방지 — config.ini 조차 읽기 전, 가장 먼저 확인해 이미 살아있는 인스턴스가
+	//   있으면 무거운 초기화(DB 접속 등)를 시작하기도 전에 즉시 종료한다 (2026-09-04 최정우 추가)
+	if (!AcquireSingleInstanceLock())
+		exit(1);
+
 	CUtil cUtil;
 	CONFIG stConfig;
 	string config_file = "./config.ini";
@@ -453,6 +640,14 @@ int main()
 		perror("log open fail!\n");
 		exit(0);
 	}
+
+	// 로거가 막 기동한 시점 — 이제부터 남기는 로그가 이번 프로세스 기동의 첫 로그가 된다.
+	//   이후 CServer::Initialize() 가 DB 접속·지도 데이터 적재·과금 캐시 로딩 등을 순서대로
+	//   진행하며 각 단계 로그를 남기므로, 그 앞에 로딩된 환경설정 값부터 먼저 남겨 전체 기동
+	//   과정을 로그만으로 순서대로 따라갈 수 있게 한다 (2026-09-04 최정우 추가, 사용자 지시)
+	LOGFMTI("single instance lock acquired!pid_file=[%s] pid=[%d]",
+		SINGLE_INSTANCE_PID_FILE, static_cast<int>(getpid()));
+	LogStartupConfig(stConfig);
 
 	CServer *pcServer = new (std::nothrow)CServer;
 	if (pcServer == nullptr)

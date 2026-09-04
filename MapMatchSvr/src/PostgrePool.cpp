@@ -80,6 +80,14 @@ bool CPostgrePool::InitializePool(string strUserID, string strPassword, string s
 	}
 
 	m_bIsValid = true;
+
+	// 기동 시 실제 접속 성공한 커넥션 수를 요청 min/max 와 함께 남긴다 — 접속은 성공했지만
+	//   요청보다 적게 붙은 경우를 구분해서 볼 수 있도록 (2026-09-04 최정우 추가, 사용자 지시)
+	LOGFMTI("postgre connection pool ready!host=[%s] port=[%s] db=[%s] userid=[%s] "
+		"connected=[%d] min=[%d] max=[%d] timeout=[%d]s",
+		m_strHost.c_str(), m_strPort.c_str(), m_strDataBase.c_str(), m_strUserID.c_str(),
+		m_nPooledConnections, m_nMinConnect, m_nMaxConnect, m_nTimeOut);
+
 	return true;
 }
 

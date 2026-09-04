@@ -2328,6 +2328,89 @@ bool CRawLogWorker::FindLinkPolygonCrossing(uint64 qwLinkID, const vector<POINT>
 }
 
 /**
+ * @brief 링크를 시작 노드부터 따라가며 폴리곤 "안→밖"으로 벗어나는 지점을 찾는다
+ * @param[in] qwLinkID 대상 링크 ID
+ * @param[in] vtPolyCoords 폴리곤 좌표 목록
+ * @param[out] pdfExitDistM 링크 시작부터 이탈 지점까지의 거리(m)
+ * @param[out] pdfCrossX/pdfCrossY 이탈 지점 좌표
+ * @return true(이탈 지점 찾음), false(링크 전체가 폴리곤 안이거나 전체가 밖 — 교차 없음)
+ * @remark FindLinkPolygonCrossing() 의 이탈 방향 대칭. 그쪽은 "밖에서 들어오는" 첫 교차를 찾고
+ *   이쪽은 "안에서 나가는" 첫 교차를 찾는다. 확정 접촉이 이탈될 때 그 경계부터 NODE_STEP run 을
+ *   여는 용도 — 폴리곤 안 구간은 여전히 일반도로로 세지 않고, 경계 이후만 센다
+ *   (2026-09-05 최정우 추가, 사용자 지시)
+*/
+bool CRawLogWorker::FindLinkPolygonExitCrossing(uint64 qwLinkID, const vector<POINT>& vtPolyCoords,
+		double *pdfExitDistM, double *pdfCrossX, double *pdfCrossY)
+{
+	if ((m_stConfig.pcDataLoader == nullptr) || (vtPolyCoords.size() < 3))
+		return false;
+
+	PLINK_INFO pstLink = m_stConfig.pcDataLoader->GetLinkInfo(qwLinkID);
+	if (pstLink == nullptr)
+		return false;
+
+	struct SEG_VERTEX { double dfX, dfY, dfLenFromStart; };
+	vector<SEG_VERTEX> vtPts;
+	if (pstLink->wSgmtCount == 0)
+	{
+		vtPts.push_back({ static_cast<double>(pstLink->dwStNodeX) / 360000.0,
+			static_cast<double>(pstLink->dwStNodeY) / 360000.0, 0.0 });
+	}
+	else
+	{
+		for (uint32 i = 0; i < pstLink->wSgmtCount; ++i)
+		{
+			PLINK_SGMT_INFO pstSgmt = m_stConfig.pcDataLoader->GetLinkSgmtInfo(pstLink->dwSgmtOffset + i);
+			if (pstSgmt == nullptr) continue;
+			vtPts.push_back({ static_cast<double>(pstSgmt->dwX) / 360000.0,
+				static_cast<double>(pstSgmt->dwY) / 360000.0,
+				static_cast<double>(pstSgmt->wLenFromLink) });
+		}
+	}
+	vtPts.push_back({ static_cast<double>(pstLink->dwEdNodeX) / 360000.0,
+		static_cast<double>(pstLink->dwEdNodeY) / 360000.0, pstLink->dfLen });
+
+	if (vtPts.size() < 2)
+		return false;
+
+	for (size_t i = 0; i + 1 < vtPts.size(); ++i)
+	{
+		bool bStartIn = CChargeDataLoader::IsPointInPolygon(vtPts[i].dfX, vtPts[i].dfY, vtPolyCoords);
+		if (!bStartIn)
+			continue;						// 아직 폴리곤 밖 구간 — 이탈 경계가 아님
+
+		bool bEndIn = CChargeDataLoader::IsPointInPolygon(vtPts[i + 1].dfX, vtPts[i + 1].dfY, vtPolyCoords);
+		if (bEndIn)
+			continue;						// 세그먼트 전체가 안 — 계속 진행
+
+		// 이 세그먼트에서 안→밖으로 넘어간다 — 이분탐색으로 경계점 확정(진입 방향과 동일 24회)
+		double dfLo = 0.0, dfHi = 1.0;		// dfLo=안, dfHi=밖
+		for (int nIter = 0; nIter < 24; ++nIter)
+		{
+			double dfMid = (dfLo + dfHi) * 0.5;
+			double dfMidX = vtPts[i].dfX + (vtPts[i + 1].dfX - vtPts[i].dfX) * dfMid;
+			double dfMidY = vtPts[i].dfY + (vtPts[i + 1].dfY - vtPts[i].dfY) * dfMid;
+			if (CChargeDataLoader::IsPointInPolygon(dfMidX, dfMidY, vtPolyCoords))
+				dfLo = dfMid;
+			else
+				dfHi = dfMid;
+		}
+
+		POINT stA, stCross;
+		stA.dfX = vtPts[i].dfX;  stA.dfY = vtPts[i].dfY;
+		stCross.dfX = vtPts[i].dfX + (vtPts[i + 1].dfX - vtPts[i].dfX) * dfHi;
+		stCross.dfY = vtPts[i].dfY + (vtPts[i + 1].dfY - vtPts[i].dfY) * dfHi;
+
+		*pdfExitDistM = vtPts[i].dfLenFromStart + HaversineMeters(stA, stCross);
+		*pdfCrossX = stCross.dfX;
+		*pdfCrossY = stCross.dfY;
+		return true;
+	}
+
+	return false;			// 링크 전체가 폴리곤 안이거나 전체가 밖 — 이탈 경계 없음
+}
+
+/**
  * @brief NODE_STEP 케이스3(SKIP 구간) 브릿지 — CommitPendingRow() 가 새 신뢰매칭을 확정하는 순간,
  *   그 직전까지의 SKIP(완전 매칭실패) 구간이 있었으면 그 구간을 NODE_STEP 으로 등록 시도 (2026-09-01 최정우 추가)
  * @param[in] nThreadId 워커 스레드 ID(로그용)
@@ -6401,6 +6484,27 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 		//   최정우 수정 — 최초 구현 시 누락됐던 버그)
 		pstSession->stParkTouchCarry.dtLastInZoneTime = stRawLogInfo.dtGPS;
 		pstSession->stParkTouchCarry.dwLastInZoneGpsSeq = stRawLogInfo.dwSeqNo;
+
+		// ── 폴리곤 경계 소급용 기준점 스냅샷 (2026-09-05 최정우 추가, 사용자 지시) ──
+		//   접촉 tick 은 "원시좌표가 실제로 폴리곤 안"인 것과 "이탈 디바운스 유예 중(이미 밖)"인
+		//   것이 섞여 있다. 경계를 찾으려면 이 둘을 갈라 각각의 마지막/첫 tick 을 잡아둬야 한다.
+		if (bRawInParkingZoneNow)
+		{
+			pstSession->qwParkTouchLastInLinkID = stMatchLinkInfo.qwLinkID;
+			pstSession->dfParkTouchLastInX = stMatchLinkInfo.dfMatchX;
+			pstSession->dfParkTouchLastInY = stMatchLinkInfo.dfMatchY;
+			pstSession->dtParkTouchLastIn = stRawLogInfo.dtGPS;
+			pstSession->bParkTouchHasFirstOut = false;		// 다시 안으로 복귀 — 첫 밖 tick 재수집
+		}
+		else if (!pstSession->bParkTouchHasFirstOut)
+		{
+			pstSession->dfParkTouchFirstOutX = stMatchLinkInfo.dfMatchX;
+			pstSession->dfParkTouchFirstOutY = stMatchLinkInfo.dfMatchY;
+			pstSession->dtParkTouchFirstOut = stRawLogInfo.dtGPS;
+			pstSession->dwParkTouchFirstOutGpsSeq = stRawLogInfo.dwSeqNo;
+			pstSession->bParkTouchHasFirstOut = true;
+		}
+
 		// 접촉 구간 전체에서 매칭좌표 기준 안쪽이 한 번이라도 확인되면 이 접촉 전체를 "확정"으로
 		//   기록해둔다 — 확정 여부는 접촉이 끝나는 tick에서 판정한다(사용자 지시, 2026-09-03 추가)
 		if (bMatchInParkingZoneNow)
@@ -6441,6 +6545,111 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 				pstSession->nChargeSeq += 1;
 			}
 			pstSession->bHasHeldNodeStepRun = false;
+
+			// ── 폴리곤 경계부터 새 run 소급 개시 (2026-09-05 최정우 추가, 사용자 지시) ──
+			//   위 원칙("폴리곤 안 구간은 넘기지 않는다")은 그대로다. 문제는 그 원칙이 적용되는
+			//   범위가 "폴리곤 안"이 아니라 "이탈 디바운스가 확정될 때까지"였다는 것 — 실제 경계를
+			//   지난 뒤 park_exitcnt 만큼의 tick 이 어느 레코드에도 안 들어갔다(실측
+			//   000376_20260821095239: 경계는 seq41~42 사이인데 run 은 seq45 부터 열려 81.0m·
+			//   10.3초 누락. 디바운스 3틱에 더해 seq44 가 클램프 저신뢰 SKIP 이라 과금 함수 자체가
+			//   호출되지 않아 확정이 한 틱 더 밀린 것도 겹쳤다).
+			//   진입 방향의 인수인계(handoff gap)와 완전히 대칭으로 처리한다 — 마지막 "폴리곤 안"
+			//   링크부터 이번 링크까지 FindLinkPathBounded 로 누락 링크를 복구하고,
+			//   FindLinkPolygonExitCrossing 으로 폴리곤을 벗어나는 지점을 찾아 그 지점을 진입점으로
+			//   하는 이월(stMergeCarry)을 만든다. 아래 ②에서 새 run 이 그대로 이어받는다.
+			//   경로를 못 찾거나 교차점을 못 찾으면 아무 것도 하지 않는다 — 종전 동작(확정 tick 부터
+			//   시작) 그대로 폴백.
+			if ((pstSession->qwParkTouchLastInLinkID != 0) && pstSession->bParkTouchHasFirstOut
+				&& (m_stConfig.pcDataLoader != nullptr) && (m_stConfig.pcChargeDataLoader != nullptr))
+			{
+				PZONE_INFO pstExitZone =
+					m_stConfig.pcChargeDataLoader->GetZoneByRoadId(pstSession->szParkTouchZoneRoadId);
+				if (pstExitZone != nullptr)
+				{
+					static const int MM_NODE_STEP_PARK_EXIT_MAX_HOPS = 6;		// handoff gap 과 동일 상한
+					vector<uint64> vtExitPath;
+					if (FindLinkPathBounded(pstSession->qwParkTouchLastInLinkID,
+							stMatchLinkInfo.qwLinkID, MM_NODE_STEP_PARK_EXIT_MAX_HOPS, &vtExitPath)
+						&& !vtExitPath.empty())
+					{
+						// 경로를 앞에서부터 훑어 폴리곤을 벗어나는 링크를 찾고, 그 지점 이후의
+						//   거리만 누적한다. 마지막 원소(=이번 확정 링크)는 링크 전체가 아니라
+						//   "시작~이번 매칭점"까지만 이동한 것이므로 매칭 위치를 쓴다
+						//   (MapMatch.cpp 재구성 경로 길이 산출과 동일 근거)
+						double dfCrossX = 0.0, dfCrossY = 0.0;
+						double dfAfterM = 0.0;
+						bool bFoundExit = false;
+						bool bLenOk = true;
+						const size_t nLastIdx = vtExitPath.size() - 1;
+						const double dfCurLinkPos = static_cast<double>(stMatchLinkInfo.wLenFromLink)
+							+ ((stMatchLinkInfo.dfSgmtMatchLen > 0.0) ? stMatchLinkInfo.dfSgmtMatchLen : 0.0);
+
+						for (size_t p = 0; p < vtExitPath.size(); ++p)
+						{
+							const bool bIsLast = (p == nLastIdx);
+							// 이 링크에서 실제로 진행한 거리 — 마지막 링크는 매칭점까지만
+							double dfLinkRunM = 0.0;
+							if (bIsLast)
+								dfLinkRunM = dfCurLinkPos;
+							else
+							{
+								PLINK_INFO pstPathLink = m_stConfig.pcDataLoader->GetLinkInfo(vtExitPath[p]);
+								if (pstPathLink == nullptr) { bLenOk = false; break; }
+								dfLinkRunM = pstPathLink->dfLen;
+							}
+
+							if (!bFoundExit)
+							{
+								double dfExitDistM = 0.0;
+								if (FindLinkPolygonExitCrossing(vtExitPath[p], pstExitZone->vtCoords,
+										&dfExitDistM, &dfCrossX, &dfCrossY))
+								{
+									bFoundExit = true;
+									// 이 링크에서 경계 이후로 진행한 몫만 더한다
+									if (dfLinkRunM > dfExitDistM)
+										dfAfterM += (dfLinkRunM - dfExitDistM);
+								}
+								// 아직 폴리곤 안(교차 없음) — 이 링크는 통째로 제외
+							}
+							else
+								dfAfterM += dfLinkRunM;			// 경계 이후 링크는 전부 포함
+						}
+
+						if (bLenOk && bFoundExit && (dfAfterM > 0.0))
+						{
+							// 경계 통과 시각 — "마지막 안" tick 과 "첫 밖" tick 사이에서, 경계
+							//   좌표까지의 거리 비율로 선형보간한다(ZONE_RUN_SESSION dfFirstOut* 을
+							//   쓰는 기존 경계 보간들과 동일 원리). 확정 tick 을 쓰면 이미 구역에서
+							//   한참 멀어진 지점과 보간하게 된다
+							ZONE_RUN_SESSION stExitCarry;
+							stExitCarry.szRoadID[0] = '\0';			// 미등록 pseudo-zone 으로 이어받음
+							stExitCarry.dtEntryTime = InterpolateGateCrossingTime(
+								pstSession->dfParkTouchLastInX, pstSession->dfParkTouchLastInY,
+								pstSession->dtParkTouchLastIn,
+								pstSession->dfParkTouchFirstOutX, pstSession->dfParkTouchFirstOutY,
+								pstSession->dtParkTouchFirstOut, dfCrossX, dfCrossY);
+							stExitCarry.dwEntryGpsSeq = pstSession->dwParkTouchFirstOutGpsSeq;
+							stExitCarry.dfEntryX = dfCrossX;
+							stExitCarry.dfEntryY = dfCrossY;
+							stExitCarry.qwEntryLinkID = stMatchLinkInfo.qwLinkID;
+							stExitCarry.dfAccumDistM = dfAfterM;
+							stExitCarry.dfLastX = stMatchLinkInfo.dfMatchX;
+							stExitCarry.dfLastY = stMatchLinkInfo.dfMatchY;
+							stExitCarry.qwLastLinkID = stMatchLinkInfo.qwLinkID;
+							stExitCarry.dtLastInZoneTime = stRawLogInfo.dtGPS;
+							stExitCarry.dwLastInZoneGpsSeq = stRawLogInfo.dwSeqNo;
+							stMergeCarry = stExitCarry;
+							bHasMergeCarry = true;
+
+							LOGFMTI("[#%02d] park exit boundary carry!device=[%s] trip_id=[%s] zone=[%s] "
+								"entry_seq=[%u] cur_seq=[%u] after=[%.1f]m hops=[%zu]",
+								nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID,
+								pstSession->szParkTouchZoneRoadId, stExitCarry.dwEntryGpsSeq,
+								stRawLogInfo.dwSeqNo, dfAfterM, vtExitPath.size());
+						}
+					}
+				}
+			}
 		}
 		else
 		{
@@ -6466,6 +6675,10 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 
 		pstSession->bHasParkTouchCarry = false;
 		pstSession->bParkTouchEverMatchedInside = false;
+		// 경계 소급 스냅샷도 함께 비운다 — 다음 접촉이 이전 접촉의 기준점을 물려받으면
+		//   엉뚱한 구역의 경계로 소급된다 (2026-09-05 최정우 추가)
+		pstSession->qwParkTouchLastInLinkID = 0;
+		pstSession->bParkTouchHasFirstOut = false;
 	}
 
 	if (bInParkingZone)

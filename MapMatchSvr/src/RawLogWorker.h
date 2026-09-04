@@ -312,6 +312,27 @@ typedef struct sVehicleTripSession
 	//   원시좌표 기준으로 판정하면 진짜 오검출 구간까지 "확정 접촉"으로 오분류된다
 	//   (사용자 지시, 2026-09-03 최정우 추가)
 	bool							bParkTouchEverMatchedInside;
+	// ── 확정 접촉 이탈 시 "폴리곤 경계부터" 새 NODE_STEP run 을 여는 데 필요한 스냅샷
+	//   (2026-09-05 최정우 추가, 사용자 지시) ──
+	//   기존엔 확정 접촉이 이탈 확정되는 tick 부터 새 run 이 열려, 실제 폴리곤 경계와 그 tick
+	//   사이(park_exitcnt 디바운스 구간)가 통째로 어느 레코드에도 안 들어갔다. 실측
+	//   000376_20260821095239 — 경계는 seq41(안)~42(밖) 사이인데 레코드는 seq45 부터 시작해
+	//   81.0m·10.3초가 누락됐다(디바운스 3틱 + 그중 seq44 가 클램프 저신뢰 SKIP 이라 과금
+	//   함수가 호출되지 않아 확정이 한 틱 더 밀림). 진입 방향의 인수인계(handoff gap)와 대칭으로
+	//   이탈 방향에도 누락 링크 복구 + 폴리곤 교차점 산출을 적용하기 위한 기준점들이다.
+	uint64							qwParkTouchLastInLinkID;			// 원시좌표가 폴리곤 안이었던 마지막 tick 의 매칭 링크ID —
+																		//   경계 탐색(FindLinkPathBounded)의 출발 링크. 디바운스 유예
+																		//   tick(이미 폴리곤 밖)의 링크를 쓰면 출발점이 구역 밖이라
+																		//   경계 자체를 못 찾는다
+	double							dfParkTouchLastInX;					// 위 tick 의 매칭좌표·시각 — 경계 통과 시각 보간의 "안" 기준점
+	double							dfParkTouchLastInY;
+	time_t							dtParkTouchLastIn;
+	double							dfParkTouchFirstOutX;				// 이탈 스트릭의 "첫" 밖 tick — 보간의 "밖" 기준점.
+	double							dfParkTouchFirstOutY;				//   확정 tick 을 쓰면 이미 구역에서 한참 멀어진 지점과
+	time_t							dtParkTouchFirstOut;				//   보간하게 된다(ZONE_RUN_SESSION dfFirstOut* 과 동일 문제)
+	uint32							dwParkTouchFirstOutGpsSeq;			// 새 run 의 start_gps_seq — 경계는 "마지막 안"과 이 tick
+																		//   사이에 있으므로 첫 밖 tick 을 시작 순번으로 쓴다
+	bool							bParkTouchHasFirstOut;
 	// 접촉 중 이탈 디바운스(node_exitcnt)로 조기 마감된 run — 위 접촉 확정 판정이 나올 때까지
 	//   즉시 등록하지 않고 보류한다. 확정 접촉이면 그대로 등록, 미확정이면 폐기하고 진입정보·
 	//   누적거리를 접촉 구간의 이월값에 합쳐 다음 run으로 이어붙인다(위와 동일 근거,
@@ -529,6 +550,15 @@ typedef struct sVehicleTripSession
 		nNodeStepParkExitTicks(0),	// (2026-09-02 최정우 추가)
 		bHasParkTouchCarry(false),	// (2026-09-03 최정우 추가)
 		bParkTouchEverMatchedInside(false),	// (2026-09-03 최정우 추가)
+		qwParkTouchLastInLinkID(0),	// (2026-09-05 최정우 추가)
+		dfParkTouchLastInX(0.0),	// (2026-09-05 최정우 추가)
+		dfParkTouchLastInY(0.0),	// (2026-09-05 최정우 추가)
+		dtParkTouchLastIn(0),	// (2026-09-05 최정우 추가)
+		dfParkTouchFirstOutX(0.0),	// (2026-09-05 최정우 추가)
+		dfParkTouchFirstOutY(0.0),	// (2026-09-05 최정우 추가)
+		dtParkTouchFirstOut(0),	// (2026-09-05 최정우 추가)
+		dwParkTouchFirstOutGpsSeq(0),	// (2026-09-05 최정우 추가)
+		bParkTouchHasFirstOut(false),	// (2026-09-05 최정우 추가)
 		bHasHeldNodeStepRun(false),	// (2026-09-03 최정우 추가)
 		bHasHandoffGapChecked(false),	// (2026-09-03 최정우 추가)
 		bHasHeldSpeedMirrorRun(false),	// (2026-09-03 최정우 추가)
@@ -914,6 +944,12 @@ private:
 	//   다음 링크로 진행)
 	bool FindLinkPolygonCrossing(uint64 qwLinkID, const vector<POINT>& vtPolyCoords,
 		double *pdfPartialDistM, double *pdfCrossX, double *pdfCrossY);
+	// 위 함수의 이탈 방향 대칭 — 링크를 시작 노드부터 따라가며 폴리곤 "안→밖"으로 벗어나는
+	//   지점(링크 시작부터의 거리·좌표)을 구한다. 확정 접촉이 이탈될 때 "폴리곤 경계부터"
+	//   NODE_STEP run 을 여는 데 쓴다. 링크 전체가 폴리곤 안이거나 전체가 밖이면 false
+	//   (호출측이 다음 링크로 진행) (2026-09-05 최정우 추가, 사용자 지시)
+	bool FindLinkPolygonExitCrossing(uint64 qwLinkID, const vector<POINT>& vtPolyCoords,
+		double *pdfExitDistM, double *pdfCrossX, double *pdfCrossY);
 	// 개방형 과금 1행 생성 — 정상 이탈과 TTL 만료 공용. bStartedByTrip 에 따라 dist_m 산출
 	//   방식·charge_yn/status 가 갈린다 — ZONE_RUN_SESSION 상단 주석 참고 (2026-08-25 최정우 추가)
 	void BuildOpenZoneRow(const ZONE_RUN_SESSION& stRun, const string& strTripId,

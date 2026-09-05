@@ -950,6 +950,12 @@ private:
 	//   (호출측이 다음 링크로 진행) (2026-09-05 최정우 추가, 사용자 지시)
 	bool FindLinkPolygonExitCrossing(uint64 qwLinkID, const vector<POINT>& vtPolyCoords,
 		double *pdfExitDistM, double *pdfCrossX, double *pdfCrossY);
+	// 클램프 저신뢰 SKIP 런을 "전·후 확정좌표 궤적 방향"으로 검증해 MATCH_STATUS 만 복원 —
+	//   bConnected 실패 경로와 "같은 링크로 복귀" 경로가 공용으로 쓴다. 상세는 구현부 주석 참고
+	//   (2026-09-04 최정우 추가, 2026-09-05 최정우 수정 — 헬퍼로 분리, 사용자 지시)
+	size_t BridgeClampRunByTrajectory(int nThreadId, VEHICLE_TRIP_SESSION *pstSession,
+		double dfNextMatchX, double dfNextMatchY, const sRawLogInfo& stRawLogInfo,
+		vector<RAW_LOG_UPDATE_ROW> *pvtUpdates);
 	// 개방형 과금 1행 생성 — 정상 이탈과 TTL 만료 공용. bStartedByTrip 에 따라 dist_m 산출
 	//   방식·charge_yn/status 가 갈린다 — ZONE_RUN_SESSION 상단 주석 참고 (2026-08-25 최정우 추가)
 	void BuildOpenZoneRow(const ZONE_RUN_SESSION& stRun, const string& strTripId,

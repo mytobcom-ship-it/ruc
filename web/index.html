@@ -77,6 +77,7 @@
   #chargeTable th { position: sticky; top: 0; background: var(--code-bg); font-weight: 700; z-index: 1; }
   #chargeTable td.num { text-align: right; font-variant-numeric: tabular-nums; }
   #chargeTable td.mono { font-family: ui-monospace, Menlo, monospace; }
+  #chargeTable td.ctr, #chargeTable th.ctr { text-align: center; }
   #chargeTable tr:hover td { background: var(--code-bg); }
   #chargeTable .ch-empty { text-align: center; color: var(--muted); padding: 14px; }
   #chargeTable .ch-na { color: var(--muted); }
@@ -324,7 +325,7 @@
     <div id="chargePanel">
       <div id="chargeHead">
         <span class="ch-title">과금 이력 <span class="ch-src">ruc.prim_chargehand</span></span>
-        <span class="ch-src" id="buildStamp" title="이 값이 안 보이면 브라우저가 옛 페이지를 쓰고 있습니다">build 0905-2</span>
+        <span class="ch-src" id="buildStamp" title="이 값이 안 보이면 브라우저가 옛 페이지를 쓰고 있습니다">build 0906-2</span>
         <span id="chargeCount" class="ch-count">—</span>
         <button id="chargeToggle" title="접기/펼치기">▾</button>
       </div>
@@ -333,9 +334,9 @@
           <thead><tr>
             <th title="ruc.prim_chargehand.trip_seq — 미등록 이벤트도 카운터를 소비하므로 결번이 정상">과금순번</th><th>유형</th><th>G순번</th>
             <th>구간 ID</th><th>구간명</th><th>본선</th><th>진입</th><th>진출</th>
-            <th>거리(m)</th><th>평균/제한속도(km/h)</th><th>체류</th><th>발생시각</th>
+            <th>거리(m)</th><th>평균/제한속도(km/h)</th><th>체류</th><th class="ctr" title="ruc.prim_chargehand.charge_yn — Y=과금 대상, N=과금 대상 아님">과금 여부</th><th>발생시각</th>
           </tr></thead>
-          <tbody id="chargeBody2"><tr><td colspan="12" class="ch-empty">트립을 선택하세요</td></tr></tbody>
+          <tbody id="chargeBody2"><tr><td colspan="13" class="ch-empty">트립을 선택하세요</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -1453,7 +1454,7 @@ function renderChargeRows(rows) {
   const cnt = document.getElementById('chargeCount');
   if (!body) return;
   if (!rows || rows.length === 0) {
-    body.innerHTML = '<tr><td colspan="12" class="ch-empty">과금 이력 없음</td></tr>';
+    body.innerHTML = '<tr><td colspan="13" class="ch-empty">과금 이력 없음</td></tr>';
     if (cnt) cnt.textContent = '0건';
     return;
   }
@@ -1487,6 +1488,8 @@ function renderChargeRows(rows) {
       + '<td class="num">' + fmtDistM(r.dist_m) + '</td>'
       + '<td class="num">' + fmtSpeed(r) + '</td>'
       + '<td class="num">' + fmtStay(r.stay_seconds) + '</td>'
+      // 과금 여부 — DB 원본(charge_yn)을 대문자로 그대로 표시 (2026-09-06 최정우 추가, 사용자 지시)
+      + '<td class="mono ctr">' + (r.charge_yn ? String(r.charge_yn).toUpperCase() : na) + '</td>'
       + '<td class="mono">' + fmtTime(r.occur_dt) + '</td>'
       + '</tr>';
   }).join('');
@@ -1529,7 +1532,7 @@ async function loadTripCharges(tripId) {
     const rows = await fetchJson(apiBase() + '/trip/' + encodeURIComponent(tripId) + '/charges');
     renderChargeRows(rows);
   } catch (e) {
-    if (body) body.innerHTML = '<tr><td colspan="12" class="ch-empty">조회 실패: ' + e.message + '</td></tr>';
+    if (body) body.innerHTML = '<tr><td colspan="13" class="ch-empty">조회 실패: ' + e.message + '</td></tr>';
   }
 }
 
@@ -1586,7 +1589,7 @@ async function refreshLiveTrip() {
       document.getElementById('lastPoll').textContent = '조회 실패: ' + e.message;
       // 옛 과금 이력이 그대로 남아 "지금 데이터"로 오해되지 않게 함께 표시 (2026-08-22 최정우 추가)
       const cb = document.getElementById('chargeBody2');
-      if (cb) cb.innerHTML = '<tr><td colspan="12" class="ch-empty">조회 실패 — 서버 응답 없음</td></tr>';
+      if (cb) cb.innerHTML = '<tr><td colspan="13" class="ch-empty">조회 실패 — 서버 응답 없음</td></tr>';
       return;
     }
 

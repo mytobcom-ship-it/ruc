@@ -354,6 +354,10 @@ typedef struct sVehicleTripSession
 	//   등록한다(사용자 지시, 2026-09-03 최정우 추가)
 	bool							bHasHeldSpeedMirrorRun;
 	ZONE_RUN_SESSION				stHeldSpeedMirrorRun;
+	// 미러를 보류한 tick 의 GPS_SEQ — 보류 직후 같은 tick 에서 곧바로 등록해버리면 다음 tick 의
+	//   주정차 폴리곤 접촉이 이어받을 미러가 남지 않는다. 최소 1 tick 은 들고 있게 하는 표식
+	//   (2026-09-06 최정우 추가, 사용자 지시)
+	uint32							dwHeldSpeedMirrorSeq;
 
 	// 비과금도로 트랙(ROAD_KIND=5) — 게이트가 없어 매칭 링크→구역 역인덱스로 진입/이탈 판정.
 	//   정상 진행/정상 이탈 시에는 아무것도 INSERT 안 함(어차피 비과금이라 기록할 요금이 없음) —
@@ -562,6 +566,7 @@ typedef struct sVehicleTripSession
 		bHasHeldNodeStepRun(false),	// (2026-09-03 최정우 추가)
 		bHasHandoffGapChecked(false),	// (2026-09-03 최정우 추가)
 		bHasHeldSpeedMirrorRun(false),	// (2026-09-03 최정우 추가)
+		dwHeldSpeedMirrorSeq(0),	// (2026-09-06 최정우 추가)
 		bHasPendingCommit(false),	// (2026-08-21 최정우 추가)
 		nPendingFinalStatus(MATCH_STATUS_PENDING),	// (2026-08-21 최정우 추가)
 		nPendingIntersectLen(-1),	// (2026-08-21 최정우 추가)
@@ -981,6 +986,10 @@ private:
 	//   AppendExpiredClosedRoadCharge() 주석 참고)
 	void AppendExpiredSpeedZoneCharge(int nThreadId, const string& strDeviceKey,
 		const VEHICLE_TRIP_SESSION& stSession, time_t dtEndTime, vector<CHARGE_INSERT_ROW> *pvtOut);
+	// 배치 INSERT 직전, 같은 트립에서 연속으로 이어지는 일반도로(CHARGE_TYPE=0) 행을 하나로
+	//   합치고 거리·체류시간·평균속도를 다시 계산한다. 상세 규칙은 구현부 주석 참고
+	//   (2026-09-06 최정우 추가, 사용자 지시)
+	void MergeAdjacentNodeStepRows(vector<CHARGE_INSERT_ROW> *pvtCharges);
 	bool BulkInsertCharges(PGconn *pcConn, const vector<CHARGE_INSERT_ROW>& vtCharges);
 	// 트립 종료 시 그 trip_id 의 PRIM_CHARGEHAND 전 행에 trip_end_dt 반영 (2026-08-12 최정우 추가)
 	bool UpdateTripEndDt(PGconn *pcConn, const vector<TRIP_END_UPDATE_ROW>& vtRows);

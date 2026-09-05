@@ -36,6 +36,11 @@ public:
 	sint16 GetLinkAzimuth(PLINK_INFO pstLinkInfo);
 	void FixOppositePairByHeading(const SGMT_MATCH_INPUT& stSgmtMatchInput,
 			list<MATCH_ENTRY>& listMatchEntryList);
+	// 위 교정의 일반화 — 짝 링크(qwOppositeLinkID) 등록 여부와 무관하게, 후보 목록 안에서
+	//   링크 진행방향(GetLinkAzimuth)이 heading 과 맞는 최선 후보를 앞으로 당긴다.
+	//   상세 근거는 구현부 주석 참고 (2026-09-05 최정우 추가, 사용자 지시)
+	void FixReverseLinkByAzimuth(const SGMT_MATCH_INPUT& stSgmtMatchInput,
+			list<MATCH_ENTRY>& listMatchEntryList);
 	// 짝 링크(qwOppositeLinkID)가 있는 링크가 heading 과 거의 정반대로 채택됐는지 판정 —
 	//   Begin 이 Continue 결과를 병행폴백으로 대체하기 직전 거부권 용도 (2026-08-24 최정우 추가)
 	bool IsAntiHeadingOpposite(uint64 qwLinkID, sint16 nHeading, sint16 nSpeed);
@@ -47,8 +52,11 @@ public:
 		uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry);
 
 private:
+	// 셀 안에서 비용 오름차순 상위 MM_BEGIN_CELL_TOPN 건을 listOutEntryList 에 append 한다 —
+	//   기존엔 1등 하나만 반환해 같은 셀의 정답 링크가 목록에 오르지 못했다(상수 주석 참고)
+	//   (2026-09-05 최정우 수정, 사용자 지시)
 	bool GridSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, uint32 dwStartSgmtOffset, 
-		uint32 dwEndSgmtOffset, uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry,
+		uint32 dwEndSgmtOffset, uint16 *pwErrorCode, list<MATCH_ENTRY>& listOutEntryList,
 		const std::set<uint64>* psetConnected = nullptr);
 	bool GridSgmtGeomNearest(SGMT_MATCH_INPUT& stSgmtMatchInput, uint32 dwStartSgmtOffset,
 		uint32 dwEndSgmtOffset, MATCH_ENTRY& stBest, double& dfBestDist, bool& bFound);

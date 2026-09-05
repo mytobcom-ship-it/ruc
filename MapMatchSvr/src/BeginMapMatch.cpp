@@ -112,6 +112,79 @@ void CBeginMapMatch::FixOppositePairByHeading(const SGMT_MATCH_INPUT& stSgmtMatc
  * \t상호 보완 관계다(실측 000376_20260819094414 M79 — 2040423603 이 짝 2040423501 의 역방향으로
  * \t채택됐는데, 실제 정답 링크는 2040423503 이라 짝 교정만으론 못 잡음). (2026-08-24 최정우 추가)
 */
+/**
+ * @brief 채택 링크가 heading 과 역방향이면, 후보 목록에서 방향이 맞는 최선 후보를 앞으로 당긴다
+ * @param[in] stSgmtMatchInput 세그먼트 매칭 입력(heading·속도)
+ * @param[in,out] listMatchEntryList 비용 오름차순 정렬된 후보 목록
+ * @return void
+ * @remark FixOppositePairByHeading 의 일반화 경로 — 그쪽은 psf 의 qwOppositeLinkID(짝 링크)에
+ *   의존하는데, 짝이 등록돼 있지 않거나 후보 목록 밖이면 아무 것도 못 한다(실측: 실주행 21트립
+ *   재매칭에서 그 교정이 한 번도 발동하지 않았다). 이쪽은 짝 관계와 무관하게 "후보 목록 안에서
+ *   링크 진행방향(GetLinkAzimuth)이 heading 과 맞는 것"을 찾는다.
+ *
+ *   왜 SgmtMatch 의 각도 비용으로는 안 되는가 — 그쪽은 세그먼트 방위각을 정·역 양방향으로 보고
+ *   더 잘 맞는 쪽을 채택한다(2026-07-16, 양방향 단일 링크의 120° 오배제 방지). 그래서 역주행
+ *   링크도 "각도가 잘 맞는" 것으로 계산돼 걸러지지 않는다. 실측 000376_20260821095239 seq1:
+ *   2040424401 은 세그먼트 역방향차가 44° 라 각도를 켜도 비용 10.6 으로 정답(2040424301, 15.0)을
+ *   이긴다. 링크 방위각(254° vs heading 118° = 136°)으로 봐야 비로소 역주행임이 드러난다.
+ *
+ *   임계값은 FixOppositePairByHeading 과 동일하게 재사용한다 — 채택 링크가 MM_OPP_FIX_REV_DEG
+ *   이상 어긋나야 검토하고, 교체 후보는 MM_OPP_FIX_FWD_DEG 이내여야 한다. 둘 다 애매하면
+ *   건드리지 않는다. 목록이 비용 오름차순이므로 조건을 만족하는 첫 후보가 곧 최선이다.
+ *   (2026-09-05 최정우 추가, 사용자 지시)
+*/
+void CBeginMapMatch::FixReverseLinkByAzimuth(const SGMT_MATCH_INPUT& stSgmtMatchInput,
+		list<MATCH_ENTRY>& listMatchEntryList)
+{
+	if (listMatchEntryList.empty())
+		return;
+	if (stSgmtMatchInput.nDirAng == NO_ANGLE)
+		return;
+	// 정지·저속 구간의 heading 은 신뢰할 수 없다 (FixOppositePairByHeading 과 동일 기준)
+	if ((stSgmtMatchInput.nSpeed == NO_SPEED) || (stSgmtMatchInput.nSpeed < MM_OPP_FIX_MIN_SPEED))
+		return;
+	if (m_pcDataLoader == nullptr)
+		return;
+
+	sint16 nHeading = stSgmtMatchInput.nDirAng;
+	PLINK_INFO pstTop = m_pcDataLoader->GetLinkInfo(listMatchEntryList.begin()->qwLinkID);
+	if (pstTop == nullptr)
+		return;
+
+	// 채택 링크가 heading 과 거의 정반대가 아니면 교정 대상이 아니다
+	sint16 nTopAz = GetLinkAzimuth(pstTop);
+	if (abs(m_cGISUtil.GetAngleDiff(nTopAz, nHeading)) < MM_OPP_FIX_REV_DEG)
+		return;
+
+	for (list<MATCH_ENTRY>::iterator it = listMatchEntryList.begin();
+			it != listMatchEntryList.end(); ++it)
+	{
+		if (it == listMatchEntryList.begin())
+			continue;
+
+		PLINK_INFO pstCand = m_pcDataLoader->GetLinkInfo(it->qwLinkID);
+		if (pstCand == nullptr)
+			continue;
+
+		sint16 nCandAz = GetLinkAzimuth(pstCand);
+		if (abs(m_cGISUtil.GetAngleDiff(nCandAz, nHeading)) > MM_OPP_FIX_FWD_DEG)
+			continue;					// 이 후보도 방향이 안 맞음 — 다음 후보
+
+		LOGFMTI("begin reverse link fix!link=[%llu]->[%llu], heading=[%d], az=[%d]->[%d], "
+			"cost=[%.1f]->[%.1f], speed=[%d]",
+			static_cast<unsigned long long>(listMatchEntryList.begin()->qwLinkID),
+			static_cast<unsigned long long>(it->qwLinkID), nHeading, nTopAz, nCandAz,
+			listMatchEntryList.begin()->dfCost, it->dfCost, stSgmtMatchInput.nSpeed);
+
+		MATCH_ENTRY stFixed = *it;
+		listMatchEntryList.erase(it);
+		listMatchEntryList.push_front(stFixed);
+		return;
+	}
+	// 방향이 맞는 후보가 하나도 없으면 그대로 둔다 — 종전대로 IsAntiHeadingOpposite 거부권이
+	//   받아 SKIP 처리한다("확신 없는 매칭보다 SKIP")
+}
+
 bool CBeginMapMatch::IsAntiHeadingOpposite(uint64 qwLinkID, sint16 nHeading, sint16 nSpeed)
 {
 	if ((nHeading == NO_ANGLE) || (nSpeed == NO_SPEED) || (nSpeed < MM_OPP_FIX_MIN_SPEED))
@@ -189,10 +262,10 @@ bool CBeginMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& 
 			dwStartSgmtOffset = pstGridInfo->dwSgmtOffset;
 			dwEndSgmtOffset = dwStartSgmtOffset + pstGridInfo->wSgmtCount;
 
-			MATCH_ENTRY stMatchEntry;
 			// GRID 내 세그먼트 범위별 맵매칭 수행 (연결성 편향 집합 전달) (2026-07-08 최정우 주석 추가)
-			if (GridSgmtMapMatch(stSgmtMatchInput, dwStartSgmtOffset, dwEndSgmtOffset, pwErrorCode, &stMatchEntry, psetConnected))
-				listMatchEntryList.push_back(stMatchEntry);
+			//   셀당 상위 MM_BEGIN_CELL_TOPN 건을 목록에 직접 append (2026-09-05 최정우 수정)
+			GridSgmtMapMatch(stSgmtMatchInput, dwStartSgmtOffset, dwEndSgmtOffset, pwErrorCode,
+				listMatchEntryList, psetConnected);
 		}
 	}
 
@@ -207,6 +280,11 @@ bool CBeginMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& 
 	// 왕복분리 짝 링크 오매칭 교정 — BEGIN 은 heading 을 무시하므로 거리로만 고르면
 	//   10m 옆 반대방향 링크가 채택될 수 있다 (2026-08-22 최정우 추가)
 	FixOppositePairByHeading(stSgmtMatchInput, listMatchEntryList);
+	// 위 교정은 qwOppositeLinkID(짝 링크)가 psf 에 등록돼 있어야만 동작한다 — 등록이 없거나
+	//   짝이 후보 목록 밖이면 역방향 링크가 그대로 채택돼 ProcessManager 의 IsAntiHeadingOpposite
+	//   거부권에 걸려 통째로 SKIP 된다. 짝에 의존하지 않고 후보 목록 자체에서 방향이 맞는 링크를
+	//   찾는 일반 경로를 뒤에 둔다 (2026-09-05 최정우 추가, 사용자 지시)
+	FixReverseLinkByAzimuth(stSgmtMatchInput, listMatchEntryList);
 	if (pstTraceCtx != nullptr)
 	{
 		pstTraceCtx->nMatchedStep = 0;
@@ -222,11 +300,16 @@ bool CBeginMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& 
  * @param[in] dwStartSgmtOffset 세그먼트 시작
  * @param[in] dwEndSgmtOffset 세그먼트 종료
  * @param[out] pwErrorCode 에러 코드
- * @param[out] pstMatchEntry 검색 정보
- * @return true(성공), false(실패)
+ * @param[out] listOutEntryList 검색 정보 — 이 셀의 상위 MM_BEGIN_CELL_TOPN 건을 append
+ * @return true(1건 이상 담음), false(이 셀에 후보 없음)
+ * @remark 2026-09-05 최정우 수정(사용자 지시) — 기존엔 셀 안에서 1등 하나만 반환했다. 그래서
+ *   후보 목록 크기가 곧 "매칭된 그리드 셀 수"였고, 같은 셀 안의 정답 링크는 더 가까운 링크에
+ *   가려 목록에 오르지조차 못했다(MM_BEGIN_CELL_TOPN 주석의 seq1 실측 참고). 상위 N건을 담아
+ *   뒤따르는 교정 계층(FixOppositePairByHeading·FixReverseLinkByAzimuth)이 실제로 고를 수
+ *   있는 재료를 준다. 정렬·최종 선택은 호출측(StartMapMatch)이 전체 목록을 다시 sort 해서 한다.
 */
 bool CBeginMapMatch::GridSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, uint32 dwStartSgmtOffset, 
-		uint32 dwEndSgmtOffset, uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry,
+		uint32 dwEndSgmtOffset, uint16 *pwErrorCode, list<MATCH_ENTRY>& listOutEntryList,
 		const std::set<uint64>* psetConnected)
 {
 	// 형상 데이터 로더 유효성·로드 상태 확인 (2026-07-08 최정우 주석 추가)
@@ -326,7 +409,26 @@ bool CBeginMapMatch::GridSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, uint32
 		listMatchEntryList.sort();
 
 		*pwErrorCode = NO_ERROR;
-		*pstMatchEntry = *listMatchEntryList.begin();
+		// 셀당 1등만 담던 것을 상위 MM_BEGIN_CELL_TOPN 건까지 담는다 (2026-09-05 최정우 수정)
+		//   단 "같은 링크의 다른 세그먼트"는 건너뛴다 — 링크 하나가 여러 세그먼트로 잘려 있어,
+		//   GPS 가 그 링크 위에 있으면 최근접 N 건이 전부 같은 링크 조각으로 채워진다. 그러면
+		//   자리만 쓰고 링크 다양성은 늘지 않아 이 확장의 목적(정답 링크를 목록에 올리기)이
+		//   무산된다 — 실측: 후보 2건 이상인 Begin 호출 430건 중 391건(90.9%)에서 같은 링크가
+		//   섞였고, 35건(8.1%)은 전부 같은 링크 하나였다. 같은 링크의 두 번째 조각은 어차피
+		//   같은 링크라 뒤따르는 교정 계층에 새 정보를 주지 않으므로 버려도 손실이 없다.
+		//   셀 간 중복은 건드리지 않는다 — 셀 처리 순서는 거리순이 아니라서, 먼저 처리된 셀의
+		//   더 먼 조각이 살아남고 나중 셀의 더 가까운 조각이 버려질 수 있다(기존 동작 유지).
+		//   (2026-09-05 최정우 수정, 사용자 지시)
+		int nTaken = 0;
+		set<uint64> setTakenLinkID;
+		for (list<MATCH_ENTRY>::const_iterator it = listMatchEntryList.begin();
+				(it != listMatchEntryList.end()) && (nTaken < MM_BEGIN_CELL_TOPN); ++it)
+		{
+			if (!setTakenLinkID.insert(it->qwLinkID).second)
+				continue;						// 이 셀에서 이미 담은 링크 — 다음 링크를 찾는다
+			listOutEntryList.push_back(*it);
+			++nTaken;
+		}
 	}
 
 	return (*pwErrorCode == NO_ERROR) ? true : false;

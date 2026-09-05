@@ -324,14 +324,14 @@
     <div id="chargePanel">
       <div id="chargeHead">
         <span class="ch-title">과금 이력 <span class="ch-src">ruc.prim_chargehand</span></span>
-        <span class="ch-src" id="buildStamp" title="이 값이 안 보이면 브라우저가 옛 페이지를 쓰고 있습니다">build 0901-1</span>
+        <span class="ch-src" id="buildStamp" title="이 값이 안 보이면 브라우저가 옛 페이지를 쓰고 있습니다">build 0905-2</span>
         <span id="chargeCount" class="ch-count">—</span>
         <button id="chargeToggle" title="접기/펼치기">▾</button>
       </div>
       <div id="chargeBody">
         <table id="chargeTable">
           <thead><tr>
-            <th>#</th><th>유형</th><th>G순번</th>
+            <th title="ruc.prim_chargehand.trip_seq — 미등록 이벤트도 카운터를 소비하므로 결번이 정상">과금순번</th><th>유형</th><th>G순번</th>
             <th>구간 ID</th><th>구간명</th><th>본선</th><th>진입</th><th>진출</th>
             <th>거리(m)</th><th>평균/제한속도(km/h)</th><th>체류</th><th>발생시각</th>
           </tr></thead>
@@ -1470,11 +1470,13 @@ function renderChargeRows(rows) {
       ? ' class="ch-row-clickable" data-g-from="' + gFrom + '" data-g-to="' + gTo + '" title="클릭하면 이 구간으로 지도 확대"'
       : '';
     return '<tr' + rowAttrs + '>'
-      // 화면 표시용 순번은 배열 위치(1,2,3...)로 순차 부여 — 실제 DB trip_seq는 미등록(최소기준
-      //   미달 등)으로 INSERT 안 된 이벤트도 카운터를 소비해(PK 충돌 방지 목적) 1,3,4,5처럼
-      //   구멍이 남는 게 정상이라, 화면까지 그 값을 그대로 보여주면 사용자가 결번을 유실로
-      //   오인하기 쉽다. 실제 trip_seq는 title 툴팁으로 추적 가능하게 남겨둠 (2026-09-03 최정우 추가)
-      + '<td class="num" title="실제 trip_seq=' + r.trip_seq + '">' + (idx + 1) + '</td>'
+      // 첫 컬럼은 DB 값 그대로 trip_seq 를 표시한다 (2026-09-05 최정우 수정, 사용자 지시).
+      //   2026-09-03 에는 배열 위치(1,2,3...)를 쓰고 trip_seq 는 툴팁에만 뒀었다 — trip_seq 는
+      //   미등록(최소기준 미달 등)으로 INSERT 되지 않은 이벤트도 카운터를 소비하므로(PK 충돌
+      //   방지 목적) 1,3,4,5 처럼 결번이 남는 게 정상이고, 그걸 유실로 오인할 수 있다는 이유였다.
+      //   결번은 정상 동작이라는 전제 하에 DB 값을 그대로 보기로 했으므로, 화면 순번(1,2,3...)을
+      //   반대로 툴팁에 남겨 둘의 대응을 계속 확인할 수 있게 한다.
+      + '<td class="num" title="화면 순번=' + (idx + 1) + '">' + r.trip_seq + '</td>'
       + '<td><span class="ch-type" style="background:' + t.color + '">' + t.nm + '</span></td>'
       + '<td class="mono">' + fmtSeqRange(r.g_from, r.g_to) + '</td>'
       + '<td class="mono">' + (r.zone_id || na) + '</td>'

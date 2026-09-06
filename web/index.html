@@ -325,7 +325,7 @@
     <div id="chargePanel">
       <div id="chargeHead">
         <span class="ch-title">과금 이력 <span class="ch-src">ruc.prim_chargehand</span></span>
-        <span class="ch-src" id="buildStamp" title="이 값이 안 보이면 브라우저가 옛 페이지를 쓰고 있습니다">build 0906-2</span>
+        <span class="ch-src" id="buildStamp" title="이 값이 안 보이면 브라우저가 옛 페이지를 쓰고 있습니다">build 0906-3</span>
         <span id="chargeCount" class="ch-count">—</span>
         <button id="chargeToggle" title="접기/펼치기">▾</button>
       </div>
@@ -1413,9 +1413,13 @@ const CHARGE_TYPE_LABEL = {
   5: { nm: '면제도로', color: '#d81b60' }
 };
 
+// G순번 — prim_chargehand.start_gps_seq ~ end_gps_seq 를 그대로 표시한다.
+//   두 값이 같아도 하나로 줄이지 않는다(2026-09-06 최정우 수정, 사용자 지시) — 1틱짜리 구간
+//   (예: 폴리곤 경계까지만 잡힌 일반도로 106~106)이 단일 값으로 보이면 다른 컬럼과 형식이
+//   달라져 "범위가 없는 값"으로 오해되기 때문. 한쪽이라도 비면(0=NULLIF 처리) '—'.
 function fmtSeqRange(from, to) {
   if (from == null || to == null) return '<span class="ch-na">—</span>';
-  return (from === to) ? String(from) : (from + ' ~ ' + to);
+  return from + ' ~ ' + to;
 }
 
 // dist_m — 천단위 구분기호로 가독성 개선 (2026-09-01 최정우 추가)

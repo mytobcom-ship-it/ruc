@@ -330,7 +330,32 @@ typedef struct sVehicleTripSession
 	double							dfParkTouchFirstOutX;				// 이탈 스트릭의 "첫" 밖 tick — 보간의 "밖" 기준점.
 	double							dfParkTouchFirstOutY;				//   확정 tick 을 쓰면 이미 구역에서 한참 멀어진 지점과
 	time_t							dtParkTouchFirstOut;				//   보간하게 된다(ZONE_RUN_SESSION dfFirstOut* 과 동일 문제)
-	uint32							dwParkTouchFirstOutGpsSeq;			// 새 run 의 start_gps_seq — 경계는 "마지막 안"과 이 tick
+	uint32							dwParkTouchFirstOutGpsSeq;
+	// 경계 이탈 첫 tick 의 순간속도 — 폴리곤 경계~다음 구역 사이 구간은 GPS tick 이 없어
+	//   경과시간을 못 재므로, 이 속도로 소요시간을 역산한다. 이탈 "확정" tick(park_exitcnt
+	//   디바운스 뒤)의 속도를 쓰면 실제 통과 시점보다 한참 뒤 값이라 어긋난다 — 실측
+	//   000376_20260821094609: 확정 tick 기준 9km/h 였으나 실제 통과 구간은 16~18km/h
+	//   (2026-09-06 최정우 추가, 사용자 지시)
+	float							fParkTouchFirstOutSpeed;
+
+	// 게이트형 구역(폐쇄식·구간단속) 진출 지점 이월 — 진출게이트가 어느 매칭 tick 좌표와
+	//   사실상 같으면, 그 지점이 곧 구역의 끝이자 다음 일반도로의 시작이다. 다음 tick 부터
+	//   일반도로를 열면 게이트~다음 tick 사이 구간이 어느 레코드에도 안 들어간다(실측
+	//   000376_20260821094609: 진출게이트 TG00008 이 seq47 매칭점과 0.23m 인데 일반도로가
+	//   seq48 부터라 약 20m 누락). 진입 쪽에서 "게이트 좌표 == 매칭 좌표면 순번을 공유한다"고
+	//   정한 것과 대칭이다 (2026-09-06 최정우 추가, 사용자 지시)
+	bool							bHasGateExitCarry;
+	double							dfGateExitX;
+	double							dfGateExitY;
+	time_t							dtGateExit;
+	uint32							dwGateExitGpsSeq;
+	uint64							qwGateExitLinkID;
+	// 진출게이트가 그 tick 의 매칭 좌표와 사실상 일치하는지 — 일치하면 그 tick 을 앞 레코드와
+	//   공유하고(START_GPS_SEQ = 그 tick), 아니면 게이트는 구역 안쪽이므로 일반도로의 첫 실측
+	//   tick 은 그 다음이다. 실측: 000376_20260821094609 seq47 은 TG00008 과 0.23m 라 공유(47~65),
+	//   000376_20260819140856 seq1 은 TG00008 에서 21m 앞이라 비공유(일반도로는 2부터)
+	//   (2026-09-06 최정우 추가, 사용자 지시)
+	bool							bGateExitAtTick;			// 새 run 의 start_gps_seq — 경계는 "마지막 안"과 이 tick
 																		//   사이에 있으므로 첫 밖 tick 을 시작 순번으로 쓴다
 	bool							bParkTouchHasFirstOut;
 	// 접촉 중 이탈 디바운스(node_exitcnt)로 조기 마감된 run — 위 접촉 확정 판정이 나올 때까지
@@ -554,6 +579,14 @@ typedef struct sVehicleTripSession
 		nNodeStepParkExitTicks(0),	// (2026-09-02 최정우 추가)
 		bHasParkTouchCarry(false),	// (2026-09-03 최정우 추가)
 		bParkTouchEverMatchedInside(false),	// (2026-09-03 최정우 추가)
+		fParkTouchFirstOutSpeed(-1.0f),
+		bHasGateExitCarry(false),
+		dfGateExitX(0.0),
+		dfGateExitY(0.0),
+		dtGateExit(0),
+		dwGateExitGpsSeq(0),
+		qwGateExitLinkID(0),
+		bGateExitAtTick(false),
 		qwParkTouchLastInLinkID(0),	// (2026-09-05 최정우 추가)
 		dfParkTouchLastInX(0.0),	// (2026-09-05 최정우 추가)
 		dfParkTouchLastInY(0.0),	// (2026-09-05 최정우 추가)
@@ -984,8 +1017,13 @@ private:
 	//   구간단속 세션이면 N/3(AUDIT)로 1건 기록 — 폐쇄형과 동일 이유로 dist_m/speed_kmh/to_lat·lon은
 	//   비워둠 (2026-08-14 최정우 추가, 2026-08-20 최정우 수정 — dtEndTime 파라미터화, 근거는
 	//   AppendExpiredClosedRoadCharge() 주석 참고)
+	// dwEndGpsSeq — 종료 tick 의 GPS_SEQ(0=미지정, 세션값 사용). 트립 종료 이벤트 tick 은
+	//   직전 tick 의 복사본이라 구역 갱신 경로를 안 타서 세션의 dwSpeedLastGpsSeq 가 그 앞에서
+	//   멈춘다 — 호출측이 실제 종료 seq 를 넘겨 구간 표기를 트립 끝에 맞춘다
+	//   (2026-09-06 최정우 추가, 사용자 지시)
 	void AppendExpiredSpeedZoneCharge(int nThreadId, const string& strDeviceKey,
-		const VEHICLE_TRIP_SESSION& stSession, time_t dtEndTime, vector<CHARGE_INSERT_ROW> *pvtOut);
+		const VEHICLE_TRIP_SESSION& stSession, time_t dtEndTime, vector<CHARGE_INSERT_ROW> *pvtOut,
+		uint32 dwEndGpsSeq = 0);
 	// 배치 INSERT 직전, 같은 트립에서 연속으로 이어지는 일반도로(CHARGE_TYPE=0) 행을 하나로
 	//   합치고 거리·체류시간·평균속도를 다시 계산한다. 상세 규칙은 구현부 주석 참고
 	//   (2026-09-06 최정우 추가, 사용자 지시)

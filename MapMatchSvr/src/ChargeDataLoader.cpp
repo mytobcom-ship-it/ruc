@@ -837,6 +837,31 @@ bool CChargeDataLoader::IsLinkChargeRegistered(const uint64 qwLinkID)
  * @return true=이 링크는 NODE_STEP 케이스3 등록 대상 범위 — 그 외(OPEN/CLOSED/PARKING/EXEMPT
  *   소속)는 false, 그 유형 자체 로직이 처리해야 함(질문2 확정 답변)
 */
+/**
+ * @brief 링크가 게이트형 구역(ROAD_KIND 1 개방식·2 폐쇄식·3 구간단속)에만 등록돼 있는지 판정
+ *   (2026-09-07 최정우 추가, 사용자 지시)
+ * @param[in] qwLinkID 매칭 링크 ID
+ * @return true = 등록은 돼 있으나 일반도로(0)·면제(5) 역인덱스에는 없는 링크
+ * @remark 게이트형 구역은 "게이트를 통과한 구간"만 그 유형으로 과금된다. 게이트를 통과하지 않았거나
+ *   이미 진출한 뒤에도 같은 링크 위에 남아 있는 tick 은 그 유형으로 계상되지 않으므로, 사용자
+ *   원칙("게이트 미충족 구간은 일반도로 Y/0")에 따라 일반도로(0)로 흡수해야 한다. 그 판단에
+ *   필요한 "이 링크는 게이트형에만 묶여 있다"를 여기서 돌려주고, "지금 그 구역 run 이 열려
+ *   있는가"는 세션 상태를 아는 CRawLogWorker::IsLinkNodeStepEligible() 이 판단한다.
+ *   폐쇄식(2)은 link_id 역인덱스가 없어(게이트 기반) 개별 map 조회 대신 "등록됐는데 0·5 가
+ *   아니다"라는 소거법으로 판정한다.
+*/
+bool CChargeDataLoader::IsLinkGateZoneOnly(const uint64 qwLinkID)
+{
+	lock_guard<CMutex> cLock(m_cZoneCacheMutex);
+	if (m_setAllRegisteredLinkIds.find(qwLinkID) == m_setAllRegisteredLinkIds.end())
+		return false;										// 어디에도 미등록 — 기존 케이스2 대상
+	if (m_mapNodeStepLinkToRoadId.find(qwLinkID) != m_mapNodeStepLinkToRoadId.end())
+		return false;										// 일반도로(0) 정식구역 — 그 트랙이 처리
+	if (m_mapExemptLinkToRoadId.find(qwLinkID) != m_mapExemptLinkToRoadId.end())
+		return false;										// 면제(5) — 과금 대상이 아니므로 흡수 금지
+	return true;
+}
+
 bool CChargeDataLoader::IsCase3EligibleRoadKind(const uint64 qwLinkID)
 {
 	lock_guard<CMutex> cLock(m_cZoneCacheMutex);

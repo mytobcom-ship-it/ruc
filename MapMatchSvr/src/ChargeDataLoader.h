@@ -189,6 +189,10 @@ public:
 	// 케이스3(SKIP 구간) 전후 확정링크 스코프 판정 — road_kind=0(일반도로) 또는 3(구간단속) 소속,
 	//   또는 어디에도 미등록. true여야 그 SKIP 구간을 NODE_STEP으로 등록 대상 삼음(질문2 확정 답변)
 	bool IsCase3EligibleRoadKind(const uint64 qwLinkID);
+	// 링크가 "게이트형 구역(1 개방식·2 폐쇄식·3 구간단속)에만" 등록돼 있는지 — 일반도로(0)·면제(5)
+	//   역인덱스 어디에도 없는 등록 링크. true 면 그 구역 run 이 열려 있지 않은 동안(게이트 미통과·
+	//   진출 후 잔여 tick)에는 일반도로(0)로 계상해야 한다 (2026-09-07 최정우 추가, 사용자 지시)
+	bool IsLinkGateZoneOnly(const uint64 qwLinkID);
 
 	// 폴리곤 기하 유틸 — 원래 .cpp 파일 내부 static 함수였으나, 주정차 경계 통과 시각 보간
 	//   (CRawLogWorker::InterpolateZoneCrossingTime)에서도 같은 판정을 써야 해서 공개 static

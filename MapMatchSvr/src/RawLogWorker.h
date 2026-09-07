@@ -168,6 +168,8 @@ typedef struct sVehicleTripSession
 	double							dfLastMatchX;						// 직전 매칭 성공 X(경도, WGS84) — HEADING/SPEED 계산 기준 (2026-07-08 최정우 추가)
 	double							dfLastMatchY;						// 직전 매칭 성공 Y(위도, WGS84) (2026-07-08 최정우 추가)
 	time_t							dtLastMatchGps;						// 직전 매칭 성공 GPS 수신시각 — 속도 계산용 (2026-07-08 최정우 추가)
+	uint32							dwLastMatchGpsSeq;					// 직전 매칭 성공 GPS_SEQ — 구역 진입 경계 보정 시 그 tick 과
+																//   순번을 공유할지 판정하는 데 씀 (2026-09-07 최정우 추가, 사용자 지시)
 	time_t							dtLastGpsEventTime;					// 이 trip 에서 지금까지 처리된 gps_dt 최댓값 — TRIP_EVENT=END
 																			//   스퓨리어스(순서역전) 판별용. dtLastSeen(wall-clock)과 달리
 																			//   GPS 자체 시각 기준(단조증가만 반영, 역행 행은 갱신 안 함)
@@ -327,6 +329,8 @@ typedef struct sVehicleTripSession
 	double							dfParkTouchLastInX;					// 위 tick 의 매칭좌표·시각 — 경계 통과 시각 보간의 "안" 기준점
 	double							dfParkTouchLastInY;
 	time_t							dtParkTouchLastIn;
+	uint32							dwParkTouchLastInGpsSeq;			// 그 tick 의 GPS_SEQ — 복구 링크만으로 구성된
+																//   레코드의 순번을 고를 때 후보로 쓴다 (2026-09-07 최정우 추가, 사용자 지시)
 	double							dfParkTouchFirstOutX;				// 이탈 스트릭의 "첫" 밖 tick — 보간의 "밖" 기준점.
 	double							dfParkTouchFirstOutY;				//   확정 tick 을 쓰면 이미 구역에서 한참 멀어진 지점과
 	time_t							dtParkTouchFirstOut;				//   보간하게 된다(ZONE_RUN_SESSION dfFirstOut* 과 동일 문제)
@@ -520,6 +524,7 @@ typedef struct sVehicleTripSession
 	double							dfPendingPrevMatchX;
 	double							dfPendingPrevMatchY;
 	time_t							dtPendingPrevMatchGps;
+	uint32							dwPendingPrevMatchGpsSeq;			// (2026-09-07 최정우 추가)
 	bool							bPendingHadLastMatch;
 
 	sVehicleTripSession() :
@@ -530,6 +535,7 @@ typedef struct sVehicleTripSession
 		dfLastMatchX(0.0),	// (2026-07-08 최정우 추가)
 		dfLastMatchY(0.0),	// (2026-07-08 최정우 추가)
 		dtLastMatchGps(0),	// (2026-07-08 최정우 추가)
+		dwLastMatchGpsSeq(0),	// (2026-09-07 최정우 추가)
 		dtLastGpsEventTime(0),	// (2026-08-25 최정우 추가)
 		bHasLastMatch(false),	// (2026-07-08 최정우 추가)
 		nPrevAltitude(NO_ALTITUDE),
@@ -591,6 +597,7 @@ typedef struct sVehicleTripSession
 		dfParkTouchLastInX(0.0),	// (2026-09-05 최정우 추가)
 		dfParkTouchLastInY(0.0),	// (2026-09-05 최정우 추가)
 		dtParkTouchLastIn(0),	// (2026-09-05 최정우 추가)
+		dwParkTouchLastInGpsSeq(0),	// (2026-09-07 최정우 추가)
 		dfParkTouchFirstOutX(0.0),	// (2026-09-05 최정우 추가)
 		dfParkTouchFirstOutY(0.0),	// (2026-09-05 최정우 추가)
 		dtParkTouchFirstOut(0),	// (2026-09-05 최정우 추가)
@@ -622,6 +629,7 @@ typedef struct sVehicleTripSession
 		dfPendingPrevMatchX(0.0),	// (2026-08-21 최정우 추가)
 		dfPendingPrevMatchY(0.0),	// (2026-08-21 최정우 추가)
 		dtPendingPrevMatchGps(0),	// (2026-08-21 최정우 추가)
+		dwPendingPrevMatchGpsSeq(0),	// (2026-09-07 최정우 추가)
 		bPendingHadLastMatch(false)	// (2026-08-21 최정우 추가)
 	{
 		szTripId[0] = '\0';									// (2026-07-08 최정우 추가)
@@ -921,7 +929,14 @@ private:
 	// bTrustedTripEnd — ProcessOpenGateCharge() 주석 참고 (2026-08-25 최정우 추가)
 	void ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRawLogInfo,
 		const MATCH_LINK_INFO& stMatchLinkInfo, VEHICLE_TRIP_SESSION *pstSession,
-		vector<CHARGE_INSERT_ROW> *pvtChargeInserts, bool bTrustedTripEnd);
+		vector<CHARGE_INSERT_ROW> *pvtChargeInserts, bool bTrustedTripEnd,
+		// bTrustedMatch — 이 tick 의 최종 상태가 MATCHED 이고 좌표가 있는가(false=SKIP·좌표없음).
+		//   false 면 **새 일반도로 run 을 열지 않는다**. 엔진 내부에서는 매칭으로 취급돼도 DB 상
+		//   SKIP 인 tick 이 run 을 열면, 실측 tick 이 하나도 없는 구간에 지오메트리 추정치만으로
+		//   과금이 생긴다 — 실측 000376_20260819140532 seq4(좌표 없는 SKIP)가 2040425401 로 run 을
+		//   열어 seq4~5 에 27m 일반도로가 얹혔다. 기존 run 의 연장·마감은 종전대로 진행한다
+		//   (2026-09-07 최정우 추가, 사용자 지시)
+		bool bTrustedMatch = true);
 	// 보류(pending) 중인 1틱 지연 행을 확정(commit) — 반대편 짝 링크 1틱 오매칭이면 SKIP(미과금)으로
 	//   보정 후, 과금 함수 호출(직전 매칭 위치·시각은 보류 시점 스냅샷으로 잠깐 바꿔치기 후 원복) +
 	//   rawgps_update 큐잉까지 수행. bHasNextLinkID/qwNextLinkID=보정판단용 "다음" 확정 링크,
@@ -1027,7 +1042,17 @@ private:
 	// 배치 INSERT 직전, 같은 트립에서 연속으로 이어지는 일반도로(CHARGE_TYPE=0) 행을 하나로
 	//   합치고 거리·체류시간·평균속도를 다시 계산한다. 상세 규칙은 구현부 주석 참고
 	//   (2026-09-06 최정우 추가, 사용자 지시)
+	// 매칭된 tick 이 하나도 없는 일반도로 행을 INSERT 직전에 걸러낸다. 상세는 구현부 주석 참고
+	//   (2026-09-07 최정우 추가, 사용자 지시)
+	void DropNodeStepRowsWithoutMatch(vector<CHARGE_INSERT_ROW> *pvtCharges,
+		const vector<RAW_LOG_UPDATE_ROW>& vtUpdates);
 	void MergeAdjacentNodeStepRows(vector<CHARGE_INSERT_ROW> *pvtCharges);
+	// 이 매칭 링크를 일반도로(CHARGE_TYPE=0) run 으로 계상해도 되는지 판정. 상세는 구현부 주석 참고
+	//   (2026-09-07 최정우 추가, 사용자 지시)
+	bool IsLinkNodeStepEligible(const uint64 qwLinkID, const VEHICLE_TRIP_SESSION *pstSession);
+	// 게이트 좌표의 링크 진행거리(시작노드부터 폴리라인을 따라 잰 m). 상세는 구현부 주석 참고
+	//   (2026-09-07 최정우 추가, 사용자 지적)
+	double GatePosOnLink(uint64 qwLinkID, double dfLon, double dfLat);
 	bool BulkInsertCharges(PGconn *pcConn, const vector<CHARGE_INSERT_ROW>& vtCharges);
 	// 트립 종료 시 그 trip_id 의 PRIM_CHARGEHAND 전 행에 trip_end_dt 반영 (2026-08-12 최정우 추가)
 	bool UpdateTripEndDt(PGconn *pcConn, const vector<TRIP_END_UPDATE_ROW>& vtRows);

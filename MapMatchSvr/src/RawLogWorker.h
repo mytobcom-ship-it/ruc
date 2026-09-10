@@ -585,14 +585,11 @@ typedef struct sVehicleTripSession
 		nNodeStepParkExitTicks(0),	// (2026-09-02 최정우 추가)
 		bHasParkTouchCarry(false),	// (2026-09-03 최정우 추가)
 		bParkTouchEverMatchedInside(false),	// (2026-09-03 최정우 추가)
-		fParkTouchFirstOutSpeed(-1.0f),
-		bHasGateExitCarry(false),
-		dfGateExitX(0.0),
-		dfGateExitY(0.0),
-		dtGateExit(0),
-		dwGateExitGpsSeq(0),
-		qwGateExitLinkID(0),
-		bGateExitAtTick(false),
+		// 아래 ParkTouch~/GateExit~ 블록은 위 struct 멤버 선언 순서와 똑같은 순서로 나열해야 한다 —
+		//   생성자 초기화 리스트는 선언 순서대로 실행되므로, 여기 순서가 어긋나면 실제 실행 순서와
+		//   달라 보여 의도와 다르게 읽히고 -Wreorder 컴파일 경고도 발생한다(2026-09-10 최정우 수정 —
+		//   이전엔 fParkTouchFirstOutSpeed~bGateExitAtTick 블록이 qwParkTouchLastInLinkID~
+		//   dwParkTouchFirstOutGpsSeq 블록보다 앞에 있어 선언 순서와 반대였음)
 		qwParkTouchLastInLinkID(0),	// (2026-09-05 최정우 추가)
 		dfParkTouchLastInX(0.0),	// (2026-09-05 최정우 추가)
 		dfParkTouchLastInY(0.0),	// (2026-09-05 최정우 추가)
@@ -602,6 +599,14 @@ typedef struct sVehicleTripSession
 		dfParkTouchFirstOutY(0.0),	// (2026-09-05 최정우 추가)
 		dtParkTouchFirstOut(0),	// (2026-09-05 최정우 추가)
 		dwParkTouchFirstOutGpsSeq(0),	// (2026-09-05 최정우 추가)
+		fParkTouchFirstOutSpeed(-1.0f),
+		bHasGateExitCarry(false),
+		dfGateExitX(0.0),
+		dfGateExitY(0.0),
+		dtGateExit(0),
+		dwGateExitGpsSeq(0),
+		qwGateExitLinkID(0),
+		bGateExitAtTick(false),
 		bParkTouchHasFirstOut(false),	// (2026-09-05 최정우 추가)
 		bHasHeldNodeStepRun(false),	// (2026-09-03 최정우 추가)
 		bHasHandoffGapChecked(false),	// (2026-09-03 최정우 추가)

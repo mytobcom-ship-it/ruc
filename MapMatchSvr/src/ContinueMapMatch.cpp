@@ -736,9 +736,17 @@ bool CContinueMapMatch::GetLinkDepthInfo(set<uint64> *psetSearchHistoryLinkList,
 			stDepthLinkInfoData.dwEndSgmtOffset = stDepthLinkInfoData.dwStartSgmtOffset + pstLinkInfo->wSgmtCount;
 
 			// 이 링크(qwOutLinkID)는 it->qwLinkID(확장 중인 직전 링크)를 거쳐 도달함 — 경로
-			//   역추적용 기록. 링크당 최초 1회만 발견되므로(위 history 체크) 덮어쓸 일 없음 (2026-08-20 최정우 추가)
+			//   역추적용 기록. (2026-08-20 최정우 추가)
+			// 원래 "링크당 최초 1회만 발견되므로 덮어쓸 일 없음"이라 operator[] 를 썼으나 틀렸다 —
+			//   위 history 체크(psetSearchHistoryLinkList)는 "이전 depth 까지" 방문만 걸러내고,
+			//   같은 depth 안에서 서로 다른 링크가 같은 후속 링크로 수렴(도로 합류)하는 건 못 걸러낸다.
+			//   그 경우 나중에 처리되는 쪽이 parent 를 덮어써 mapParentLink 에 사이클이 생길 수 있고,
+			//   ReconstructPath() 의 역추적 루프가 그 사이클을 만나면 무한루프에 빠진다 — 전체
+			//   재맵매칭 중 특정 트립에서 메모리가 무한 증가하는 것으로 실측 확인됨. insert()로
+			//   바꿔 "최초 발견된 parent만" 유지하면 이런 사이클 자체가 생기지 않는다
+			//   (2026-09-10 최정우 수정)
 			if (pmapParentLink != nullptr)
-				(*pmapParentLink)[pstTurnInfo->qwOutLinkID] = it->qwLinkID;
+				pmapParentLink->insert(std::make_pair(pstTurnInfo->qwOutLinkID, it->qwLinkID));
 
 			plistDepthLinkInfoList->push_back(stDepthLinkInfoData);
 		}
@@ -850,8 +858,10 @@ void CContinueMapMatch::BridgeNearbyLinkStarts(uint64 qwFromLinkID, double dfEnd
 			// TURNINFO 아닌 좌표 근접으로 찾은 후보 — 위상 우선순위 페널티 대상 표시 (2026-08-21 최정우 추가)
 			stDepthLinkInfoData.bGeometricBridge = true;
 
+			// operator[] 덮어쓰기가 mapParentLink 사이클을 만들 수 있어 insert()로 변경 —
+			//   GetLinkDepthInfo() 쪽 동일 수정과 같은 이유 (2026-09-10 최정우 수정)
 			if (pmapParentLink != nullptr)
-				(*pmapParentLink)[pstSgmt->qwLinkID] = qwFromLinkID;
+				pmapParentLink->insert(std::make_pair(pstSgmt->qwLinkID, qwFromLinkID));
 
 			plistDepthLinkInfoList->push_back(stDepthLinkInfoData);
 			setBridgedThisCall.insert(pstSgmt->qwLinkID);
@@ -876,11 +886,24 @@ void CContinueMapMatch::ReconstructPath(uint64 qwFinalLinkID, const unordered_ma
 	pvtOut->clear();
 
 	vector<uint64> vtReversed;
+	set<uint64> setWalked;					// 순환 참조 방어 — mapParentLink 에 사이클이 생기면
+											//   이 가드가 없으면 아래 while 이 영원히 돈다
+											//   (2026-09-10 최정우 추가, 전체 재맵매칭 중 메모리 무한증가로 발견)
 	uint64 qwCur = qwFinalLinkID;
 	// mapParentLink 에 없는 링크를 만나면 그게 시작 링크(확장 시작점) — 역추적 종료.
-	//   링크 수만큼(=depth 만큼, 매우 작음) 도는 루프라 무한루프 걱정 없음
+	//   링크 수만큼(=depth 만큼, 매우 작음) 도는 루프라 무한루프 없는 게 정상이지만,
+	//   GetLinkDepthInfo 가 같은 depth 내 서로 다른 링크에서 같은 후속 링크로 수렴하면
+	//   parent 가 덮어써져 사이클이 생길 수 있어(원인은 그쪽에서 별도로 막았음) 방어적으로
+	//   재방문을 감지해 즉시 끊는다.
 	while (true)
 	{
+		if (!setWalked.insert(qwCur).second)
+		{
+			LOGFMTE("ReconstructPath cycle detected! link=[%llu] depth=[%zu]",
+				static_cast<unsigned long long>(qwCur), vtReversed.size());
+			pvtOut->clear();
+			return;
+		}
 		vtReversed.push_back(qwCur);
 		unordered_map<uint64, uint64>::const_iterator it = mapParentLink.find(qwCur);
 		if (it == mapParentLink.end())

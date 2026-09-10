@@ -6,6 +6,7 @@
 
 long CSingleThread::m_nId = 0;
 pthread_attr_t CSingleThread::m_attr;
+long CSingleThread::m_nAttrRefCount = 0;
 
 /**
  * @brief 쓰레드 핸들러
@@ -70,7 +71,16 @@ CSingleThread::CSingleThread(const string& name)
 */
 CSingleThread::~CSingleThread()
 {
-	pthread_attr_destroy(&m_attr);
+	// [버그 수정, 2026-09-10 최정우] m_attr 은 static(전 인스턴스 공유)인데 원래 여기서 가드 없이
+	// 매번 destroy 했다 — 이 클래스를 파생하는 인스턴스가 2개 이상(CServer/CRawLogFetcher)이면
+	// 정상 종료 때마다 이미 파괴된 attr 을 또 destroy 하는 정의되지 않은 동작이었다(실측: 이
+	// glibc 에서는 두 번째 destroy도 조용히 성공 반환해 당장 크래시로는 안 이어졌으나, 표준
+	// 위반이라 향후 libc 변경이나 이 attr 에 동적 자원을 쓰는 API가 추가되면 실제 이중 해제로
+	// 터질 수 있는 구조적 결함). m_nId 는 threadHandler() 에서 다른 용도(-1 리셋)로 이미 쓰이고
+	// 있어 재활용하면 위험해, 이 카운터만 별도로 둬서 마지막 살아있는 인스턴스가 소멸할 때만
+	// destroy 하도록 고친다.
+	if (--m_nAttrRefCount <= 0)
+		pthread_attr_destroy(&m_attr);
 	pthread_mutex_destroy(&m_mutex);
 	pthread_cond_destroy(&m_cond);
 }
@@ -96,6 +106,7 @@ void CSingleThread::Initialize(const string& name)
 		pthread_attr_setdetachstate(&m_attr, PTHREAD_CREATE_DETACHED);
 	}
 	m_nId++;
+	m_nAttrRefCount++;			// (2026-09-10 최정우 추가) — 소멸자의 destroy-once 가드 카운터
 	pthread_mutex_unlock(&m_mutex);
 }
 

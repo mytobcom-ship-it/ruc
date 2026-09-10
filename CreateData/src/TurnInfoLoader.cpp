@@ -175,11 +175,28 @@ bool CTurnInfoLoader::Load(const string& strDbfPath)
 
 		size_t nPos = 1;
 		vector<string> vtValues;
+		bool bRecordBoundsOk = true;
 		for (size_t f=0; f<vtFields.size(); ++f)
 		{
+			// [버그 수정, 2026-09-10 최정우] 필드 기술자(vtFields[f].nLength)들의 길이 합이
+			// 실제 레코드 크기(wRecordSize, vtRecord.size())보다 크게 어긋난 손상 파일이면,
+			// &vtRecord[nPos] 에서 nLength 바이트를 읽는 TrimField 가 vtRecord(고정 크기
+			// vector<char>) 끝을 넘어 heap-buffer-overflow read를 일으킨다 — ShapeFile.cpp의
+			// 동일 패턴(길이 값들 간 상호 검증 부재)과 같은 근본 원인. 이번 필드가 레코드
+			// 범위를 넘으면 이 레코드 전체를 버린다(정상 파일에서는 항상 안 걸림).
+			if ((nPos + vtFields[f].nLength) > vtRecord.size())
+			{
+				LOGFMTE("turninfo dbf field out of record bounds!skip record field=[%s] pos=[%zu] "
+					"len=[%d] recordSize=[%zu]",
+					vtFields[f].strName.c_str(), nPos, vtFields[f].nLength, vtRecord.size());
+				bRecordBoundsOk = false;
+				break;
+			}
 			vtValues.push_back(TrimField(&vtRecord[nPos], vtFields[f].nLength));
 			nPos += vtFields[f].nLength;
 		}
+		if (!bRecordBoundsOk)
+			continue;
 
 		uint64 qwInLinkID = ParseLinkID(vtValues[static_cast<size_t>(nStLinkIdx)]);
 		uint64 qwOutLinkID = ParseLinkID(vtValues[static_cast<size_t>(nEdLinkIdx)]);

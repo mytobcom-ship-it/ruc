@@ -86,13 +86,19 @@ bool CSQLAccessor::Load()
 
 		if (buf[0] == '#') continue;
 
-		for (; read>0 && isspace(buf[read-1]); read--) buf[read-1] = 0x00;
+		// [버그 수정, 2026-09-10 최정우] isspace() 는 인자가 unsigned char 범위(또는 EOF)여야
+		// 하는데 buf 는 (플랫폼 기본) signed char 라, UTF-8 멀티바이트 문자(한글 등)의 0x80 이상
+		// 바이트를 그대로 넘기면 음수가 되어 정의되지 않은 동작이다. 실 운영 query.sql(UTF-8,
+		// 한글 주석 다수)에서 실제로 73줄이 개행 직전 이런 바이트로 끝나 매번 이 코드를 타는
+		// 것을 확인했다 — 같은 패턴을 IniReader.cpp:139 는 이미 unsigned char 캐스트로 고쳐
+		// 뒀는데 여기는 빠뜨렸다.
+		for (; read>0 && isspace(static_cast<unsigned char>(buf[read-1])); read--) buf[read-1] = 0x00;
 		if (buf[0] == 0x00) continue;
 
 		buf[read] = ' ';
 		buf[read+1] = 0x00;
 
-		for (ptr=buf; isspace(*ptr); ptr++);
+		for (ptr=buf; isspace(static_cast<unsigned char>(*ptr)); ptr++);
 
 		if (buf[0] == '[')
 		{

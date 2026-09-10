@@ -51,6 +51,20 @@ typedef struct sPoint
 
 #define POINT_SIZE														sizeof(POINT)
 
+// [버그 수정, 2026-09-10 최정우] 아래 sShapeLinkInfo/sShapeNodeInfo 는 주석에도 명시된 대로
+//   "생성 전용" — shapefile 을 읽어 가공하는 동안만 메모리에 쓰고 link.psf 로 직접 저장되는
+//   구조체가 아니다(디스크 포맷은 sDataFileHead 이후, 직렬화되는 실제 구조체들만 해당). 그런데
+//   파일 앞부분부터 걸린 pack(1) 범위 안에 이것도 같이 들어가 있어, std::vector 멤버
+//   (vtVertexs)가 비정렬 오프셋(실측: offsetof=114, alignof(vector)=8, 114%8=2)에 배치되는
+//   정의되지 않은 동작(UB)이 있었다(offsetof/alignof 직접 컴파일로 실측 확인). 처음 시도 때는
+//   이 두 구조체만 pack(1) 밖으로 빼면 디스크 포맷과 무관해 안전할 거라 판단했으나 틀렸다 —
+//   BinaryMaker.cpp SetGridMapData() 가 SHAPE_LINK_INFO 의 패킹된 바이트를 memcpy 로 통째로
+//   복사해 LINK_INFO_DATA 를 채우는 숨은 레이아웃 의존이 있어, pack 을 빼자 실제 link.psf
+//   산출물이 깨짐(재생성 비교로 확인, 854MB→807MB+내용 상이). 그 memcpy 를 필드별 명시적
+//   복사로 먼저 고친 뒤(BinaryMaker.cpp 참고) 이 pack 분리를 다시 적용 — 이번엔 재생성
+//   비교로 link.psf 바이트가 완전히 동일함을 실측 확인 후 반영.
+#pragma pack(pop)
+
 /**
  * @struct sShapeLinkInfo
  * @brief 링크, 노드 형상 속성 정보 [생성 전용]
@@ -118,6 +132,9 @@ typedef struct sShapeNodeInfo
 
 #define SHAPE_NODE_INFO_SIZE											sizeof(SHAPE_NODE_INFO)
 typedef multimap<uint64, PSHAPE_NODE_INFO>								mapShapeNodeInfo;
+
+// 여기부터 실제 link.psf 디스크 저장 포맷 — 1바이트 정렬을 다시 켠다 (2026-09-10 최정우)
+#pragma pack(push, 1)
 
 /**
  * @struct sDataFileHead

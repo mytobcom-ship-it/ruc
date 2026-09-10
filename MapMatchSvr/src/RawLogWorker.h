@@ -362,6 +362,15 @@ typedef struct sVehicleTripSession
 	bool							bGateExitAtTick;			// 새 run 의 start_gps_seq — 경계는 "마지막 안"과 이 tick
 																		//   사이에 있으므로 첫 밖 tick 을 시작 순번으로 쓴다
 	bool							bParkTouchHasFirstOut;
+	// 일반도로 연속 구간 병합용 이월 — ProcessNodeStepCharge() 안에서 run이 닫혔는데 그 순간
+	//   받아줄 다른 run이 아직 없으면 여기 잠깐 담아뒀다가, 다음에 새 run이 열릴 때 그대로
+	//   이어받는다(2026-09-01 최정우 추가). [버그 수정, 2026-09-10 최정우] 원래 함수 지역변수
+	//   였는데, "!bTrustedMatch면 새 run을 안 연다" 가드가 소비 지점보다 먼저 return 해버리면
+	//   함수가 반환되는 순간 지역변수째로 소멸해 이월값이 유실됐다(실측 87.3m 규모, 최소
+	//   재현으로 확인) — bHasGateExitCarry 와 동일하게 세션 필드로 승격해, 신뢰 못하는 tick을
+	//   만나도 없어지지 않고 나중에 신뢰 가능한 tick이 올 때까지 남아있게 한다.
+	bool							bHasMergeCarry;
+	ZONE_RUN_SESSION				stMergeCarry;
 	// 접촉 중 이탈 디바운스(node_exitcnt)로 조기 마감된 run — 위 접촉 확정 판정이 나올 때까지
 	//   즉시 등록하지 않고 보류한다. 확정 접촉이면 그대로 등록, 미확정이면 폐기하고 진입정보·
 	//   누적거리를 접촉 구간의 이월값에 합쳐 다음 run으로 이어붙인다(위와 동일 근거,
@@ -608,6 +617,7 @@ typedef struct sVehicleTripSession
 		qwGateExitLinkID(0),
 		bGateExitAtTick(false),
 		bParkTouchHasFirstOut(false),	// (2026-09-05 최정우 추가)
+		bHasMergeCarry(false),	// (2026-09-10 최정우 추가)
 		bHasHeldNodeStepRun(false),	// (2026-09-03 최정우 추가)
 		bHasHandoffGapChecked(false),	// (2026-09-03 최정우 추가)
 		bHasHeldSpeedMirrorRun(false),	// (2026-09-03 최정우 추가)

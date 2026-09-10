@@ -288,12 +288,19 @@ bool CIniReader::GetProfileInt(const string strSection, const string strKey, con
 		return false;
 	}							// if (itKey == mapKey->end())
 
-	// 숫자열인지 검사
-	if (!m_cUtil.Isdigit(itKey->second))
+	// 숫자열인지 검사 — CUtil::Isdigit() 은 선행 '-'(음수)를 지원하지 않는다. 그 함수의 다른
+	//   호출부(Util.cpp StringSplit, set<uint16> 파싱용)는 음수를 걸러내는 게 맞는 동작이라
+	//   공용 함수 자체는 그대로 두고, 부호 있는 정수 설정값을 다루는 여기서만 선행 '-' 를
+	//   떼고 나머지만 검사한다 (2026-09-10 최정우 수정 — alt_penalty 의 "음수=보너스" 설정이
+	//   Isdigit() 에서 항상 실패해 조용히 기본값으로 되돌아가던 버그. 최소 재현으로 확인)
+	string strDigitCheck = itKey->second;
+	if (!strDigitCheck.empty() && (strDigitCheck[0] == '-'))
+		strDigitCheck.erase(0, 1);
+	if (strDigitCheck.empty() || !m_cUtil.Isdigit(strDigitCheck))
 	{
 		nValue = nDefault;
 		return false;
-	}							// if (!m_cUtil.Isdigit(itKey->second))
+	}							// if (!m_cUtil.Isdigit(strDigitCheck))
 
 	// 예외 처리 추가 (2025-12-04 최정우 추가)
 	try

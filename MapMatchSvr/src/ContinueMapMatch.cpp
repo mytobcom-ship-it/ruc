@@ -735,9 +735,18 @@ bool CContinueMapMatch::GetLinkDepthInfo(set<uint64> *psetSearchHistoryLinkList,
 			stDepthLinkInfoData.dwStartSgmtOffset = pstLinkInfo->dwSgmtOffset;
 			stDepthLinkInfoData.dwEndSgmtOffset = stDepthLinkInfoData.dwStartSgmtOffset + pstLinkInfo->wSgmtCount;
 
-			// 이 링크(qwOutLinkID)는 it->qwLinkID(확장 중인 직전 링크)를 거쳐 도달함 — 경로
-			//   역추적용 기록. (2026-08-20 최정우 추가)
-			// 원래 "링크당 최초 1회만 발견되므로 덮어쓸 일 없음"이라 operator[] 를 썼으나 틀렸다 —
+			// 이 링크(qwOutLinkID)는 qwErasedLinkID(확장 중인 직전 링크, 704줄에서 erase 전에
+			//   미리 저장해둔 값)를 거쳐 도달함 — 경로 역추적용 기록. (2026-08-20 최정우 추가)
+			// [버그 수정, 2026-09-10 최정우] 원래 이 자리는 it->qwLinkID 를 썼는데 틀렸다 — 707줄
+			//   erase(it++) 가 이미 it 를 "다음" 원소(리스트에 1개뿐이면 end())로 전진시킨 뒤라,
+			//   여기서 it->qwLinkID 는 "확장 중인 직전 링크"가 아니라 무관한 값(심한 경우 list::end()
+			//   역참조, 정의되지 않은 동작)이다. 바로 아래 BridgeNearbyLinkStarts() 호출(773줄)에는
+			//   이 문제를 피하려고 이미 qwErasedLinkID 를 쓰고 있었는데 정작 여기는 빠뜨렸던 것 —
+			//   최소 재현(list 1개 원소 + erase(it++) 후 역참조)으로 값이 실제로 어긋남을 실측 확인.
+			//   부모 링크가 틀리면 ReconstructPath() 가 만드는 경유 경로 자체가 오염되어 게이트/구역
+			//   판정(5종 과금 함수)에 쓰이는 경유 링크가 틀릴 수 있어 과금 누락/오과금으로 이어질 수
+			//   있었다. it->qwLinkID 를 qwErasedLinkID 로 교체.
+			// 원래 "링크당 최초 1회만 발견되므로 덮어쓸 일 없음"이라 operator[] 를 썼으나 이것도 틀렸다 —
 			//   위 history 체크(psetSearchHistoryLinkList)는 "이전 depth 까지" 방문만 걸러내고,
 			//   같은 depth 안에서 서로 다른 링크가 같은 후속 링크로 수렴(도로 합류)하는 건 못 걸러낸다.
 			//   그 경우 나중에 처리되는 쪽이 parent 를 덮어써 mapParentLink 에 사이클이 생길 수 있고,
@@ -746,7 +755,7 @@ bool CContinueMapMatch::GetLinkDepthInfo(set<uint64> *psetSearchHistoryLinkList,
 			//   바꿔 "최초 발견된 parent만" 유지하면 이런 사이클 자체가 생기지 않는다
 			//   (2026-09-10 최정우 수정)
 			if (pmapParentLink != nullptr)
-				pmapParentLink->insert(std::make_pair(pstTurnInfo->qwOutLinkID, it->qwLinkID));
+				pmapParentLink->insert(std::make_pair(pstTurnInfo->qwOutLinkID, qwErasedLinkID));
 
 			plistDepthLinkInfoList->push_back(stDepthLinkInfoData);
 		}

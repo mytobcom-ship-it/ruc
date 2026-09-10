@@ -278,6 +278,20 @@ void CPostgrePool::keepPoolAlive()
 	sleep(m_nTimeOut);
 	while (true)
 	{
+		// [버그 수정, 2026-09-10 최정우] UninitializePool() 은 이 스레드를 pthread_cancel() 로
+		//   깨우는데, 기본 취소 상태(PTHREAD_CANCEL_ENABLE, deferred)라 m_cMutex 를 쥔 채로
+		//   pingConnection()/createConnection() 내부의 블로킹 소켓 호출(recv/send/connect, 전부
+		//   POSIX 취소 지점)에서 취소가 그대로 먹힐 수 있다 — 그러면 unlock 이 실행될 기회 없이
+		//   스레드가 즉시 종료돼 m_cMutex 가 영원히 잠긴 채로 남고, UninitializePool() 뒷부분의
+		//   재획득 루프가 그 뮤텍스를 다시 잠그려다 영구 대기(데드락)에 빠진다 — 실제 pthread
+		//   취소로 재현 확인(뮤텍스 보유 중 취소 → 이후 lock 시도가 타임아웃 없이 블록).
+		//   2026-08-14 수정은 "호출측이 락 쥔 채 취소"만 막았고, "취소당하는 쪽이 락을 쥔 채
+		//   취소 지점에서 죽는" 이 경우는 못 막았다. 뮤텍스를 쥐고 있는 구간에서만 취소를
+		//   비활성화해, 이 구간 안에서는 취소 요청이 즉시 반영되지 않고 대기했다가 sleep()
+		//   에서(취소 지점, 락 밖) 처리되게 한다.
+		int nOldCancelState;
+		pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &nOldCancelState);
+
 		m_cMutex.lock();
 
 		while (static_cast<int>(m_dqQueue.size()) > m_nMinConnect)
@@ -304,6 +318,9 @@ void CPostgrePool::keepPoolAlive()
 		}
 
 		m_cMutex.unlock();
+
+		pthread_setcancelstate(nOldCancelState, nullptr);
+
 		sleep(m_nTimeOut);
 	}
 }

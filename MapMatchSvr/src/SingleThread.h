@@ -63,6 +63,12 @@ private:
 	bool							m_bIsInterrupted;
 	static pthread_attr_t			m_attr;
 	static long						m_nId;
+	// [버그 수정, 2026-09-10 최정우] m_attr(위)은 static(전 인스턴스 공유)인데, 소멸자가 가드
+	// 없이 매번 pthread_attr_destroy(&m_attr) 를 불러 인스턴스가 2개 이상(CServer/CRawLogFetcher
+	// 둘 다 이 클래스 파생) 있으면 이미 파괴된 attr 을 또 파괴한다(정의되지 않은 동작). m_nId 는
+	// threadHandler() 에서 스레드 종료 시각 -1 로 재사용되는 다른 용도라 재활용하면 위험 —
+	// attr 의 생존 인스턴스 수만 세는 전용 카운터를 별도로 둔다.
+	static long						m_nAttrRefCount;
 };
 
 /**

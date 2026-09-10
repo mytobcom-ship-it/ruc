@@ -499,12 +499,41 @@ bool CBinaryMaker::SetGridMapData()
 
 		memset(reinterpret_cast<void *>(&stLinkInfoData), 0, LINK_INFO_DATA_SIZE);
 
-		// 링크별 회전 정보 Offset, Count 구하기
-		memcpy(&stLinkInfoData, it->second, LINK_INFO_DATA_SIZE);
+		// [버그 수정, 2026-09-10 최정우] 원래는 memcpy(&stLinkInfoData, it->second, LINK_INFO_DATA_SIZE)
+		// 로 SHAPE_LINK_INFO(생성 전용, DataFormat.h) 의 바이트를 통째로 복사했다 — 두 구조체가
+		// 앞부분 필드 구성·순서가 같고 둘 다 pack(1) 이라 우연히 맞아떨어지는 것에 기댄 코드였다.
+		// SHAPE_LINK_INFO 안의 std::vector<POINT> vtVertexs 가 pack(1) 때문에 비정렬 오프셋에
+		// 놓이는 별개의 버그(offsetof=114, alignof(vector)=8)를 고치려고 SHAPE_LINK_INFO 를
+		// pack(1) 범위 밖으로 빼자, 이 memcpy 가 근거로 삼던 "레이아웃 일치" 가정이 깨지면서
+		// 실제로 link.psf 산출물이 손상됨을 재생성 비교(854MB→807MB, 내용도 다름)로 확인했다.
+		// 레이아웃 가정에 기대지 않도록 필드를 하나씩 이름으로 복사하도록 바꾼다 — 어느 쪽
+		// 구조체의 패킹/정렬이 바뀌어도 항상 안전하다.
+		stLinkInfoData.qwLinkID = it->second->qwLinkID;
+		stLinkInfoData.dwSgmtOffset = it->second->dwSgmtOffset;
+		stLinkInfoData.wSgmtCount = it->second->wSgmtCount;
+		stLinkInfoData.dwTurnOffset = it->second->dwTurnOffset;
+		stLinkInfoData.nTurnCount = it->second->nTurnCount;
+		stLinkInfoData.nMaxSpeed = it->second->nMaxSpeed;
+		stLinkInfoData.dfLen = it->second->dfLen;
+		stLinkInfoData.nRoadRank = it->second->nRoadRank;
+		stLinkInfoData.nConnect = it->second->nConnect;
+		stLinkInfoData.nRoadType = it->second->nRoadType;
+		stLinkInfoData.nLanes = it->second->nLanes;
+		stLinkInfoData.nRestVeh = it->second->nRestVeh;
+		stLinkInfoData.nRoadUse = it->second->nRoadUse;
+		memcpy(stLinkInfoData.szRoadName, it->second->szRoadName, sizeof(stLinkInfoData.szRoadName));
+		stLinkInfoData.qwStNodeID = it->second->qwStNodeID;
+		stLinkInfoData.dwStNodeX = it->second->dwStNodeX;
+		stLinkInfoData.dwStNodeY = it->second->dwStNodeY;
+		stLinkInfoData.nStNodeType = it->second->nStNodeType;
+		stLinkInfoData.qwEdNodeID = it->second->qwEdNodeID;
+		stLinkInfoData.dwEdNodeX = it->second->dwEdNodeX;
+		stLinkInfoData.dwEdNodeY = it->second->dwEdNodeY;
+		stLinkInfoData.nEdNodeType = it->second->nEdNodeType;
 
 		// 반대방향(왕복분리) 짝 링크 ID — 사전 계산된 페어링 결과 적용, 없으면 0.
-		//   위 memcpy 는 SHAPE_LINK_INFO 쪽 필드 레이아웃을 그대로 복사해오는 용도라, 새로 추가된
-		//   본 필드는 memcpy 이후 여기서 실제 값으로 명시적으로 덮어써야 한다 (2026-08-19 최정우 추가)
+		//   SHAPE_LINK_INFO 에는 없는 필드라 위 필드별 복사와 별개로 여기서 채운다
+		//   (2026-08-19 최정우 추가)
 		unordered_map<uint64, uint64>::const_iterator opp_it = m_mapOppositeLinkID->find(it->first);
 		stLinkInfoData.qwOppositeLinkID = (opp_it != m_mapOppositeLinkID->end()) ? opp_it->second : 0;
 

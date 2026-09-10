@@ -230,6 +230,28 @@ bool CShapeFile::LoadShp(const string& strShpFile)
 			sint32 nNumPoints = ReadLE32(c + 40);
 			size_t nPtStart = 44 + static_cast<size_t>(nNumParts) * 4;
 
+			// [버그 수정, 2026-09-10 최정우] nNumPoints 는 레코드 "본문"에서 읽은 값이라, 위
+			// nContentBytes 경계검사(레코드 헤더의 선언 길이 기준)와 별도로 검증된 적이 없었다.
+			// 파일이 손상되거나 다운로드 중 잘려서(truncated) 본문의 nNumPoints 가 실제 담긴
+			// 버텍스 개수보다 크게 깨져 있으면, 아래 루프가 이 레코드의 실제 바이트 범위(심하면
+			// 버퍼 전체)를 넘어 읽는 heap-buffer-overflow가 된다 — 최소 재현 + valgrind로 실제
+			// "Invalid read" 확인. nNumParts/nNumPoints 가 음수이거나, 버텍스 전체가 이 레코드의
+			// 선언된 nContentBytes 범위를 넘으면 이 레코드는 건너뛴다(정상 파일에서는 항상
+			// 안 걸림 — 손상된 입력에 대한 방어일 뿐, 정상 동작은 그대로).
+			bool bBoundsOk = (nNumParts >= 0) && (nNumPoints >= 0)
+				&& (nPtStart <= nContentBytes)
+				&& ((nContentBytes - nPtStart) >= (static_cast<size_t>(nNumPoints) * 16));
+			if (!bBoundsOk)
+			{
+				LOGFMTE("shp record vertex bounds invalid!skip record num=[%u] nParts=[%d] nPoints=[%d] "
+					"ptStart=[%zu] contentBytes=[%zu] file=[%s]",
+					dwRec, nNumParts, nNumPoints, nPtStart, nContentBytes, strShpFile.c_str());
+				m_vtPolyLine.push_back(vector<POINT>());
+				nPos += nContentBytes;
+				++dwRec;
+				continue;
+			}
+
 			vector<POINT> vtPoints;
 			if (nNumPoints > 0) vtPoints.reserve(static_cast<size_t>(nNumPoints));
 			for (sint32 i=0; i<nNumPoints; ++i)
@@ -296,7 +318,14 @@ bool CShapeFile::LoadDbf(const string& strDbfFile)
 
 	uint32 dwFieldOffset = 1;
 	size_t nPos = 32;
-	while ((nPos + 32) <= wHeaderSize && nPos < vtBuf.size())
+	// [버그 수정, 2026-09-10 최정우] wHeaderSize 는 파일(손상됐을 수 있음)에서 읽은 값이라
+	// 실제 버퍼 크기(vtBuf.size())와 무관할 수 있다. 원래 조건은 "nPos < vtBuf.size()"만 걸려
+	// 있어, 헤더가 도중에 잘린 파일(wHeaderSize는 크게 기록돼 있는데 실제 파일은 그보다 짧음)
+	// 이면 nPos+32 가 실제 버퍼 끝을 넘어도 이 조건은 통과해버려, 아래 필드 읽기(memcpy 11바이트
+	// + pBase[nPos+11]/[nPos+16])가 heap-buffer-overflow read를 일으킨다 — nPos+32<=vtBuf.size()
+	// 도 같이 요구해 실제 버퍼 경계를 절대 못 넘게 한다(정상 파일에서는 항상 만족하므로 동작
+	// 변화 없음).
+	while ((nPos + 32) <= wHeaderSize && (nPos + 32) <= vtBuf.size())
 	{
 		if (pBase[nPos] == 0x0D)
 			break;

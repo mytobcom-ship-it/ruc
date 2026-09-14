@@ -816,6 +816,14 @@ void CRawLogWorker::AppendExpiredExemptZoneCharge(int nThreadId, const string& s
  * \t  FROM_ID 가 2040424801 로 찍혔다. 올바른 표기는 **2040424803 → 2040424803** 이다.
  * \t  FROM_LAT/LON 은 실제 관측된 마지막 매칭 좌표를 그대로 둔다 — 링크 시작 노드로 바꾸면 실측이
  * \t  아닌 값이 되고, 둘의 차이는 애초에 세지 않는 잔여 구간(위 실측 0.46m)뿐이다.
+ * \t  **주정차 폴리곤이 없는 일반 진출~진입 gap 복구**(FindLinkPathBounded 만 쓰는 경로)도 복구 중간
+ * \t  링크마다 IsCase3EligibleRoadKind() 로 걸러, 다른 과금유형(개방식·폐쇄식·면제)에 등록된 링크를
+ * \t  만나면 그 직전에서 멈춘다 — 일반도로(0)·구간단속(3) 등록 또는 미등록 링크만 통과시킨다. 케이스3
+ * \t  (SKIP 구간 브릿지)에 이미 확정해 쓰던 것과 같은 기준이다(사용자 지시, 2026-09-14 최정우 수정 —
+ * \t  실측 000370_20260911141637 trip_seq=5: 개방식 RL-Z00004 등록 링크 2040424103 이 검사 없이
+ * \t  흡수돼 TO_ID/DIST_M 이 그 링크만큼 과다·오기재됨. 구간단속은 예외 — 위반 없이 통과한 구간단속
+ * \t  구역은 자체적으로 일반도로 미러(3a)를 만들어 결과적으로 일반도로 과금과 동등하므로 함께 흡수해도
+ * \t  이중계상이 아니다).
  *
  * \t**7. 주정차 폴리곤을 나가며 시작하는 run — 거리와 시간을 반드시 같은 기준점에서 잰다**
  * \t(2026-09-06 최정우 정리, 사용자 지시 — 실측 000376_20260819093337 seq52~62 로 전 구간 검증)
@@ -5030,6 +5038,46 @@ void CRawLogWorker::ProcessOpenGateCharge(int nThreadId, const sRawLogInfo& stRa
 			stRun.dfFirstOutY = stMatchLinkInfo.dfMatchY;
 			stRun.dtFirstOut = stRawLogInfo.dtGPS;
 			stRun.qwFirstOutLinkID = stMatchLinkInfo.qwLinkID;
+
+			// 개방식 진출 지점 이월(bHasGateExitCarry) — 폐쇄식/구간단속은 진출 확정 시 이 이월을
+			//   하는데 개방식만 빠져 있었다(버그 수정, 2026-09-14 최정우 — 실측
+			//   000370_20260911141637 seq89~91: 개방식 종료좌표와 바로 다음 일반도로 시작좌표 사이
+			//   실측 27m 가 이월이 없어 어느 기록에도 안 잡힘). 개방식은 진출 판정 기준이 게이트
+			//   (측정용 M게이트일 뿐 경계 아님)가 아니므로, 구역 안 마지막 링크의 종료 노드를 진출
+			//   경계로 삼는다. **여기(첫 밖 tick)에서 바로 이월해야 한다** — 개방식은 node_exitcnt
+			//   디바운스를 거쳐야 진출이 최종 확정되는데(아래), NODE_STEP은 그 확정을 기다리지 않고
+			//   같은 tick에 곧바로 새 run을 연다. 이월을 디바운스 확정 시점(기존 위치)에 해뒀더니
+			//   NODE_STEP이 이미 그 전에 원시좌표로 진입점을 확정해버려 이월이 항상 한 박자 늦었다
+			//   (재검증으로 확인 — 폐쇄식/구간단속은 게이트 위치 기반이라 확정이 즉시라 이 문제가 없음).
+			if ((stRun.qwLastLinkID != 0) && (m_stConfig.pcDataLoader != nullptr))
+			{
+				PLINK_INFO pstExitLink = m_stConfig.pcDataLoader->GetLinkInfo(stRun.qwLastLinkID);
+				if (pstExitLink != nullptr)
+				{
+					POINT stFrom, stNode;
+					stFrom.dfX = stRun.dfLastX;  stFrom.dfY = stRun.dfLastY;
+					stNode.dfX = static_cast<double>(pstExitLink->dwEdNodeX) / 360000.0;
+					stNode.dfY = static_cast<double>(pstExitLink->dwEdNodeY) / 360000.0;
+
+					pstSession->bHasGateExitCarry = true;
+					pstSession->dfGateExitX = stNode.dfX;
+					pstSession->dfGateExitY = stNode.dfY;
+					pstSession->dtGateExit = InterpolateGateCrossingTime(
+						stFrom.dfX, stFrom.dfY, stRun.dtLastInZoneTime,
+						stRun.dfFirstOutX, stRun.dfFirstOutY, stRun.dtFirstOut,
+						stNode.dfX, stNode.dfY);
+					pstSession->dwGateExitGpsSeq = stRun.dwLastInZoneGpsSeq;
+					pstSession->qwGateExitLinkID = stRun.qwLastLinkID;
+					pstSession->bGateExitAtTick =
+						(HaversineMeters(stNode, stFrom) <= 2.0);
+
+					LOGFMTI("[#%02d] open gate exit carry armed!device=[%s] trip_id=[%s] seq=[%u] "
+						"road=[%s] last_link=[%llu] node=[%.6f,%.6f]",
+						nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRawLogInfo.dwSeqNo,
+						stRun.szRoadID, static_cast<unsigned long long>(stRun.qwLastLinkID),
+						stNode.dfY, stNode.dfX);
+				}
+			}
 		}
 
 		if (bSameZone && !bTripEnding) { ++si; continue; }		// 계속 진행 중
@@ -8131,6 +8179,8 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 	{
 		pstSession->bHasGateExitCarry = false;
 		pstSession->bGateExitAtTick = false;
+		LOGFMTI("[#%02d] gate exit carry invalidated(other charge type)!device=[%s] trip_id=[%s] seq=[%u]",
+			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRawLogInfo.dwSeqNo);
 	}
 
 	// 트립 종료(TRIP_EVENT=2) — 구역 위인 채로 끝나면 "이탈" 신호가 영영 안 옴, 즉시 강제 마감.
@@ -8507,7 +8557,7 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 		uint64 qwGapSearchTo = (stRun.qwFirstOutLinkID != 0) ? stRun.qwFirstOutLinkID : stMatchLinkInfo.qwLinkID;
 		if (!bSameZone && !bTripEnding && (stRun.qwLastLinkID != 0)
 			&& (qwGapSearchTo != 0) && (stRun.qwLastLinkID != qwGapSearchTo)
-			&& (m_stConfig.pcDataLoader != nullptr))
+			&& (m_stConfig.pcDataLoader != nullptr) && (m_stConfig.pcChargeDataLoader != nullptr))
 		{
 			static const int MM_NODE_STEP_EXIT_GAP_MAX_HOPS = 6;			// 2026-09-01 최정우 수정 —
 				// 3으로는 부족했음(실측 000376_20260819094414: 2040424401→2040424301 사이 실제
@@ -8518,15 +8568,26 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 			{
 				double dfGapDistM = 0.0;
 				bool bAllLenOk = true;
+				uint64 qwNewLastLink = 0;
 				for (size_t g = 1; g + 1 < vtGapPath.size(); ++g)
 				{
+					// 복구 경로 중간 링크가 다른 과금유형(개방식·폐쇄식·면제)에 등록돼 있으면 그
+					//   직전에서 멈춘다 — 그 링크부터는 그 유형 자신의 로직이 처리할 몫이라 일반도로가
+					//   흡수하면 안 된다. 케이스3(SKIP 구간 브릿지)에 이미 쓰던 것과 동일 판정 기준을
+					//   재사용(IsCase3EligibleRoadKind — 일반도로(0)·구간단속(3) 등록 또는 미등록만
+					//   통과, 그 외는 제외)(사용자 지시, 2026-09-14 최정우 수정 — 실측
+					//   000370_20260911141637 trip_seq=5: 개방식 RL-Z00004 등록 링크 2040424103 이
+					//   여기서 무조건 흡수돼 TO_ID/DIST_M 이 그 링크만큼 과다·오기재됨)
+					if (!m_stConfig.pcChargeDataLoader->IsCase3EligibleRoadKind(vtGapPath[g]))
+						break;
+
 					PLINK_INFO pstGapLink = m_stConfig.pcDataLoader->GetLinkInfo(vtGapPath[g]);
 					if (pstGapLink == nullptr) { bAllLenOk = false; break; }
 					dfGapDistM += pstGapLink->dfLen;
+					qwNewLastLink = vtGapPath[g];
 				}
 
-				uint64 qwNewLastLink = vtGapPath[vtGapPath.size() - 2];
-				PLINK_INFO pstNewLastLink = bAllLenOk
+				PLINK_INFO pstNewLastLink = (bAllLenOk && (qwNewLastLink != 0))
 					? m_stConfig.pcDataLoader->GetLinkInfo(qwNewLastLink) : nullptr;
 				if (pstNewLastLink != nullptr)
 				{
@@ -8536,9 +8597,9 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 					stRun.dfLastY = static_cast<double>(pstNewLastLink->dwEdNodeY) / 360000.0;
 
 					LOGFMTI("[#%02d] node step exit gap-link corrected!device=[%s] trip_id=[%s] "
-						"road=[%s] to_link=[%llu] hops=[%zu] gap_dist=[%.1f]m",
+						"road=[%s] to_link=[%llu] gap_dist=[%.1f]m",
 						nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRun.szRoadID,
-						static_cast<unsigned long long>(qwNewLastLink), vtGapPath.size() - 2, dfGapDistM);
+						static_cast<unsigned long long>(qwNewLastLink), dfGapDistM);
 				}
 			}
 		}
@@ -8609,6 +8670,139 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 		pstSession->bHasHeldSpeedMirrorRun = false;
 	}
 
+	// 게이트형 구역(개방식·폐쇄식) 진출 지점 이월(bHasGateExitCarry) 소비 — 케이스1(정식 등록구역
+	//   진입, 바로 아래)·케이스2(미등록 pseudo-zone 진입, 이 함수 뒤쪽) 양쪽에서 똑같이 써야 한다.
+	//   원래 케이스2에만 있었는데, 복구/현재 tick 링크가 정식 등록된 일반도로(0) 구역에 바로 떨어지면
+	//   케이스1로 진입해 이 이월이 아예 소비되지 않고, "게이트 진출 이월 무효화"(vtZones 가 비어있을
+	//   때만 발동)도 안 걸려 이월값이 세션에 계속 남는 문제가 있었다 — 최악의 경우 한참 뒤 엉뚱한
+	//   run이 잘못 흡수(2026-09-11 고친 stale 이월 버그와 동일 유형). 두 곳에서 중복 구현하면 어긋날
+	//   위험이 있어 지역 람다로 한 번만 구현한다(사용자 지적, 2026-09-14 최정우 추가).
+	//   FindLinkPathBounded 로 이월 지점~이번 tick 사이 누락 링크를 복구해, 중간 링크마다
+	//   IsCase3EligibleRoadKind() 로 걸러(케이스3 SKIP 브릿지와 동일 기준) 방금 닫힌 구역 자신의
+	//   잔여 등록 링크는 제외하고 일반도로(0)·구간단속(3) 등록 또는 미등록 링크만 거리에 반영한다.
+	//   경로를 못 찾거나 직접 인접이면 직선거리로 폴백. FROM_ID(qwEntryLinkID)는 복구 경로에서
+	//   처음으로 거리 기여가 있었던 링크로 남긴다("거리 누적이 실제로 시작된 링크" 원칙, 2026-09-06
+	//   확정 규칙).
+	auto ApplyGateExitCarryDist = [&](ZONE_RUN_SESSION *pstRunForCarry) -> double
+	{
+		double dfCarryDistM = 0.0;
+		bool bCarryPathApplied = false;
+		uint64 qwCarryFromLinkID = 0;
+		if ((pstSession->qwGateExitLinkID != 0) && (m_stConfig.pcDataLoader != nullptr)
+			&& (m_stConfig.pcChargeDataLoader != nullptr))
+		{
+			static const int MM_GATE_CARRY_MAX_HOPS = 6;
+			vector<uint64> vtCarryPath;
+			if (FindLinkPathBounded(pstSession->qwGateExitLinkID, stMatchLinkInfo.qwLinkID,
+					MM_GATE_CARRY_MAX_HOPS, &vtCarryPath) && (vtCarryPath.size() > 2))
+			{
+				bool bAllLenOk = true;
+				// "섬" 단위로 걷는다 — 복구 경로 중간에 다른 과금유형(개방식·폐쇄식·면제) 등록
+				//   링크가 끼어 있으면, 그 직전까지 쌓인 일반도로 구간을 독립된 레코드로 즉시
+				//   마감하고 그 링크 다음부터 새 섬을 시작한다. 마지막 섬만 호출측이 계속 진행 중인
+				//   run 으로 이어받는다. 예전엔 중간 등록 링크를 그냥 건너뛰기만 해서 앞뒤 일반도로가
+				//   하나로 합쳐졌다(사용자 지적, 2026-09-14 최정우 수정 — 실측
+				//   000376_20260819141002: 폐쇄식 진출 뒤 일반도로(2040423802)→개방식 등록
+				//   (2040423602)→일반도로(2040423302) 순서인데 세 구간이 하나로 병합돼 있었다).
+				//   섬 사이 경계(등록 링크 자체)는 실측 tick이 없어 정확한 시각을 모르므로, 편의상
+				//   게이트 진출 tick 시각/순번을 그대로 쓴다(다른 지오메트리 전용 보정과 동일 관례).
+				double dfIslandDistM = 0.0;
+				uint64 qwIslandFromLinkID = 0;
+				uint64 qwIslandLastLinkID = 0;
+				double dfIslandEntryX = pstSession->dfGateExitX;
+				double dfIslandEntryY = pstSession->dfGateExitY;
+
+				for (size_t g = 1; (g + 1 < vtCarryPath.size()) && bAllLenOk; ++g)
+				{
+					PLINK_INFO pstCarryLink = m_stConfig.pcDataLoader->GetLinkInfo(vtCarryPath[g]);
+					if (pstCarryLink == nullptr) { bAllLenOk = false; break; }
+
+					if (m_stConfig.pcChargeDataLoader->IsCase3EligibleRoadKind(vtCarryPath[g]))
+					{
+						dfIslandDistM += pstCarryLink->dfLen;
+						if (qwIslandFromLinkID == 0)
+							qwIslandFromLinkID = vtCarryPath[g];
+						qwIslandLastLinkID = vtCarryPath[g];
+						continue;
+					}
+
+					// 다른 과금유형 등록 링크 — 지금까지 쌓인 섬이 있으면 독립 레코드로 즉시 마감
+					if (qwIslandFromLinkID != 0)
+					{
+						double dfIslandExitX = static_cast<double>(pstCarryLink->dwStNodeX) / 360000.0;
+						double dfIslandExitY = static_cast<double>(pstCarryLink->dwStNodeY) / 360000.0;
+
+						ZONE_RUN_SESSION stIslandRun;
+						stIslandRun.dtEntryTime = pstSession->dtGateExit;
+						stIslandRun.dwEntryGpsSeq = pstSession->dwGateExitGpsSeq;
+						stIslandRun.dfEntryX = dfIslandEntryX;
+						stIslandRun.dfEntryY = dfIslandEntryY;
+						stIslandRun.qwEntryLinkID = qwIslandFromLinkID;
+						stIslandRun.dfAccumDistM = dfIslandDistM;
+						stIslandRun.qwLastLinkID = qwIslandLastLinkID;
+						stIslandRun.dfLastX = dfIslandExitX;
+						stIslandRun.dfLastY = dfIslandExitY;
+						stIslandRun.dtLastInZoneTime = pstSession->dtGateExit;
+						stIslandRun.dwLastInZoneGpsSeq = pstSession->dwGateExitGpsSeq;
+
+						CHARGE_INSERT_ROW stIslandRow;
+						BuildNodeStepRow(stIslandRun, stRawLogInfo.szTripID, stRawLogInfo.szDeviceKey,
+							pstSession->nChargeSeq, pstSession->dtGateExit, pstSession->dwGateExitGpsSeq,
+							"Y", "0", &stIslandRow);
+						// gps_seq가 게이트 진출 tick과 겹치거나 붙어 있어 MergeAdjacentNodeStepRows()가
+						//   바로 뒤 일반도로 행과 다시 합쳐버릴 수 있다 — 사이에 실제로 다른 과금유형
+						//   등록 링크가 껴 있어 진짜로 끊긴 구간이므로 병합 금지 표시 (2026-09-14 최정우 추가)
+						stIslandRow.bNoMergeAfter = true;
+						pvtChargeInserts->push_back(stIslandRow);
+
+						LOGFMTI("[#%02d] node step island split(mid-path other charge type)!device=[%s] "
+							"trip_id=[%s] seq=[%d] from_link=[%llu] dist_m=[%.1f]m skip_link=[%llu]",
+							nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID,
+							pstSession->nChargeSeq, static_cast<unsigned long long>(qwIslandFromLinkID),
+							dfIslandDistM, static_cast<unsigned long long>(vtCarryPath[g]));
+
+						pstSession->nChargeSeq += 1;
+					}
+
+					// 다음 섬은 이 등록 링크의 끝 노드부터 시작
+					dfIslandEntryX = static_cast<double>(pstCarryLink->dwEdNodeX) / 360000.0;
+					dfIslandEntryY = static_cast<double>(pstCarryLink->dwEdNodeY) / 360000.0;
+					dfIslandDistM = 0.0;
+					qwIslandFromLinkID = 0;
+					qwIslandLastLinkID = 0;
+				}
+				if (bAllLenOk)
+				{
+					POINT stLinkStart, stCurPt2;
+					stLinkStart.dfX = stMatchLinkInfo.dfStNodeX;
+					stLinkStart.dfY = stMatchLinkInfo.dfStNodeY;
+					stCurPt2.dfX = stMatchLinkInfo.dfMatchX;
+					stCurPt2.dfY = stMatchLinkInfo.dfMatchY;
+					dfIslandDistM += HaversineMeters(stLinkStart, stCurPt2);
+
+					dfCarryDistM = dfIslandDistM;
+					qwCarryFromLinkID = qwIslandFromLinkID;
+					// 마지막 섬이 원래 게이트 지점과 다른 곳에서 시작하면(중간에 분리됐으면) 호출측
+					//   run 의 진입좌표도 이 마지막 섬 기준으로 갱신한다 — 분리가 없었으면 게이트
+					//   지점과 동일해 변화 없음
+					pstRunForCarry->dfEntryX = dfIslandEntryX;
+					pstRunForCarry->dfEntryY = dfIslandEntryY;
+					bCarryPathApplied = true;
+				}
+			}
+		}
+		if (!bCarryPathApplied)
+		{
+			POINT stGatePt, stCurPt;
+			stGatePt.dfX = pstSession->dfGateExitX;  stGatePt.dfY = pstSession->dfGateExitY;
+			stCurPt.dfX = stMatchLinkInfo.dfMatchX;  stCurPt.dfY = stMatchLinkInfo.dfMatchY;
+			dfCarryDistM = HaversineMeters(stGatePt, stCurPt);
+		}
+		if (qwCarryFromLinkID != 0)
+			pstRunForCarry->qwEntryLinkID = qwCarryFromLinkID;
+		return dfCarryDistM;
+	};
+
 	for (size_t e = 0; e < vtZones.size(); ++e)
 	{
 		bool bOpen = false;
@@ -8658,6 +8852,21 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 		//   stay_seconds=-1313903640)
 		stRun.dtLastInZoneTime = stRun.dtEntryTime;
 		stRun.dwLastInZoneGpsSeq = stRun.dwEntryGpsSeq;
+
+		// 게이트형 구역(개방식·폐쇄식) 진출 지점 이어받기 — 케이스2와 동일 근거(위 공용 람다
+		//   ApplyGateExitCarryDist 주석 참고). 병합 이월(stMergeCarry)이 있으면 그쪽이 우선한다
+		//   (2026-09-14 최정우 추가 — 정식 등록구역 진입에도 이 이월이 빠져 있던 문제 수정)
+		if (!pstSession->bHasMergeCarry && pstSession->bHasGateExitCarry)
+		{
+			stRun.dtEntryTime = pstSession->dtGateExit;
+			stRun.dfEntryX = pstSession->dfGateExitX;
+			stRun.dfEntryY = pstSession->dfGateExitY;
+			if (pstSession->bGateExitAtTick)
+				stRun.dwEntryGpsSeq = pstSession->dwGateExitGpsSeq;
+			stRun.dfAccumDistM += ApplyGateExitCarryDist(&stRun);
+			pstSession->bHasGateExitCarry = false;
+			pstSession->bGateExitAtTick = false;
+		}
 
 		// 위 ①에서 병합 상대를 못 찾고 이월된 run 이 있으면 이 새 run 이 이어받는다 — 진입정보는
 		//   더 이른 시각(이월분)으로 덮어쓰고 누적거리를 더한다 (2026-09-01 최정우 추가)
@@ -8738,11 +8947,9 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 				//   레코드가 구역 링크에서 시작한 것처럼 보여 같은 구간이 두 유형으로 중복 계상된다
 				//   (실측 000376_20260819140856: 폐쇄식 RL-Z00005 링크 2040423801 이 일반도로
 				//   FROM_ID 로 찍혔다). 좌표는 게이트(구역 경계)를 쓰되 링크 ID 는 이 run 이 실제로
-				//   열린 구역 밖 링크를 유지한다 (2026-09-06 최정우 수정, 사용자 지시)
-				POINT stGatePt, stCurPt;
-				stGatePt.dfX = pstSession->dfGateExitX;  stGatePt.dfY = pstSession->dfGateExitY;
-				stCurPt.dfX = stMatchLinkInfo.dfMatchX;  stCurPt.dfY = stMatchLinkInfo.dfMatchY;
-				stRun.dfAccumDistM += HaversineMeters(stGatePt, stCurPt);
+				//   열린 구역 밖 링크를 유지한다 (2026-09-06 최정우 수정, 사용자 지시). 이월 지점~이번
+				//   tick 사이 누락 링크 복구는 ApplyGateExitCarryDist() 공용 람다 참고(위 주석).
+				stRun.dfAccumDistM += ApplyGateExitCarryDist(&stRun);
 				pstSession->bHasGateExitCarry = false;
 				pstSession->bGateExitAtTick = false;
 			}
@@ -9771,7 +9978,10 @@ void CRawLogWorker::MergeAdjacentNodeStepRows(vector<CHARGE_INSERT_ROW> *pvtChar
 			const bool bContiguous = (nPrevEnd > 0) && (nCurStart > 0)
 				&& (nCurStart >= nPrevEnd) && (nCurStart <= nPrevEnd + 2);
 
-			if (bContiguous
+			// bNoMergeAfter — gps_seq는 이어 보여도 사이에 실제 다른 과금유형 등록 링크가 껴
+			//   있어 진짜로 끊긴 구간(ApplyGateExitCarryDist()의 섬 분리 산출물)이면 병합 금지
+			//   (2026-09-14 최정우 추가)
+			if (bContiguous && !stPrev.bNoMergeAfter
 				&& (stPrev.strChargeYn == stCur.strChargeYn)
 				&& (stPrev.strChargeStatus == stCur.strChargeStatus)
 				&& (stPrev.strNonChargeReason == stCur.strNonChargeReason))

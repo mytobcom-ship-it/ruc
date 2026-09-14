@@ -727,6 +727,12 @@ typedef struct sChargeInsertRow
 																		//   일부 값(주로 speed_kmh/stay_seconds)을 신뢰할 수 없어
 																		//   근사·생략 처리했다는 예외사유. 임시 코드 체계, 추후
 																		//   정식 에러코드 정리 시 재배정 예정 (2026-09-01 최정우 추가)
+	bool							bNoMergeAfter = false;				// DB에 안 실림, 배치 내부 전용. true면 이 행 바로 뒤에
+																		//   오는 일반도로(CHARGE_TYPE=0) 행과 MergeAdjacentNodeStepRows()가
+																		//   합치면 안 됨 — gps_seq는 가깝지만(디바운스·보류 등으로 벌어진
+																		//   "표기상" 공백이 아니라) 사이에 실제 다른 과금유형 등록 링크가
+																		//   껴 있어 진짜로 끊긴 구간이기 때문. ApplyGateExitCarryDist()의
+																		//   섬 분리에서만 세팅 (2026-09-14 최정우 추가)
 } CHARGE_INSERT_ROW, *PCHARGE_INSERT_ROW;
 
 /**

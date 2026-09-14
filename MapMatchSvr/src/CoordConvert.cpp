@@ -14,8 +14,10 @@
 */
 void CCoordConvert::WGS84ToSearchCoord(double inLat, double inLon, uint32 *outLat, uint32 *outLon)
 {
-	*outLat = (uint32)(inLat * 360000.0);		// 위도 (Y)
-	*outLon = (uint32)(inLon * 360000.0);		// 경도 (X)
+	// [버그 수정, 2026-09-11 최정우] 반올림 없이 바로 (uint32) 캐스팅하면 항상 0 방향으로 잘려
+	// 최대 1/360000도(약 0.3m) 만큼 매번 남서쪽으로 치우치는 체계적 편향이 생긴다. +0.5 로 반올림.
+	*outLat = (uint32)(inLat * 360000.0 + 0.5);	// 위도 (Y)
+	*outLon = (uint32)(inLon * 360000.0 + 0.5);	// 경도 (X)
 }
 
 /**

@@ -165,8 +165,6 @@ bool CRawLogFetcher::RunRecover(CPostgrePool *pcPostgrePool,
 */
 void CRawLogFetcher::run()
 {
-	CUtil cUtil;
-
 	while (m_pbRun != nullptr && *m_pbRun && !IsInterrupted())
 	{
 		int nQueueCount = 0;
@@ -187,9 +185,25 @@ void CRawLogFetcher::run()
 			break;
 
 		int nSleepMs = ComputeFetchSleepMs(nQueueCount);
-		// 큐 적재량에 따른 적응형 poll 대기 (2026-07-08 최정우 주석 추가)
-		cUtil.Sleep(0, nSleepMs * 1000);
+		// 큐 적재량에 따른 적응형 poll 대기 — 조건변수 기반 대기로 WakeUp() 이 즉시 깨울 수 있다
+		//   (2026-07-08 최정우 주석 추가, 2026-09-11 최정우 수정 — CUtil::Sleep(select 기반) +
+		//   CSingleThread::interrupt()(SIGUSR1→예외) 조합 대신. 자세한 배경은 헤더 WakeUp() 주석 참고)
+		m_cSleepMutex.lock();
+		if ((m_pbRun != nullptr) && *m_pbRun && !IsInterrupted())
+			m_cSleepCondition.waitTimed(m_cSleepMutex, nSleepMs);
+		m_cSleepMutex.unlock();
 	}
+}
+
+/**
+ * @brief run() 의 적응형 대기를 즉시 깨움 — 종료 시 남은 sleep 시간을 기다리지 않게 한다
+ * @return void
+*/
+void CRawLogFetcher::WakeUp()
+{
+	m_cSleepMutex.lock();
+	m_cSleepCondition.broadcast();
+	m_cSleepMutex.unlock();
 }
 
 /**

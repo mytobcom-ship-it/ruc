@@ -409,6 +409,11 @@ WHERE T.TRIP_ID = V.TRIP_ID
 -- N/3 로 INSERT하므로(이미 TRIP_END_DT 채워진 채로 들어감) 이 UPDATE 와 안 겹침 — 주정차 중
 -- "이전에 이미 정상 종료(Y/0)됐지만 그 트립 자체가 아직 안 끝난" 레코드만 이 UPDATE 대상이 됨
 -- (다른 유형과 동일 취급).
+-- NON_CHARGE_REASON — 2026-09-11 최정우 추가. CHARGE_STATUS 와 동일 근거로 면제도로(5)만 51
+-- (NCR_EXEMPT_TTL_FORCED_CLOSE), 나머지는 61(NCR_TTL_FORCED_CLOSE) 로 무조건 덮어쓴다 — 이 UPDATE가
+-- 손대는 행은 전부 "트립이 끝났는지 끝내 확인 못한 TTL 강제종료" 사유 하나뿐이라(C++ 쪽에서 미리
+-- 61/51 로 INSERT된 행이든, 원래 Y/0 이었다가 지금 여기서 처음 N 으로 바뀌는 행이든) 값이 갈릴
+-- 이유가 없다. C++ 상수(DataDefine.h)와 반드시 같은 값 유지할 것.
 -- $1=TRIP_ID[] $2=TRIP_END_DT[] $3=UPD_DT[]
 [trip_abend]
 UPDATE RUC.PRIM_CHARGEHAND AS T
@@ -416,6 +421,7 @@ SET
 	TRIP_END_DT = V.TRIP_END_DT,
 	CHARGE_YN = 'N',
 	CHARGE_STATUS = CASE WHEN T.CHARGE_TYPE = 5 THEN 4 ELSE 3 END,
+	NON_CHARGE_REASON = CASE WHEN T.CHARGE_TYPE = 5 THEN 51 ELSE 61 END,
 	UPD_DT = V.UPD_DT
 FROM UNNEST(
 	$1::TEXT[], $2::TEXT[], $3::TEXT[]

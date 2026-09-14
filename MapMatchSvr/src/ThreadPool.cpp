@@ -131,13 +131,29 @@ CThreadPool::~CThreadPool()
 			(*it).thread->join();
 	}
 
-	for (int i=0; i<30 && GetStoppedThreads()<(int)m_lstThreadPool.size(); i++)
+	bool bAllStopped = WaitForAllStopped(3000);
+
+	// [버그 수정, 2026-09-11 최정우] CThread::~CThread() 는 detach 여부와 무관하게 항상
+	//   `delete m_pcRunnable`(=여기서는 CThreadPoolWorker*) 을 실행한다 — 위 대기가 타임아웃돼도
+	//   지금까지는 그대로 delete (*it).thread 를 강행해서, 아직 run() 루프 안에서 m_bStopped/
+	//   m_nState 를 읽고 쓰는 중일 수 있는 CThreadPoolWorker 객체를 실행 중인 네이티브 스레드
+	//   발밑에서 해제하는 use-after-free 였다(실측 X, 3초 타임아웃이 실제로 걸리는 상황 자체가
+	//   드묾 — 코드 감사로 발견). STOPPED 확인된 워커만 delete 하고, 못 멈춘 워커는 그대로 두어
+	//   해당 네이티브 스레드가 계속 안전하게 실행되게 한다(프로세스 종료 직전이라 누수는 감수).
+	//   하나라도 못 멈췄으면 공유 자원(m_pcRunnable/큐/뮤텍스/컨디션 배열)도 함께 누수시킨다 —
+	//   인덱스로 공유되는 자원이라 어느 워커가 아직 실행 중인지 개별적으로 가려낼 수 없다.
+	if (!bAllStopped)
 	{
-		CThread::sleep(100);
+		LOGFMTE("threadpool shutdown timeout!stopped=[%d/%d] some worker(s) still running(detached) — "
+			"leaking worker/runnable/shared resources intentionally to avoid use-after-free",
+			GetStoppedThreads(), (int)m_lstThreadPool.size());
 	}
 
 	for (it=m_lstThreadPool.begin(); it!=m_lstThreadPool.end(); it++)
 	{
+		if ((*it).worker && (*it).worker->GetState() != EWS_STOPPED)
+			continue;										// 아직 실행 중 — delete 보류(누수)
+
 		if ((*it).thread)
 		{
 			delete (*it).thread;
@@ -146,6 +162,9 @@ CThreadPool::~CThreadPool()
 	}
 
 	m_lstThreadPool.clear();
+
+	if (!bAllStopped)
+		return;												// 공유 자원은 아래에서 delete 하지 않고 그대로 둠
 
 	if (m_pcRunnable)
 	{
@@ -278,10 +297,20 @@ int CThreadPool::GetStoppedThreads()
 	list<ThreadPoolContext>::iterator it;
 	int nStoppedThreads = 0;
 
+	// [버그 수정, 2026-09-11 최정우] GetWaitingThreads()/GetActiveThreads() 와 같은 틀로
+	//   "thread->GetState()==ETS_RUNNING &&" 를 그대로 복사해 넣었었는데, WAITING/ACTIVE 와 달리
+	//   STOPPED 는 worker->run()(CThreadPoolWorker::run) 맨 끝에서 딱 한 번만 세팅되고 그 직후
+	//   worker->run() 이 반환하면서 CThread::run() 이 곧바로 m_nState 를 ETS_STOPPED 로 바꿔버린다
+	//   (Thread.cpp) — 즉 "thread==RUNNING && worker==STOPPED" 인 순간은 그 찰나(명령어 몇 개
+	//   분량)뿐이고, 그 창을 지나면 thread==RUNNING 조건 자체가 영원히 거짓이 된다. ~CThreadPool()
+	//   의 폴링 루프(100ms 간격)가 이 찰나를 잡을 확률은 사실상 0이라, 워커가 즉시 끝났어도 매번
+	//   3초(30회) 타임아웃을 전부 소모한 뒤에야 delete 로 넘어갔다 — 실제로 배치 처리가 3초를
+	//   넘기면 아직 실행 중인(detach 된) 네이티브 스레드가 이미 delete 된 worker/thread 객체를
+	//   참조하는 use-after-free 위험까지 있었다. worker->GetState()==EWS_STOPPED 는 한 번 세팅되면
+	//   그대로 유지되는(단조) 값이라 이것만으로 충분하고 정확하다.
 	for (it=m_lstThreadPool.begin(); it!=m_lstThreadPool.end(); it++)
 	{
-		if ((*it).thread->GetState() == ETS_RUNNING && 
-			(*it).worker->GetState() == EWS_STOPPED)
+		if ((*it).worker->GetState() == EWS_STOPPED)
 			nStoppedThreads++;
 	}
 
@@ -354,6 +383,37 @@ bool CThreadPool::WaitForActiveIdle(int nMaxWaitMs)
 	}
 
 	return (GetActiveThreads() <= 0);
+}
+
+/**
+ * @brief 전체 워커가 run() 을 완전히 빠져나가 EWS_STOPPED 에 도달할 때까지 대기
+ * @param[in] nMaxWaitMs 최대 대기 (ms)
+ * @return true(전부 정지 확인), false(타임아웃 — 여전히 실행 중인 워커 존재 가능)
+ * @remark [버그 수정, 2026-09-11 최정우] delete 전에 호출측이 명시적으로 확인할 수 있게 분리 —
+ *         WaitForActiveIdle() 은 "현재 batch 처리 중(EWS_ACTIVE)" 만 보고 "대기 루프를 완전히
+ *         빠져나와 EWS_STOPPED 로 전이" 하는 건 확인 못한다(RequestShutdown 후 run() 이 대기
+ *         루프 최상단 predicate 를 재검사하는 짧은 구간).
+*/
+bool CThreadPool::WaitForAllStopped(int nMaxWaitMs)
+{
+	int nTotal = static_cast<int>(m_lstThreadPool.size());
+
+	if (nMaxWaitMs <= 0)
+		return (GetStoppedThreads() >= nTotal);
+
+	const int nStepMs = 100;
+	int nElapsedMs = 0;
+
+	while (nElapsedMs < nMaxWaitMs)
+	{
+		if (GetStoppedThreads() >= nTotal)
+			return true;
+
+		CThread::sleep(nStepMs);
+		nElapsedMs += nStepMs;
+	}
+
+	return (GetStoppedThreads() >= nTotal);
 }
 
 /**

@@ -163,7 +163,11 @@ bool CDataLoader::SetDataUpdate()
 		return m_bLoad;
 	}
 
-	// 데이터 초기화
+	// 데이터 초기화 — 이 아래(new/fread)에서 실패하면 기존에 로딩돼있던 데이터도 이미 지워진
+	//   뒤라 복구할 방법이 없다(ChargeDataLoader처럼 "새 데이터 다 만들고 나서 스왑"하는 구조가
+	//   아님). 구조 자체를 바꾸는 대신, 최소한 그 심각성이 로그만 보고도 바로 드러나도록 아래
+	//   각 실패분기마다 "road network data now empty!" 경고를 추가한다 (2026-09-11 최정우 추가,
+	//   사용자 지시)
 	SetDataInit();
 
 	m_dwGridInfoSize = m_pstDataFileHead->dwGridInfoSize;
@@ -199,6 +203,7 @@ bool CDataLoader::SetDataUpdate()
 		SetDataInit();
 		m_bLoad = false;
 		LOGFMTE("grid info memory allocate failed!");
+		LOGFMTE("road network data now empty!prior loaded data already destroyed at SetDataInit() before this failure, map-matching unavailable until next successful reload");
 		return false;
 	}
 	LOGFMTT("grid info read end!");
@@ -211,6 +216,7 @@ bool CDataLoader::SetDataUpdate()
 		SetDataInit();
 		m_bLoad = false;
 		LOGFMTE("grid info read failed!short read or file truncated");
+		LOGFMTE("road network data now empty!prior loaded data already destroyed at SetDataInit() before this failure, map-matching unavailable until next successful reload");
 		return false;
 	}
 
@@ -224,6 +230,7 @@ bool CDataLoader::SetDataUpdate()
 		SetDataInit();
 		m_bLoad = false;
 		LOGFMTE("grid segment info memory allocate failed!");
+		LOGFMTE("road network data now empty!prior loaded data already destroyed at SetDataInit() before this failure, map-matching unavailable until next successful reload");
 		return false;
 	}
 	fseek(fp, m_dwGridSgmtInfoStartOffset, SEEK_SET);
@@ -234,6 +241,7 @@ bool CDataLoader::SetDataUpdate()
 		SetDataInit();
 		m_bLoad = false;
 		LOGFMTE("grid segment info read failed!short read or file truncated");
+		LOGFMTE("road network data now empty!prior loaded data already destroyed at SetDataInit() before this failure, map-matching unavailable until next successful reload");
 		return false;
 	}
 	LOGFMTT("grid segment info read end!");
@@ -248,6 +256,7 @@ bool CDataLoader::SetDataUpdate()
 		SetDataInit();
 		m_bLoad = false;
 		LOGFMTE("link segment info memory allocate failed!");
+		LOGFMTE("road network data now empty!prior loaded data already destroyed at SetDataInit() before this failure, map-matching unavailable until next successful reload");
 		return false;
 	}
 	fseek(fp, m_dwLinkSgmtInfoStartOffset, SEEK_SET);
@@ -258,6 +267,7 @@ bool CDataLoader::SetDataUpdate()
 		SetDataInit();
 		m_bLoad = false;
 		LOGFMTE("link segment info read failed!short read or file truncated");
+		LOGFMTE("road network data now empty!prior loaded data already destroyed at SetDataInit() before this failure, map-matching unavailable until next successful reload");
 		return false;
 	}
 	LOGFMTT("link segment info read end!");
@@ -272,6 +282,7 @@ bool CDataLoader::SetDataUpdate()
 		SetDataInit();
 		m_bLoad = false;
 		LOGFMTE("link data info memory allocate failed!");
+		LOGFMTE("road network data now empty!prior loaded data already destroyed at SetDataInit() before this failure, map-matching unavailable until next successful reload");
 		return false;
 	}
 	fseek(fp, m_dwLinkInfoStartOffset, SEEK_SET);
@@ -284,6 +295,7 @@ bool CDataLoader::SetDataUpdate()
 		SetDataInit();
 		m_bLoad = false;
 		LOGFMTE("link data info read failed!short read or file truncated");
+		LOGFMTE("road network data now empty!prior loaded data already destroyed at SetDataInit() before this failure, map-matching unavailable until next successful reload");
 		return false;
 	}
 	LOGFMTT("link data information read end!");
@@ -298,6 +310,7 @@ bool CDataLoader::SetDataUpdate()
 		SetDataInit();
 		m_bLoad = false;
 		LOGFMTE("link data info memory allocate failed!");
+		LOGFMTE("road network data now empty!prior loaded data already destroyed at SetDataInit() before this failure, map-matching unavailable until next successful reload");
 		return false;
 	}
 
@@ -329,6 +342,7 @@ bool CDataLoader::SetDataUpdate()
 		SetDataInit();
 		m_bLoad = false;
 		LOGFMTE("turn info memory allocate failed!");
+		LOGFMTE("road network data now empty!prior loaded data already destroyed at SetDataInit() before this failure, map-matching unavailable until next successful reload");
 		return false;
 	}
 	fseek(fp, m_dwTurnInfoStartOffset, SEEK_SET);
@@ -339,6 +353,7 @@ bool CDataLoader::SetDataUpdate()
 		SetDataInit();
 		m_bLoad = false;
 		LOGFMTE("turn info read failed!short read or file truncated");
+		LOGFMTE("road network data now empty!prior loaded data already destroyed at SetDataInit() before this failure, map-matching unavailable until next successful reload");
 		return false;
 	}
 	LOGFMTT("turn info read end!");

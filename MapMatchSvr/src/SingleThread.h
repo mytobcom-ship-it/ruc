@@ -69,6 +69,13 @@ private:
 	// threadHandler() 에서 스레드 종료 시각 -1 로 재사용되는 다른 용도라 재활용하면 위험 —
 	// attr 의 생존 인스턴스 수만 세는 전용 카운터를 별도로 둔다.
 	static long						m_nAttrRefCount;
+	// [버그 수정, 2026-09-11 최정우] 위 m_nId/m_attr/m_nAttrRefCount 는 전부 static(전 인스턴스
+	// 공유)인데, Initialize() 는 이들을 자기 "인스턴스" 전용 m_mutex(막 pthread_mutex_init 한
+	// 것)로 잠그고 있었다 — 서로 다른 인스턴스는 서로 다른 m_mutex 를 쓰므로 두 인스턴스가 동시에
+	// 생성되면 이 락은 static 상태를 전혀 보호하지 못한다. 게다가 소멸자는 m_nAttrRefCount 감소·
+	// pthread_attr_destroy 호출을 아예 락 없이 했다. 이 static 상태 전용 뮤텍스를 따로 둔다
+	// (PTHREAD_MUTEX_INITIALIZER 로 정적 초기화 — 별도 init/destroy 불필요, 초기화 순서 문제 없음).
+	static pthread_mutex_t			m_staticMutex;
 };
 
 /**

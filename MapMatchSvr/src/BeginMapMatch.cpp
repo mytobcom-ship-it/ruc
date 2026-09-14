@@ -20,14 +20,6 @@ CBeginMapMatch::~CBeginMapMatch()
 }
 
 /**
- * @brief 초기 맵매칭 시작
- * @param[in] pcDataLoader 데이터 로딩 클래스
- * @param[in] stSgmtMatchInput 세그먼트 매칭 입력 정보
- * @param[out] pwErrorCode 에러 코드
- * @param[out] pstMatchEntry 검색 정보
- * @return true(성공), false(실패)
-*/
-/**
  * @brief 링크 진행 방위각 (시작 노드 → 종료 노드)
 */
 sint16 CBeginMapMatch::GetLinkAzimuth(PLINK_INFO pstLinkInfo)
@@ -99,19 +91,6 @@ void CBeginMapMatch::FixOppositePairByHeading(const SGMT_MATCH_INPUT& stSgmtMatc
 	}
 }
 
-/**
- * @brief 짝 링크(qwOppositeLinkID)가 있는 링크가 heading 과 거의 정반대로 채택됐는지 판정
- * @param[in] qwLinkID 판정 대상 링크 ID
- * @param[in] nHeading GPS 방위각
- * @param[in] nSpeed GPS 속도(km/h)
- * @return true(짝 링크가 있는데 이번 채택이 heading 역방향 — 신뢰 불가)
- * @remark
- * \tMapMatch.cpp 의 Continue→Begin 병행폴백 대체 직전 거부권으로 쓴다. FixOppositePairByHeading 과
- * \t같은 임계값(MM_OPP_FIX_REV_DEG)을 재사용 — 그쪽은 "짝 링크가 후보 목록에 있으면 앞으로 당기고",
- * \t이쪽은 "그래도 여전히(짝을 못 찾아) 역방향 링크가 채택돼 있으면 아예 대체를 무효화"하는 역할이라
- * \t상호 보완 관계다(실측 000376_20260819094414 M79 — 2040423603 이 짝 2040423501 의 역방향으로
- * \t채택됐는데, 실제 정답 링크는 2040423503 이라 짝 교정만으론 못 잡음). (2026-08-24 최정우 추가)
-*/
 /**
  * @brief 채택 링크가 heading 과 역방향이면, 후보 목록에서 방향이 맞는 최선 후보를 앞으로 당긴다
  * @param[in] stSgmtMatchInput 세그먼트 매칭 입력(heading·속도)
@@ -185,6 +164,19 @@ void CBeginMapMatch::FixReverseLinkByAzimuth(const SGMT_MATCH_INPUT& stSgmtMatch
 	//   받아 SKIP 처리한다("확신 없는 매칭보다 SKIP")
 }
 
+/**
+ * @brief 짝 링크(qwOppositeLinkID)가 있는 링크가 heading 과 거의 정반대로 채택됐는지 판정
+ * @param[in] qwLinkID 판정 대상 링크 ID
+ * @param[in] nHeading GPS 방위각
+ * @param[in] nSpeed GPS 속도(km/h)
+ * @return true(짝 링크가 있는데 이번 채택이 heading 역방향 — 신뢰 불가)
+ * @remark
+ * \tMapMatch.cpp 의 Continue→Begin 병행폴백 대체 직전 거부권으로 쓴다. FixOppositePairByHeading 과
+ * \t같은 임계값(MM_OPP_FIX_REV_DEG)을 재사용 — 그쪽은 "짝 링크가 후보 목록에 있으면 앞으로 당기고",
+ * \t이쪽은 "그래도 여전히(짝을 못 찾아) 역방향 링크가 채택돼 있으면 아예 대체를 무효화"하는 역할이라
+ * \t상호 보완 관계다(실측 000376_20260819094414 M79 — 2040423603 이 짝 2040423501 의 역방향으로
+ * \t채택됐는데, 실제 정답 링크는 2040423503 이라 짝 교정만으론 못 잡음). (2026-08-24 최정우 추가)
+*/
 bool CBeginMapMatch::IsAntiHeadingOpposite(uint64 qwLinkID, sint16 nHeading, sint16 nSpeed)
 {
 	if ((nHeading == NO_ANGLE) || (nSpeed == NO_SPEED) || (nSpeed < MM_OPP_FIX_MIN_SPEED))
@@ -200,6 +192,14 @@ bool CBeginMapMatch::IsAntiHeadingOpposite(uint64 qwLinkID, sint16 nHeading, sin
 	return (abs(m_cGISUtil.GetAngleDiff(nAz, nHeading)) >= MM_OPP_FIX_REV_DEG);
 }
 
+/**
+ * @brief 초기 맵매칭 시작
+ * @param[in] pcDataLoader 데이터 로딩 클래스
+ * @param[in] stSgmtMatchInput 세그먼트 매칭 입력 정보
+ * @param[out] pwErrorCode 에러 코드
+ * @param[out] pstMatchEntry 검색 정보
+ * @return true(성공), false(실패)
+*/
 bool CBeginMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& stSgmtMatchInput,
 		uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry, PMATCH_TRACE_CTX pstTraceCtx,
 		uint64 qwBiasLinkID)

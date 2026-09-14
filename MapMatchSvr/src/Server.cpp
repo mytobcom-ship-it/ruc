@@ -104,8 +104,9 @@ CServer::CServer() :
 	m_pcProcessManager(nullptr), 
 	m_pcRawLogFetcher(nullptr),
 	m_pcRawLogWorker(nullptr),
-	m_bRun(false), 
+	m_bRun(false),
 	m_bUninitialized(false),
+	m_bSkipDependentTeardown(false),
 	m_nWorkerThread(0), 
 	m_hTimerThread(0),
 	m_nDBMinConnect(CFG_DEF_MINCONNECT),
@@ -721,8 +722,12 @@ void CServer::Uninitialize()
 
 	if (m_pcRawLogFetcher != nullptr)
 	{
-		// Feeder 스레드 인터럽트 후 join (2026-07-08 최정우 주석 추가)
-		m_pcRawLogFetcher->interrupt();
+		// [버그 수정, 2026-09-11 최정우] interrupt()(SIGUSR1→예외 강제 언와인드)는 CServer 가
+		//   2026-07-10 에 자기 자신의 run 루프에서 이미 겪고 제거한 것과 같은 클래스의 위험을
+		//   여기서만 그대로 쓰고 있었다 — WakeUp()(조건변수 기반 안전한 즉시깨움)으로 교체.
+		//   RequestShutdown() 이 이미 m_bRun=false 를 세팅했으므로 WakeUp() 은 남은 대기를
+		//   끊어 즉시 반응하게 할 뿐, 없어도 다음 sleep 주기 안에 스스로 종료한다.
+		m_pcRawLogFetcher->WakeUp();
 		m_pcRawLogFetcher->join();
 		delete m_pcRawLogFetcher;
 		m_pcRawLogFetcher = nullptr;
@@ -758,14 +763,33 @@ void CServer::Uninitialize()
 		// 큐 잔여 batch PROCESSING→PENDING release (#8) (2026-07-08 최정우 주석 추가)
 		DrainPendingBatchesAndRelease();
 
+		// [버그 수정, 2026-09-11 최정우] delete 전에 전체 워커가 실제로 run() 을 빠져나갔는지
+		//   확인한다 — 위 WaitForActiveIdle() 은 "현재 batch 처리 중" 만 보고, 대기 루프를 완전히
+		//   빠져나와 종료됐는지는 못 본다. detach(운영 기본값)된 워커가 타임아웃 안에 못 멈추면
+		//   지금도 m_pcRawLogWorker->run() 내부에서 m_pcRawLogWorker/m_pcProcessManager/
+		//   m_pcDataLoader/m_pcChargeDataLoader/m_pcPostgrePool 을 참조 중일 수 있어, 아래에서
+		//   그 객체들을 delete 하면 use-after-free 가 된다(ThreadPool.cpp 의 동일 근거 수정과 짝).
+		//   m_bSkipDependentTeardown 을 세워 이번 종료에서는 그 객체들 delete 를 전부 건너뛰고
+		//   의도적으로 누수시킨다 — 프로세스가 곧 종료되므로 누수가 크래시보다 안전하다.
+		bool bWorkersFullyStopped = m_pcThreadPool->WaitForAllStopped(3000);
+
 		delete m_pcThreadPool;
 		m_pcThreadPool = nullptr;
+
+		if (!bWorkersFullyStopped)
+		{
+			m_bSkipDependentTeardown = true;
+			LOGFMTE("threadpool shutdown incomplete!worker(s) still running after wait — "
+				"skip freeing RawLogWorker/ProcessManager/DataLoader/ChargeDataLoader/PostgrePool "
+				"to avoid use-after-free(leaking intentionally, process is exiting)");
+		}
 	}
 	LOGFMTI("worker 스레드 풀 uninitialize!");
 
 	if (m_pcRawLogWorker != nullptr)
 	{
-		delete m_pcRawLogWorker;
+		if (!m_bSkipDependentTeardown)
+			delete m_pcRawLogWorker;
 		m_pcRawLogWorker = nullptr;
 	}
 
@@ -787,27 +811,38 @@ void CServer::Uninitialize()
 
 	if (m_pcDataLoader != nullptr)
 	{
-		// 맵매칭 바이너리 데이터 메모리 해제 (2026-07-08 최정우 주석 추가)
-		m_pcDataLoader->Uninitialize();
-		delete m_pcDataLoader;
+		// [버그 수정, 2026-09-11 최정우] Uninitialize() 도 내부 데이터를 해제하므로 delete 와
+		//   동일하게 건너뛴다 — 근거는 위 m_pcRawLogWorker 와 동일
+		if (!m_bSkipDependentTeardown)
+		{
+			// 맵매칭 바이너리 데이터 메모리 해제 (2026-07-08 최정우 주석 추가)
+			m_pcDataLoader->Uninitialize();
+			delete m_pcDataLoader;
+		}
 		m_pcDataLoader = nullptr;
 	}
 	LOGFMTI("data loader uninitialize!");
 
 	if (m_pcChargeDataLoader != nullptr)
 	{
-		// 과금 게이트 캐시 메모리 해제 (2026-08-12 최정우 추가)
-		m_pcChargeDataLoader->Uninitialize();
-		delete m_pcChargeDataLoader;
+		if (!m_bSkipDependentTeardown)
+		{
+			// 과금 게이트 캐시 메모리 해제 (2026-08-12 최정우 추가)
+			m_pcChargeDataLoader->Uninitialize();
+			delete m_pcChargeDataLoader;
+		}
 		m_pcChargeDataLoader = nullptr;
 	}
 	LOGFMTI("charge data loader uninitialize!");
 
 	if (m_pcPostgrePool != nullptr)
 	{
-		// DB 커넥션 풀 연결 전부 종료 (2026-07-08 최정우 주석 추가)
+		// DB 커넥션 풀 연결 전부 종료 (2026-07-08 최정우 주석 추가) — UninitializePool() 자체는
+		//   대여 중(checked-out) 커넥션은 안 건드리고 자체 5초 타임아웃으로 안전하게 끝나므로
+		//   m_bSkipDependentTeardown 여부와 무관하게 호출해도 된다. delete 만 건너뛴다.
 		m_pcPostgrePool->UninitializePool();
-		delete m_pcPostgrePool;
+		if (!m_bSkipDependentTeardown)
+			delete m_pcPostgrePool;
 		m_pcPostgrePool = nullptr;
 	}
 	LOGFMTI("db connection pool uninitialize!");
@@ -817,8 +852,14 @@ void CServer::Uninitialize()
 	m_pcLoggerManager = nullptr;
 
 	// GPS 정보 맵 매칭 처리 클래스
-	if (m_pcProcessManager != nullptr) delete [] m_pcProcessManager;
-	m_pcProcessManager = nullptr;
+	// [버그 수정, 2026-09-11 최정우] m_stConfig.pcProcessManager 로 RawLogWorker 에 전달돼
+	//   워커 스레드가 참조 — 근거는 위 m_pcRawLogWorker 와 동일
+	if (m_pcProcessManager != nullptr)
+	{
+		if (!m_bSkipDependentTeardown)
+			delete [] m_pcProcessManager;
+		m_pcProcessManager = nullptr;
+	}
 	LOGFMTI("map match process manager uninitialize!");
 
 	if (g_pcServerInstance == this)
@@ -1064,14 +1105,6 @@ void CServer::ProcessPeriodSec(time_t dtNow)
 }
 
 /**
- * @brief CPU 사용률 샘플링 — /proc/stat 델타 기반, 매초 호출
- * @return void
- * @remark
- *   "cpu  user nice system idle iowait irq softirq steal ..." 누적 tick 값을 읽어 직전
- *   샘플과의 차이로 사용률(%)을 계산한다. 최초 1회는 델타를 낼 이전 값이 없어 계산을
- *   건너뛴다(m_bCpuSampleValid=false) (2026-08-20 최정우 추가)
-*/
-/**
  * @brief 좀비 PROCESSING(MATCH_STATUS=2) 운영 중 회수 [stale_recover]
  * @return void
  * @remark 예약 시각(MATCH_RSV_DT)이 m_nStaleSec 보다 오래된 행만 PENDING(0)으로 되돌린다.
@@ -1122,6 +1155,14 @@ void CServer::RecoverStaleProcessing()
 	m_pcPostgrePool->releaseConnection(pcConn);
 }
 
+/**
+ * @brief CPU 사용률 샘플링 — /proc/stat 델타 기반, 매초 호출
+ * @return void
+ * @remark
+ *   "cpu  user nice system idle iowait irq softirq steal ..." 누적 tick 값을 읽어 직전
+ *   샘플과의 차이로 사용률(%)을 계산한다. 최초 1회는 델타를 낼 이전 값이 없어 계산을
+ *   건너뛴다(m_bCpuSampleValid=false) (2026-08-20 최정우 추가)
+*/
 void CServer::UpdateCpuSample()
 {
 	FILE *fp = fopen("/proc/stat", "r");

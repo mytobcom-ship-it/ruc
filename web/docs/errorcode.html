@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>비과금 에러코드</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600;700&display=swap">
+<style>
+  :root{
+    --bg:#eef1f5;
+    --surface:#ffffff;
+    --border:#d7dee6;
+    --border-soft:#e4e9ef;
+    --text:#1c2531;
+    --text-muted:#64758a;
+    --text-faint:#9aa8b7;
+    --accent:#2c6e8f;
+    --accent-soft:#dbeaf1;
+    --success:#1f8f5f;
+    --success-soft:#dcf1e6;
+    --exempt:#8a5a2e;
+    --exempt-soft:#f3e6d8;
+    --group-bg:#f5f7fa;
+    --shadow: 0 1px 2px rgba(20,30,45,.05), 0 10px 26px -16px rgba(20,30,45,.18);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#10151c; --surface:#171e27; --border:#2b3746; --border-soft:#232d3a;
+      --text:#e7edf3; --text-muted:#93a4b6; --text-faint:#5f7086;
+      --accent:#79b7d6; --accent-soft:#1c333e;
+      --success:#5fc593; --success-soft:#173226;
+      --exempt:#e0ac6c; --exempt-soft:#3a2c18;
+      --group-bg:#1b232d;
+      --shadow: 0 1px 2px rgba(0,0,0,.35), 0 14px 30px -18px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#10151c; --surface:#171e27; --border:#2b3746; --border-soft:#232d3a;
+    --text:#e7edf3; --text-muted:#93a4b6; --text-faint:#5f7086;
+    --accent:#79b7d6; --accent-soft:#1c333e;
+    --success:#5fc593; --success-soft:#173226;
+    --exempt:#e0ac6c; --exempt-soft:#3a2c18;
+    --group-bg:#1b232d;
+    --shadow: 0 1px 2px rgba(0,0,0,.35), 0 14px 30px -18px rgba(0,0,0,.6);
+  }
+
+  *{ box-sizing:border-box; }
+  html{ color-scheme: light dark; }
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--text);
+    font-family:"IBM Plex Sans KR","Noto Sans KR",system-ui,sans-serif;
+    line-height:1.6;
+    font-variant-numeric: tabular-nums;
+  }
+  img{ max-width:100%; }
+  .page{ max-width:720px; margin:0 auto; padding:60px 24px 88px; }
+
+  header{ margin-bottom:30px; }
+  .eyebrow{
+    font-family:"IBM Plex Mono",monospace;
+    font-size:11.5px; font-weight:600; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--accent); margin:0 0 10px;
+  }
+  h1{
+    font-size:27px; font-weight:700; letter-spacing:-.01em;
+    text-wrap:balance; margin:0 0 10px;
+  }
+  .subtitle{ font-size:14.5px; color:var(--text-muted); margin:0 0 4px; max-width:62ch; }
+  .subtitle b{ color:var(--text); font-weight:600; }
+
+  .legend{
+    display:flex; flex-wrap:wrap; gap:8px 18px;
+    margin-top:18px; padding-top:16px; border-top:1px solid var(--border-soft);
+    font-size:12.5px; color:var(--text-muted);
+  }
+  .legend span{ display:inline-flex; align-items:center; gap:6px; }
+  .swatch{ width:9px; height:9px; border-radius:2px; display:inline-block; }
+  .swatch.ok{ background:var(--success); }
+  .swatch.reserve{ background:transparent; border:1.5px dashed var(--text-faint); }
+
+  .group{
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:14px;
+    box-shadow:var(--shadow);
+    margin-bottom:16px;
+    overflow:hidden;
+  }
+  .group-head{
+    display:flex; align-items:baseline; justify-content:space-between; gap:12px;
+    padding:13px 20px;
+    background:var(--group-bg);
+    border-bottom:1px solid var(--border-soft);
+  }
+  .group-head .name{ font-size:14.5px; font-weight:700; }
+  .group-head .range{
+    font-family:"IBM Plex Mono",monospace; font-size:11.5px; font-weight:600;
+    color:var(--text-muted); letter-spacing:.02em;
+  }
+
+  .table-wrap{ overflow-x:auto; }
+  table{ border-collapse:collapse; width:100%; min-width:420px; font-size:14px; }
+  tbody td{ padding:12px 20px; border-bottom:1px solid var(--border-soft); vertical-align:top; }
+  tbody tr:last-child td{ border-bottom:none; }
+
+  td.code-cell{
+    font-family:"IBM Plex Mono",monospace; font-weight:700; font-size:15px;
+    color:var(--accent); width:44px; white-space:nowrap;
+  }
+  td.status-cell{
+    font-family:"IBM Plex Mono",monospace; font-weight:600; font-size:13px;
+    width:64px; white-space:nowrap; color:var(--text-muted);
+  }
+  td.reason-cell{ color:var(--text); }
+
+  tr.success td.code-cell{ color:var(--success); }
+  tr.success td.status-cell{ color:var(--success); }
+
+  tr.exempt-row td.code-cell{ color:var(--exempt); }
+  tr.exempt-row td.status-cell{ color:var(--exempt); }
+
+  tr.reserved td{
+    color:var(--text-faint);
+    font-size:13px;
+    font-style:normal;
+  }
+  tr.reserved td.code-cell{ color:var(--text-faint); font-weight:600; }
+  tr.reserved td.reason-cell{
+    display:flex; align-items:center; gap:8px;
+  }
+  tr.reserved td.reason-cell::before{
+    content:"";
+    width:14px; height:0; border-top:1.5px dashed var(--text-faint);
+    display:inline-block;
+  }
+
+  footer{
+    margin-top:28px; padding-top:16px; border-top:1px solid var(--border-soft);
+    font-size:12px; color:var(--text-faint);
+  }
+  footer code{
+    font-family:"IBM Plex Mono",monospace; background:var(--group-bg);
+    padding:1px 5px; border-radius:4px; color:var(--text-muted);
+  }
+
+  @media (max-width:520px){
+    .page{ padding:44px 16px 64px; }
+    tbody td{ padding:11px 14px; }
+    .group-head{ padding:12px 14px; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <p class="eyebrow">PRIM_CHARGEHAND · NON_CHARGE_REASON</p>
+    <h1>비과금 에러코드</h1>
+    <p class="subtitle">과금 제외 판정이 내려졌을 때 그 사유를 남기는 코드 체계. <b>도로 유형마다 10개씩</b> 대역을 배정해, 유형 하나에 사유가 늘어나도 다른 유형의 번호를 건드리지 않는다.</p>
+    <div class="legend">
+      <span><i class="swatch ok"></i>정상 과금(Y/0)</span>
+      <span><i class="swatch reserve"></i>예약 — 아직 코드가 배정되지 않은 자리</span>
+    </div>
+  </header>
+
+  <div class="group">
+    <div class="group-head"><span class="name">정상</span><span class="range">0</span></div>
+    <div class="table-wrap"><table><tbody>
+      <tr class="success">
+        <td class="code-cell">0</td>
+        <td class="status-cell">Y / 0</td>
+        <td class="reason-cell">정상 과금</td>
+      </tr>
+    </tbody></table></div>
+  </div>
+
+  <div class="group">
+    <div class="group-head"><span class="name">일반도로</span><span class="range">1 – 10</span></div>
+    <div class="table-wrap"><table><tbody>
+      <tr>
+        <td class="code-cell">1</td>
+        <td class="status-cell">N / 3</td>
+        <td class="reason-cell">SKIP 구간 브릿지 처리 — 직전 확정 위치 소실</td>
+      </tr>
+      <tr>
+        <td class="code-cell">2</td>
+        <td class="status-cell">N / 3</td>
+        <td class="reason-cell">SKIP 구간 브릿지 처리 — 직선거리로 추정</td>
+      </tr>
+      <tr class="reserved">
+        <td class="code-cell">3–10</td>
+        <td class="status-cell">—</td>
+        <td class="reason-cell">에러코드 예약</td>
+      </tr>
+    </tbody></table></div>
+  </div>
+
+  <div class="group">
+    <div class="group-head"><span class="name">개방형(TG)</span><span class="range">11 – 20</span></div>
+    <div class="table-wrap"><table><tbody>
+      <tr>
+        <td class="code-cell">11</td>
+        <td class="status-cell">N / 3</td>
+        <td class="reason-cell">통행 도중부터 기록이 시작되어 진입 지점을 확인하지 못함</td>
+      </tr>
+      <tr class="reserved">
+        <td class="code-cell">12–20</td>
+        <td class="status-cell">—</td>
+        <td class="reason-cell">에러코드 예약</td>
+      </tr>
+    </tbody></table></div>
+  </div>
+
+  <div class="group">
+    <div class="group-head"><span class="name">폐쇄형(TG)</span><span class="range">21 – 30</span></div>
+    <div class="table-wrap"><table><tbody>
+      <tr>
+        <td class="code-cell">21</td>
+        <td class="status-cell">N / 3</td>
+        <td class="reason-cell">진입 지점을 확인하지 못함</td>
+      </tr>
+      <tr>
+        <td class="code-cell">22</td>
+        <td class="status-cell">N / 3</td>
+        <td class="reason-cell">진입과 진출 지점이 같아 실제로 도로를 통과하지 않은 것으로 판단</td>
+      </tr>
+      <tr>
+        <td class="code-cell">23</td>
+        <td class="status-cell">N / 3</td>
+        <td class="reason-cell">진출 지점을 확인하지 못함</td>
+      </tr>
+      <tr class="reserved">
+        <td class="code-cell">24–30</td>
+        <td class="status-cell">—</td>
+        <td class="reason-cell">에러코드 예약</td>
+      </tr>
+    </tbody></table></div>
+  </div>
+
+  <div class="group">
+    <div class="group-head"><span class="name">구간단속(TG)</span><span class="range">31 – 40</span></div>
+    <div class="table-wrap"><table><tbody>
+      <tr>
+        <td class="code-cell">31</td>
+        <td class="status-cell">N / 3</td>
+        <td class="reason-cell">진입 지점을 확인하지 못함</td>
+      </tr>
+      <tr>
+        <td class="code-cell">32</td>
+        <td class="status-cell">N / 3</td>
+        <td class="reason-cell">진입과 진출 지점이 같아 실제로 도로를 통과하지 않은 것으로 판단</td>
+      </tr>
+      <tr>
+        <td class="code-cell">33</td>
+        <td class="status-cell">N / 3</td>
+        <td class="reason-cell">진출 지점을 확인하지 못함</td>
+      </tr>
+      <tr class="reserved">
+        <td class="code-cell">34–40</td>
+        <td class="status-cell">—</td>
+        <td class="reason-cell">에러코드 예약</td>
+      </tr>
+    </tbody></table></div>
+  </div>
+
+  <div class="group">
+    <div class="group-head"><span class="name">주정차</span><span class="range">41 – 50</span></div>
+    <div class="table-wrap"><table><tbody>
+      <tr class="reserved">
+        <td class="code-cell">41–50</td>
+        <td class="status-cell">—</td>
+        <td class="reason-cell">에러코드 예약</td>
+      </tr>
+    </tbody></table></div>
+  </div>
+
+  <div class="group">
+    <div class="group-head"><span class="name">면제도로</span><span class="range">51 – 60</span></div>
+    <div class="table-wrap"><table><tbody>
+      <tr class="exempt-row">
+        <td class="code-cell">51</td>
+        <td class="status-cell">N / 4</td>
+        <td class="reason-cell">장시간 위치 신호가 없어 자동으로 종료 처리됨</td>
+      </tr>
+      <tr class="reserved">
+        <td class="code-cell">52–60</td>
+        <td class="status-cell">—</td>
+        <td class="reason-cell">에러코드 예약</td>
+      </tr>
+    </tbody></table></div>
+  </div>
+
+  <div class="group">
+    <div class="group-head"><span class="name">공통</span><span class="range">61 – 70</span></div>
+    <div class="table-wrap"><table><tbody>
+      <tr>
+        <td class="code-cell">61</td>
+        <td class="status-cell">N / 3</td>
+        <td class="reason-cell">장시간 위치 신호가 없어 자동으로 종료 처리됨 (주정차 제외 전 유형 공통)</td>
+      </tr>
+      <tr class="reserved">
+        <td class="code-cell">62–70</td>
+        <td class="status-cell">—</td>
+        <td class="reason-cell">에러코드 예약</td>
+      </tr>
+    </tbody></table></div>
+  </div>
+
+  <footer>
+    현재 실제로 <code>non_charge_reason</code> 값이 기록되는 코드는 <code>1</code> 하나뿐이며, 나머지는 과금 판정(Y/N, STATUS) 자체는 이미 반영되고 있으나 사유 코드 기록은 아직 구현 전입니다.
+  </footer>
+</div>
+</body>
+</html>

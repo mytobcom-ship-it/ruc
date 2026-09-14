@@ -469,10 +469,23 @@ bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
 							//   정확히 MM_NOISE_FORWARD_NUDGE_M(1m)만 전진시킨다 — 이번 후보의
 							//   좌표 자체가 노이즈라 못 믿는 상황이므로, 노이즈가 섞인 값을 기준으로
 							//   재보정하지 않고 마지막 확실한 지점에서 다시 계산한다 (2026-07-22 최정우 수정)
-							stMatchEntry.dfMatchX = stSgmtMatchInput.dfPrevMatchX
-								+ MM_NOISE_FORWARD_NUDGE_M * sin(RAD(static_cast<double>(stSgmtInfo.nDirAng)));
-							stMatchEntry.dfMatchY = stSgmtMatchInput.dfPrevMatchY
-								+ MM_NOISE_FORWARD_NUDGE_M * cos(RAD(static_cast<double>(stSgmtInfo.nDirAng)));
+							// [버그 수정, 2026-09-11 최정우] dfPrevMatchX/Y 는 좌표스케일(도×360000)인데
+							//   MM_NOISE_FORWARD_NUDGE_M(실미터)을 MM_COORD_UNITS_PER_M 변환 없이 그대로
+							//   더해 실제로는 1m 의도가 0.31m만 전진했다. GISUtil.cpp
+							//   OffsetScaledCoordByMeters()(2026-08-26, 익명 네임스페이스라 여기서 직접
+							//   재사용은 못 하고 동일 수식을 인라인) 와 동일하게 경도축 cos(위도) 보정까지
+							//   반영 — 안 하면 고위도·동서방향 세그먼트에서 실제 전진거리가 또 틀어진다.
+							{
+								const double dfR = 6378137.0;								// WGS84 장반경(m)
+								const double dfMetersPerDeg = dfR * RAD(1.0);
+								const double dfLatRad = RAD(stSgmtMatchInput.dfPrevMatchY / 360000.0);
+								const double dfBearingRad = RAD(static_cast<double>(stSgmtInfo.nDirAng));
+								const double dfDLatDeg = (MM_NOISE_FORWARD_NUDGE_M * cos(dfBearingRad)) / dfMetersPerDeg;
+								const double dfDLonDeg = (MM_NOISE_FORWARD_NUDGE_M * sin(dfBearingRad))
+									/ (dfMetersPerDeg * cos(dfLatRad));
+								stMatchEntry.dfMatchX = stSgmtMatchInput.dfPrevMatchX + dfDLonDeg * 360000.0;
+								stMatchEntry.dfMatchY = stSgmtMatchInput.dfPrevMatchY + dfDLatDeg * 360000.0;
+							}
 							stMatchEntry.dfSgmtMatchLen = dfNewPos - static_cast<double>(stMatchEntry.wLenFromLink);
 						}
 
@@ -947,4 +960,14 @@ void CContinueMapMatch::GetMatchEntry(list<MATCH_ENTRY> *plistMatchEntryList, PM
 	if (pstTraceCtx != nullptr)
 		CMatchTrace::LogResult(pstTraceCtx, stSgmtMatchInput, *plistMatchEntryList, plistMatchEntryList->front());
 	*pstMatchEntry = *plistMatchEntryList->begin();
+
+	// [2026-09-11 최정우 — 시도했다가 되돌림] 정지 중 좌표표류(저주파 GPS 위치표류가 매 tick 재투영에
+	//   그대로 반영돼 차가 안 움직이는데 매칭좌표만 흘러가는 현상, 실측 최대 20m)를 막으려고 여기서
+	//   dfMatchX/Y·dfSgmtMatchLen 을 직전 신뢰 매칭좌표로 앵커링하는 걸 시도했으나, dfIntersectLenSgmt/
+	//   bSgmtClamped/dfCost/nDirAngleDiff 등 원래 후보(GPS 원본 기준으로 계산됨)와 짝을 이루는 나머지
+	//   필드는 그대로 둔 채 좌표만 바꿔서 내부 일관성이 깨졌다 — 재매칭 검증에서 MATCH_STATUS 가
+	//   전체적으로 78건 추가 SKIP 으로 바뀌는 회귀가 실측 확인돼 되돌렸다(드리프트 자체는 대부분
+	//   사라졌지만 대가가 너무 컸음). 다시 시도할 때는 이 함수(최종 후보 확정 지점)가 아니라, 이후
+	//   단계에서 "표시/누적용 좌표만" 별도로 덮어써서 여기서 확정되는 내부 매칭 상태(SKIP/클램프 판정
+	//   등에 쓰이는 필드들)는 건드리지 않는 방식으로 가야 한다.
 }

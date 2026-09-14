@@ -92,6 +92,15 @@ private:
 private:
 	bool							m_bRun;								// 서버 실행 여부
 	bool							m_bUninitialized;					// Uninitialize 중복 실행 가드 (2026-07-10 최정우 추가)
+	// [버그 수정, 2026-09-11 최정우] 종료 시 ThreadPool 워커(detach, 운영 기본값)가 대기시간 안에
+	//   전부 EWS_STOPPED 에 도달 못하면(느린 DB 호출 등으로 여전히 실행 중), 그 워커는 지금도
+	//   m_pcRawLogWorker->run() 내부에서 m_pcProcessManager/m_pcDataLoader/m_pcChargeDataLoader/
+	//   m_pcPostgrePool 을 참조 중일 수 있다 — 이 상태에서 그 객체들을 delete 하면 아직 살아있는
+	//   네이티브 스레드가 해제된 메모리를 계속 참조하는 use-after-free 가 된다. WaitForAllStopped()
+	//   가 실패로 보고하면 이 플래그를 세워 하위 객체 delete 를 전부 건너뛰고 의도적으로 누수시킨다
+	//   (프로세스가 곧 종료되므로 누수보다 크래시가 훨씬 위험) — ThreadPool.cpp 의 동일 근거 수정과
+	//   짝을 이룸.
+	bool							m_bSkipDependentTeardown;
 	string							m_strLogPath;						// 로그 경로
 	int								m_nLogLevel;						// 로그 레벨
 	int								m_nLogKeepRunTime;					// 로그 삭제 시간 설정

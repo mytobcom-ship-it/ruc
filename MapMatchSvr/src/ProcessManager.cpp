@@ -210,6 +210,12 @@ void CProcessManager::BuildMapMatchInput(const sRawLogInfo& stRawLogInfo,
 		// 같은 링크 노이즈 보정 기준점(직전 신뢰 매칭 좌표) 함께 전달 (2026-07-22 최정우 추가)
 		pstMapMatchInput->dfPrevMatchX = pstAltCtx->dfPrevMatchX;
 		pstMapMatchInput->dfPrevMatchY = pstAltCtx->dfPrevMatchY;
+		// [참고, 2026-09-11 최정우 확인 — 미수정] dfPrevMatchX/Y 유효 여부 플래그 bHasPrevMatchPos
+		//   (2026-08-23 추가)가 여기서 전달이 빠져 있어 항상 기본값 false 로 넘어간다 — 이 플래그를
+		//   보는 소비측 중 MapMatch.cpp:432 의 "재구성 경로 방향 타당성 검사"(2026-09-04 추가)가
+		//   그 때문에 지금까지 비활성 상태다. 전달을 고치면 그 검사가 깨어나 MATCH_STATUS 가
+		//   재매칭 전체에서 29건(매칭→SKIP) 바뀌는 게 실측 확인됨 — 의도한 동작인지 별도 검토가
+		//   필요해 일부러 고치지 않고 남겨둠(memory: project_full_source_review 계열 참고).
 		// 원시좌표·방향 동일 여부 함께 전달 — 같은 링크 노이즈 보정 적용 여부 판단용 (2026-09-02 최정우 추가)
 		pstMapMatchInput->bSameRawAndHeadingAsPrev = pstAltCtx->bSameRawAndHeadingAsPrev;
 	}

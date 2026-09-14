@@ -112,7 +112,14 @@ void CPostgrePool::UninitializePool()
 			LOGFMTE("Can not join pthread for PostgreSQL Connection Pool!");
 	}
 
-	while (left > 0)
+	// [버그 수정, 2026-09-11 최정우] 대여 중(checked-out)인 채 반납 안 된 커넥션이 하나라도 있으면
+	//   m_nPooledConnections 가 0으로 안 내려가는데, 이 루프는 sleep/timeout 없이 락만 걸었다 풀었다
+	//   하며 계속 재검사해 CPU 100% busy-spin 으로 영구히 멈췄었다 — WaitForActiveIdle() 타임아웃이
+	//   만료돼도 그 워커가 커넥션을 쥔 채 계속 돌고 있으면 재현됐음. ThreadPool 소멸자와 동일하게
+	//   최대 대기(100ms × 최대횟수)를 두고, 시간 안에 못 비우면 경고만 남기고 진행한다 — 큐에 남아
+	//   있는 유휴 커넥션은 그동안 계속 정리해준다.
+	const int nMaxWaitIter = 50;								// 100ms * 50 = 최대 5초
+	for (int i = 0; (left > 0) && (i < nMaxWaitIter); ++i)
 	{
 		m_cMutex.lock();
 		while (static_cast<int>(m_dqQueue.size()) > 0)
@@ -122,7 +129,13 @@ void CPostgrePool::UninitializePool()
 		}
 		left = m_nPooledConnections;
 		m_cMutex.unlock();
+
+		if (left > 0)
+			usleep(100 * 1000);
 	}
+
+	if (left > 0)
+		LOGFMTW("postgre pool uninitialize timeout!still_pooled=[%d] (checked-out connections never released)", left);
 
 	m_dqQueue.clear();
 	m_bIsValid = false;

@@ -19,6 +19,25 @@
 
 using namespace zsummer::log4z;
 
+// NON_CHARGE_REASON 코드별 메시지 — DataDefine.h 의 NCR_* 상수와 1:1 대응, MapMatch.cpp 의
+//   ErrorCodeTable/m_cCodeMap 과 동일 패턴(CCodeMap::GetValue) 으로 로그에 사람이 읽을 수 있는
+//   사유를 남긴다 (2026-09-11 최정우 추가)
+CODE_ENTRY NonChargeReasonTable[] =
+{
+	{NCR_NORMAL,						"정상 과금"},
+	{NCR_NODE_STEP_GAP_ANCHOR_LOST,	"일반도로 SKIP구간 브릿지 - 직전 확정위치 소실"},
+	{NCR_NODE_STEP_GAP_APPROX,			"일반도로 SKIP구간 브릿지 - 직선거리로 추정"},
+	{NCR_OPEN_ENTRY_GATE_MISSED,		"개방형 - 트립 중간시작으로 진입게이트 미통과"},
+	{NCR_CLOSED_ENTRY_UNOBSERVED,		"폐쇄형 - 진입게이트 미확인"},
+	{NCR_CLOSED_ENTRY_EQUALS_EXIT,		"폐쇄형 - 입구==출구 동일 게이트"},
+	{NCR_CLOSED_EXIT_UNCONFIRMED,		"폐쇄형 - 출구게이트 미확인"},
+	{NCR_SPEED_ENTRY_UNOBSERVED,		"구간단속 - 진입게이트 미확인"},
+	{NCR_SPEED_ENTRY_EQUALS_EXIT,		"구간단속 - 입구==출구 동일 게이트"},
+	{NCR_SPEED_EXIT_UNCONFIRMED,		"구간단속 - 출구게이트 미확인"},
+	{NCR_EXEMPT_TTL_FORCED_CLOSE,		"면제도로 - TTL 만료/신호두절 강제종료"},
+	{NCR_TTL_FORCED_CLOSE,				"TTL 만료/신호두절 강제종료"}
+};
+
 namespace {
 
 // bulk release 재시도 횟수 (PK: TRIP_ID|GPS_SEQ). 워커 스레드 간 공유 (2026-07-10 최정우 주석 추가)
@@ -270,6 +289,16 @@ int CRawLogWorker::ExpireTtlSessions(int nThreadId, int nTtlSec, PGconn *pcConn)
 				it->second.vtNodeStepRuns.push_back(it->second.stHeldNodeStepRun);
 				it->second.bHasHeldNodeStepRun = false;
 			}
+			// [버그 수정, 2026-09-11 최정우] 일반도로 구간병합 이월값(stMergeCarry) — 받아줄 새 run이
+			//   열리기를 기다리는 중에 세션이 TTL로 만료되면, 다른 carry 상태들과 달리 여기서
+			//   소비되지 않아 그 구간의 거리·시간이 과금 레코드 없이 사라지고 있었다(전체 재검증으로
+			//   발견, FlushNodeStepRunsAtTripEnd() 도 동일하게 누락돼 있어 같이 고침) — 남은 값을
+			//   그대로 vtNodeStepRuns 에 편입시켜 마감한다.
+			if (it->second.bHasMergeCarry)
+			{
+				it->second.vtNodeStepRuns.push_back(it->second.stMergeCarry);
+				it->second.bHasMergeCarry = false;
+			}
 			bool bWasNodeStep = !it->second.vtNodeStepRuns.empty();
 			size_t nSizeBeforeNodeStep = vtExpiredParkingCharges.size();
 			AppendExpiredNodeStepCharge(nThreadId, it->first, it->second,
@@ -504,12 +533,18 @@ void CRawLogWorker::AppendExpiredParkingCharge(int nThreadId, const string& strD
 		CHARGE_INSERT_ROW stRow;
 		bool bMeetsFineMin = BuildParkRow(stRun, stSession.szTripId, strDeviceKey, nSeq, stSession.dtLastSeen,
 			stRun.dfLastX, stRun.dfLastY, stSession.dwLastGpsSeq, "N", "3", &stRow);
+		// [버그 수정, 2026-09-11 최정우] non_charge_reason 정식 코드 기록 — 판정(N/3)은 안 건드림
+		char szReason[8];
+		snprintf(szReason, sizeof(szReason), "%d", NCR_TTL_FORCED_CLOSE);
+		stRow.strNonChargeReason = szReason;
 		if (bMeetsFineMin) pvtOut->push_back(stRow);
 		nSeq += 1;
 
-		LOGFMTI("[#%02d] parking expired!device=[%s] trip_id=[%s] road=[%s] dwell=[%s]s registered=[%d]",
-			nThreadId, strDeviceKey.c_str(), stSession.szTripId, stRun.szRoadID,
-			stRow.strStaySeconds.c_str(), static_cast<int>(bMeetsFineMin));
+		LOGFMTW("[#%02d] parking expired!device=[%s] trip_id=[%s] seq=[%d] road=[%s] dwell=[%s]s "
+			"registered=[%d] non_charge_reason=[%d:%s]",
+			nThreadId, strDeviceKey.c_str(), stSession.szTripId, nSeq - 1, stRun.szRoadID,
+			stRow.strStaySeconds.c_str(), static_cast<int>(bMeetsFineMin), NCR_TTL_FORCED_CLOSE,
+			m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), NCR_TTL_FORCED_CLOSE));
 	}
 }
 
@@ -561,9 +596,14 @@ void CRawLogWorker::AppendStaleParkingCharge(int nThreadId, const string& strDev
 			stRun.dwLastConfirmedGpsSeq, "Y", "0", &stRow);
 		if (bMeetsFineMin) pvtOut->push_back(stRow);
 
-		LOGFMTI("[#%02d] parking stale finalized!device=[%s] trip_id=[%s] road=[%s] dwell=[%s]s registered=[%d]",
-			nThreadId, strDeviceKey.c_str(), pstSession->szTripId, stRun.szRoadID,
-			stRow.strStaySeconds.c_str(), static_cast<int>(bMeetsFineMin));
+		// [사용자 지시, 2026-09-11 최정우] Y/0(정상) 도 N/x 와 동일한 형식으로 INFO 로그에
+		//   non_charge_reason=[0:정상 과금] 을 남긴다 — WARN 승격 없이 조회용 상수(NCR_NORMAL)만
+		//   추가, DB non_charge_reason 컬럼에는 기록 안 함(기존 관례 유지)
+		LOGFMTI("[#%02d] parking stale finalized!device=[%s] trip_id=[%s] seq=[%d] road=[%s] "
+			"dwell=[%s]s registered=[%d] non_charge_reason=[%d:%s]",
+			nThreadId, strDeviceKey.c_str(), pstSession->szTripId, pstSession->nChargeSeq, stRun.szRoadID,
+			stRow.strStaySeconds.c_str(), static_cast<int>(bMeetsFineMin), NCR_NORMAL,
+			m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), NCR_NORMAL));
 
 		pstSession->nChargeSeq += 1;
 		pstSession->vtParkRuns.erase(pstSession->vtParkRuns.begin() + i);
@@ -681,12 +721,18 @@ void CRawLogWorker::AppendExpiredExemptZoneCharge(int nThreadId, const string& s
 		BuildExemptRow(stSession.vtExemptRuns[i], stSession.szTripId, strDeviceKey,
 			nSeq, stSession.vtExemptRuns[i].dtLastInZoneTime,
 			stSession.vtExemptRuns[i].dwLastInZoneGpsSeq, "N", "4", &stRow);
+		// [버그 수정, 2026-09-11 최정우] non_charge_reason 정식 코드 기록 — 판정(N/4)은 안 건드림
+		char szReason[8];
+		snprintf(szReason, sizeof(szReason), "%d", NCR_EXEMPT_TTL_FORCED_CLOSE);
+		stRow.strNonChargeReason = szReason;
 		pvtOut->push_back(stRow);
 		nSeq += 1;
 
-		LOGFMTI("[#%02d] exempt zone expired!device=[%s] trip_id=[%s] road=[%s] dist_m=[%s]",
-			nThreadId, strDeviceKey.c_str(), stSession.szTripId,
-			stSession.vtExemptRuns[i].szRoadID, stRow.strDistM.c_str());
+		LOGFMTW("[#%02d] exempt zone expired!device=[%s] trip_id=[%s] seq=[%d] road=[%s] dist_m=[%s] "
+			"non_charge_reason=[%d:%s]",
+			nThreadId, strDeviceKey.c_str(), stSession.szTripId, nSeq - 1,
+			stSession.vtExemptRuns[i].szRoadID, stRow.strDistM.c_str(), NCR_EXEMPT_TTL_FORCED_CLOSE,
+			m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), NCR_EXEMPT_TTL_FORCED_CLOSE));
 	}
 }
 
@@ -916,12 +962,18 @@ void CRawLogWorker::AppendExpiredNodeStepCharge(int nThreadId, const string& str
 		//   (사용자 지시, 2026-09-01 최정우 수정 — 기존엔 정상 이탈과 동일하게 Y/0로 나가던 버그)
 		BuildNodeStepRow(stSession.vtNodeStepRuns[i], stSession.szTripId, strDeviceKey,
 			nSeq, dtEnd, dwEndGpsSeq, "N", "3", &stRow);
+		// [버그 수정, 2026-09-11 최정우] non_charge_reason 정식 코드 기록 — 판정(N/3)은 안 건드림
+		char szReason[8];
+		snprintf(szReason, sizeof(szReason), "%d", NCR_TTL_FORCED_CLOSE);
+		stRow.strNonChargeReason = szReason;
 		pvtOut->push_back(stRow);
 		nSeq += 1;
 
-		LOGFMTI("[#%02d] node step expired!device=[%s] trip_id=[%s] road=[%s] dist_m=[%s]",
-			nThreadId, strDeviceKey.c_str(), stSession.szTripId,
-			stSession.vtNodeStepRuns[i].szRoadID, stRow.strDistM.c_str());
+		LOGFMTW("[#%02d] node step expired!device=[%s] trip_id=[%s] seq=[%d] road=[%s] dist_m=[%s] "
+			"non_charge_reason=[%d:%s]",
+			nThreadId, strDeviceKey.c_str(), stSession.szTripId, nSeq - 1,
+			stSession.vtNodeStepRuns[i].szRoadID, stRow.strDistM.c_str(), NCR_TTL_FORCED_CLOSE,
+			m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), NCR_TTL_FORCED_CLOSE));
 	}
 }
 
@@ -1002,6 +1054,17 @@ void CRawLogWorker::FlushNodeStepRunsAtTripEnd(int nThreadId, const sRawLogInfo&
 		pstSession->bHasHeldNodeStepRun = false;
 	}
 
+	// [버그 수정, 2026-09-11 최정우] 일반도로 구간병합 이월값(stMergeCarry) — 받아줄 새 run이
+	//   열리기를 기다리는 중에 이 조기반환 경로로 트립이 끝나면, 다른 carry 상태들(bHasParkTouchCarry/
+	//   bHasHeldNodeStepRun/bHasHeldSpeedMirrorRun)과 달리 여기서 소비되지 않아 그 구간의 거리·시간이
+	//   과금 레코드 없이 사라지고 있었다(전체 재검증으로 발견, ExpireTtlSessions() 도 동일하게
+	//   누락돼 있어 같이 고침) — 남은 값을 그대로 vtNodeStepRuns 에 편입시켜 마감한다.
+	if (pstSession->bHasMergeCarry)
+	{
+		pstSession->vtNodeStepRuns.push_back(pstSession->stMergeCarry);
+		pstSession->bHasMergeCarry = false;
+	}
+
 	if (pstSession->vtNodeStepRuns.empty())
 		return;
 
@@ -1010,6 +1073,46 @@ void CRawLogWorker::FlushNodeStepRunsAtTripEnd(int nThreadId, const sRawLogInfo&
 		stRawLogInfo.dtGPS, stRawLogInfo.dwSeqNo, pvtChargeInserts);
 	pstSession->nChargeSeq += static_cast<int>(pvtChargeInserts->size() - nSizeBefore);
 	pstSession->vtNodeStepRuns.clear();
+}
+
+/**
+ * @brief 개방형·면제구역판 FlushNodeStepRunsAtTripEnd() — 이번 tick 자체의 맵매칭 실패로 bMatched
+ *   블록(ProcessOpenGateCharge/ProcessExemptZoneCharge)이 안 불리는 조기반환 경로 전용 안전망
+ * @remark [버그 수정, 2026-09-11 최정우] 트립 종료 시 마지막 GPS tick 자체의 맵매칭이 실패하면
+ *   ProcessOpenGateCharge()/ProcessExemptZoneCharge() 가 bMatched 블록 안에서만 호출되는 탓에 전혀
+ *   안 불려, 그 시점에 열려있던 개방형·면제구역 run 이 과금 레코드 없이 세션과 함께 사라지던 버그의
+ *   수정. 반드시 FlushNodeStepRunsAtTripEnd() 와 정확히 같은 호출 지점(이번 tick이 매칭실패로
+ *   곧장 return 하는 분기)에서만 호출할 것 — 처음엔 CLOSED/SPEED 의 "매칭 시도 전 무조건 flush"
+ *   패턴을 그대로 따라 ProcessRawLog 의 bTrustedTripEnd 블록 최상단에서 무조건 호출하도록 짰었는데,
+ *   재매칭 결과를 수정 전과 대조하다가 000376_20260821095239·000376_20260826152113 두 트립에서
+ *   회귀를 발견했다 — 이 두 트립은 원래 마지막 tick이 정상 매칭돼 bMatched 블록에서 Y/0 으로 정상
+ *   종료되고 있었는데, 무조건-먼저-flush 가 vtOpenRuns 를 먼저 비워버려서 뒤이은 정상 Y/0 종료
+ *   로직이 아예 실행되지 못하고 이 함수의 N/3(AUDIT) 값으로 잘못 대체됐다. CLOSED/SPEED 는 정상
+ *   진출이 게이트 통과 tick(트립 마지막 tick보다 보통 이전)에서 이미 끝나 있어 무조건-먼저-flush 가
+ *   안전하지만, OPEN/EXEMPT 는 "트립 마지막 tick 자체가 정상 매칭되며 끝나는" 케이스가 흔해 그
+ *   전제가 성립하지 않는다 — FlushNodeStepRunsAtTripEnd() 의 2026-09-03 회귀 사례(선언부 주석
+ *   참고)와 근본원인이 동일하다.
+*/
+void CRawLogWorker::FlushOpenExemptRunsAtTripEnd(int nThreadId, const sRawLogInfo& stRawLogInfo,
+		VEHICLE_TRIP_SESSION *pstSession, vector<CHARGE_INSERT_ROW> *pvtChargeInserts)
+{
+	if (pstSession == nullptr)
+		return;
+
+	if (!pstSession->vtOpenRuns.empty())
+	{
+		size_t nSizeBefore = pvtChargeInserts->size();
+		AppendTripEndOpenGateCharge(nThreadId, stRawLogInfo.szDeviceKey, *pstSession, pvtChargeInserts);
+		pstSession->nChargeSeq += static_cast<int>(pvtChargeInserts->size() - nSizeBefore);
+		pstSession->vtOpenRuns.clear();
+	}
+	if (!pstSession->vtExemptRuns.empty())
+	{
+		size_t nSizeBefore = pvtChargeInserts->size();
+		AppendExpiredExemptZoneCharge(nThreadId, stRawLogInfo.szDeviceKey, *pstSession, pvtChargeInserts);
+		pstSession->nChargeSeq += static_cast<int>(pvtChargeInserts->size() - nSizeBefore);
+		pstSession->vtExemptRuns.clear();
+	}
 }
 
 /**
@@ -1207,6 +1310,14 @@ void CRawLogWorker::BuildOpenZoneRow(const ZONE_RUN_SESSION& stRun, const string
 	{
 		pstRow->strChargeYn = "N";
 		pstRow->strChargeStatus = "3";
+		// [버그 수정, 2026-09-11 최정우] non_charge_reason 정식 코드 기록 — 판정(N/3) 자체는
+		//   위에서 이미 끝났고 사유만 부가. AppendExpiredOpenGateCharge/AppendTripEndOpenGateCharge
+		//   는 이 함수 호출 뒤 charge_yn/status 를 TTL/트립종료 사유(코드 61)로 다시 덮어쓰므로
+		//   그쪽에서 이 값도 같이 덮어쓴다 — 여기서 세팅되는 11번은 그 두 곳을 거치지 않는
+		//   "정상 진행 중 게이트 미통과로 마감되는" 살아있는 경로(ProcessOpenGateCharge)에만 남는다.
+		char szReason[8];
+		snprintf(szReason, sizeof(szReason), "%d", NCR_OPEN_ENTRY_GATE_MISSED);
+		pstRow->strNonChargeReason = szReason;
 	}
 }
 
@@ -1234,12 +1345,70 @@ void CRawLogWorker::AppendExpiredOpenGateCharge(int nThreadId, const string& str
 			nSeq, stSession.dtLastSeen, stSession.dwLastGpsSeq, &stRow);
 		stRow.strChargeYn = "N";
 		stRow.strChargeStatus = "3";
+		// [버그 수정, 2026-09-11 최정우] non_charge_reason 정식 코드 기록(공통 TTL사유) — 위
+		//   BuildOpenZoneRow() 가 내부적으로 11번(진입게이트 미통과)을 세팅했을 수 있으나, 이 함수는
+		//   그 사유와 무관하게 TTL 만료로 강제마감하는 경로라 61로 덮어쓴다(charge_yn/status 를
+		//   덮어쓰는 것과 동일한 이유)
+		char szReason[8];
+		snprintf(szReason, sizeof(szReason), "%d", NCR_TTL_FORCED_CLOSE);
+		stRow.strNonChargeReason = szReason;
 		pvtOut->push_back(stRow);
 		nSeq += 1;
 
-		LOGFMTI("[#%02d] open zone expired!device=[%s] trip_id=[%s] road=[%s] dist_m=[%s]",
-			nThreadId, strDeviceKey.c_str(), stSession.szTripId,
-			stSession.vtOpenRuns[i].szRoadID, stRow.strDistM.c_str());
+		LOGFMTW("[#%02d] open zone expired!device=[%s] trip_id=[%s] seq=[%d] road=[%s] dist_m=[%s] "
+			"non_charge_reason=[%d:%s]",
+			nThreadId, strDeviceKey.c_str(), stSession.szTripId, nSeq - 1,
+			stSession.vtOpenRuns[i].szRoadID, stRow.strDistM.c_str(), NCR_TTL_FORCED_CLOSE,
+			m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), NCR_TTL_FORCED_CLOSE));
+	}
+}
+
+/**
+ * @brief 트립 정상종료(TRIP_EVENT=2) 시점, 아직 열려있는 개방형 run 을 N/3(AUDIT)로 마감
+ * @param[in] nThreadId 로그용 워커 ID
+ * @param[in] strDeviceKey 세션 맵 키(=DEVICE_KEY)
+ * @param[in] stSession 종료 직전 세션(제거 전 스냅샷)
+ * @param[out] pvtOut 열려있던 run 마다 CHARGE_INSERT_ROW 1건 추가
+ * @remark [버그 수정, 2026-09-11 최정우] CLOSED/SPEED 는 트립종료 시 AppendExpiredClosedRoadCharge/
+ *   AppendExpiredSpeedZoneCharge 가 매칭 성공 여부와 무관하게 무조건 호출돼 마감되는데(ProcessRawLog
+ *   bTrustedTripEnd 블록), OPEN·EXEMPT 는 ProcessOpenGateCharge/ProcessExemptZoneCharge 가 그 자리에서
+ *   Y/0 으로 마감하는 경로 하나뿐이었다 — 그런데 이 두 함수는 bMatched 블록 안에서만 호출된다. 트립이
+ *   끝나는 마지막 tick 자체의 맵매칭이 실패하면(정확도 나쁨·이상속도·좌표무효 등, 트립 막바지에 흔함)
+ *   그 시점에 열려있던 개방형 run 이 과금 레코드 없이 세션과 함께 사라졌다(최소 재현으로 확인).
+ *   AppendExpiredOpenGateCharge() 는 TTL 만료 전용(세션 전체가 wall-clock 기준으로 유휴 판정됐을 때)
+ *   이라 stSession.dtLastSeen(=time(nullptr))·dwLastGpsSeq(세션 공통값)를 쓰는데, 트립종료는 "이번
+ *   tick 이 마지막"이라는 정확한 GPS 시각을 아는 경우라 CLOSED/SPEED·EXEMPT(AppendExpiredExemptZoneCharge,
+ *   run 별 dtLastInZoneTime 사용)와 동일하게 run 별 마지막 확정 시각을 그대로 쓴다.
+*/
+void CRawLogWorker::AppendTripEndOpenGateCharge(int nThreadId, const string& strDeviceKey,
+		const VEHICLE_TRIP_SESSION& stSession, vector<CHARGE_INSERT_ROW> *pvtOut)
+{
+	if (stSession.vtOpenRuns.empty() || (pvtOut == nullptr)
+		|| (m_stConfig.pcChargeDataLoader == nullptr) || m_stConfig.strChargeInsertSQL.empty())
+		return;
+
+	int nSeq = stSession.nChargeSeq;
+	for (size_t i = 0; i < stSession.vtOpenRuns.size(); ++i)
+	{
+		CHARGE_INSERT_ROW stRow;
+		BuildOpenZoneRow(stSession.vtOpenRuns[i], stSession.szTripId, strDeviceKey,
+			nSeq, stSession.vtOpenRuns[i].dtLastInZoneTime,
+			stSession.vtOpenRuns[i].dwLastInZoneGpsSeq, &stRow);
+		stRow.strChargeYn = "N";
+		stRow.strChargeStatus = "3";
+		// [버그 수정, 2026-09-11 최정우] non_charge_reason 정식 코드 기록 — AppendExpiredOpenGateCharge
+		//   와 동일 근거(BuildOpenZoneRow 내부 11번을 트립종료 공통사유 61로 덮어씀)
+		char szReason[8];
+		snprintf(szReason, sizeof(szReason), "%d", NCR_TTL_FORCED_CLOSE);
+		stRow.strNonChargeReason = szReason;
+		pvtOut->push_back(stRow);
+		nSeq += 1;
+
+		LOGFMTW("[#%02d] open zone trip-end flush!device=[%s] trip_id=[%s] seq=[%d] road=[%s] "
+			"dist_m=[%s] non_charge_reason=[%d:%s]",
+			nThreadId, strDeviceKey.c_str(), stSession.szTripId, nSeq - 1,
+			stSession.vtOpenRuns[i].szRoadID, stRow.strDistM.c_str(), NCR_TTL_FORCED_CLOSE,
+			m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), NCR_TTL_FORCED_CLOSE));
 	}
 }
 
@@ -1339,13 +1508,18 @@ void CRawLogWorker::AppendExpiredClosedRoadCharge(int nThreadId, const string& s
 	stRow.strTripEndDt = FormatDateTime14(dtEndTime);
 	stRow.strChargeYn = "N";
 	stRow.strChargeStatus = "3";							// AUDIT — 다른 TTL-flush 유형과 동일 관례
+	// [버그 수정, 2026-09-11 최정우] non_charge_reason 정식 코드 기록 — 판정(N/3)은 안 건드림
+	char szReason[8];
+	snprintf(szReason, sizeof(szReason), "%d", NCR_TTL_FORCED_CLOSE);
+	stRow.strNonChargeReason = szReason;
 
 	pvtOut->push_back(stRow);
 
-	LOGFMTI("[#%02d] closed road recorded (ttl expiry)!device=[%s] trip_id=[%s] seq=[%d] road=[%s] "
-		"entry=[%s] exit=[unknown]",
+	LOGFMTW("[#%02d] closed road recorded (ttl expiry)!device=[%s] trip_id=[%s] seq=[%d] road=[%s] "
+		"entry=[%s] exit=[unknown] non_charge_reason=[%d:%s]",
 		nThreadId, strDeviceKey.c_str(), stSession.szTripId, stSession.nChargeSeq,
-		stSession.szClosedRoadId, stSession.szEntryTollgateId);
+		stSession.szClosedRoadId, stSession.szEntryTollgateId, NCR_TTL_FORCED_CLOSE,
+		m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), NCR_TTL_FORCED_CLOSE));
 }
 
 /**
@@ -1498,8 +1672,10 @@ void CRawLogWorker::AppendExpiredSpeedZoneCharge(int nThreadId, const string& st
 		stNodeStepRow.strTripEndDt = FormatDateTime14(dtEndTime);
 		pvtOut->push_back(stNodeStepRow);
 
-		LOGFMTI("[#%02d] node step recorded (ttl expiry, from speed zone)!device=[%s] trip_id=[%s] seq=[%s] road=[%s]",
-			nThreadId, strDeviceKey.c_str(), stSession.szTripId, szNodeStepSeq, stSession.szSpeedZoneRoadId);
+		LOGFMTI("[#%02d] node step recorded (ttl expiry, from speed zone)!device=[%s] trip_id=[%s] seq=[%s] "
+			"road=[%s] non_charge_reason=[%d:%s]",
+			nThreadId, strDeviceKey.c_str(), stSession.szTripId, szNodeStepSeq, stSession.szSpeedZoneRoadId,
+			NCR_NORMAL, m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), NCR_NORMAL));
 	}
 }
 
@@ -1955,6 +2131,20 @@ void CRawLogWorker::ResetTripSessionForBegin(VEHICLE_TRIP_SESSION& stSession, bo
 		stSession.vtExemptRuns.clear();
 		stSession.vtNodeStepRuns.clear();
 		stSession.vtOpenRuns.clear();							// (2026-08-25 최정우 추가)
+
+		// [버그 수정, 2026-09-11 최정우] 주정차(PARKING) 진행 세션·후보는 위 3종과 동일하게 trip
+		//   스코프인데 여기서만 빠져 있었다 — TRIP_ID 변경(이전 END 누락) 시 옛 trip 에서 열려있던
+		//   vtParkRuns 가 새 trip 세션으로 그대로 이월되고, 나중에 그 run 이 마감될 때 BuildParkRow()
+		//   가 새 TRIP_ID + 옛 trip 의 GPS_SEQ 조합으로 START_GPS_SEQ 를 기록해 PK 정합성이
+		//   깨졌다(PRIM_RAWGPS PK 는 TRIP_ID+GPS_SEQ). NODE_STEP 접촉/병합 이월 상태도 같은 이유로
+		//   같이 리셋 — 안 하면 옛 trip 의 이월값(위치·시각·링크ID)이 새 trip 첫 tick 과 잘못
+		//   이어붙는다.
+		stSession.vtParkRuns.clear();
+		stSession.vtParkCands.clear();
+		stSession.bHasParkTouchCarry = false;
+		stSession.bHasMergeCarry = false;
+		stSession.bHasHeldNodeStepRun = false;
+		stSession.bHasHeldSpeedMirrorRun = false;
 	}
 }
 
@@ -2784,8 +2974,10 @@ void CRawLogWorker::ResolveSkipGapNodeStep(int nThreadId, VEHICLE_TRIP_SESSION *
 			pstSession->nChargeSeq += 1;
 
 			LOGFMTI("[#%02d] node step SKIP-gap bridged(rematch)!device=[%s] trip_id=[%s] from=[%llu] to=[%llu] "
-				"dist_m=[%.1f]", nThreadId, stToRawLogInfo.szDeviceKey, stToRawLogInfo.szTripID,
-				static_cast<unsigned long long>(qwFromLink), static_cast<unsigned long long>(qwToLink), dfDistM);
+				"dist_m=[%.1f] non_charge_reason=[%d:%s]", nThreadId, stToRawLogInfo.szDeviceKey,
+				stToRawLogInfo.szTripID, static_cast<unsigned long long>(qwFromLink),
+				static_cast<unsigned long long>(qwToLink), dfDistM, NCR_NORMAL,
+				m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), NCR_NORMAL));
 			return;
 		}
 	}
@@ -2822,9 +3014,11 @@ void CRawLogWorker::ResolveSkipGapNodeStep(int nThreadId, VEHICLE_TRIP_SESSION *
 				pstSession->nChargeSeq += 1;
 
 				LOGFMTI("[#%02d] node step SKIP-gap bridged(graph path)!device=[%s] trip_id=[%s] from=[%llu] "
-					"to=[%llu] hops=[%zu] dist_m=[%.1f]", nThreadId, stToRawLogInfo.szDeviceKey,
-					stToRawLogInfo.szTripID, static_cast<unsigned long long>(qwFromLink),
-					static_cast<unsigned long long>(qwToLink), vtPath.size(), dfPathDistM);
+					"to=[%llu] hops=[%zu] dist_m=[%.1f] non_charge_reason=[%d:%s]", nThreadId,
+					stToRawLogInfo.szDeviceKey, stToRawLogInfo.szTripID,
+					static_cast<unsigned long long>(qwFromLink), static_cast<unsigned long long>(qwToLink),
+					vtPath.size(), dfPathDistM, NCR_NORMAL,
+					m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), NCR_NORMAL));
 				return;
 			}
 		}
@@ -2880,18 +3074,26 @@ void CRawLogWorker::ResolveSkipGapNodeStep(int nThreadId, VEHICLE_TRIP_SESSION *
 		{
 			stRow.strSpeedKmh = "0";
 			stRow.strStaySeconds = "0";
-			char szReason[8];
-			snprintf(szReason, sizeof(szReason), "%d", NCR_NODE_STEP_GAP_ANCHOR_LOST);
-			stRow.strNonChargeReason = szReason;
 		}
+		// [버그 수정, 2026-09-11 최정우] non_charge_reason 정식 코드 기록 — CHARGE_YN/STATUS(N/3)
+		//   판정 자체는 위 BuildNodeStepRowFromLinkRange 호출에서 이미 끝났고 여기선 안 건드림,
+		//   사유만 부가로 남긴다(bFromValid 로 이미 갈라놓은 두 케이스 그대로 사용)
+		const int nThisChargeSeq = pstSession->nChargeSeq;
+		const int nNonChargeReason = bFromValid ? NCR_NODE_STEP_GAP_APPROX : NCR_NODE_STEP_GAP_ANCHOR_LOST;
+		char szReason[8];
+		snprintf(szReason, sizeof(szReason), "%d", nNonChargeReason);
+		stRow.strNonChargeReason = szReason;
 
 		pvtChargeInserts->push_back(stRow);
 		pstSession->nChargeSeq += 1;
 
 		LOGFMTW("[#%02d] node step SKIP-gap bridged(straight-line fallback, AUDIT)!device=[%s] trip_id=[%s] "
-			"from=[%llu] to=[%llu] dist_m=[%.1f] from_valid=[%d]", nThreadId, stToRawLogInfo.szDeviceKey,
-			stToRawLogInfo.szTripID, static_cast<unsigned long long>(qwFromLink),
-			static_cast<unsigned long long>(qwToLink), dfDistM, static_cast<int>(bFromValid));
+			"charge_seq=[%d] from=[%llu] to=[%llu] dist_m=[%.1f] from_valid=[%d] "
+			"non_charge_reason=[%d:%s]", nThreadId, stToRawLogInfo.szDeviceKey,
+			stToRawLogInfo.szTripID, nThisChargeSeq, static_cast<unsigned long long>(qwFromLink),
+			static_cast<unsigned long long>(qwToLink), dfDistM, static_cast<int>(bFromValid),
+			nNonChargeReason,
+			m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), nNonChargeReason));
 	}
 }
 
@@ -3773,6 +3975,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		{
 			*pbTripEnded = true;
 			FlushNodeStepRunsAtTripEnd(nThreadId, stRawLogInfo, &stSession, pvtChargeInserts);
+			FlushOpenExemptRunsAtTripEnd(nThreadId, stRawLogInfo, &stSession, pvtChargeInserts);
 		}
 		return AppendUpdateRow(pvtUpdates, stRawLogInfo, MATCH_STATUS_SKIP);
 	}
@@ -3786,6 +3989,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		{
 			*pbTripEnded = true;
 			FlushNodeStepRunsAtTripEnd(nThreadId, stRawLogInfo, &stSession, pvtChargeInserts);
+			FlushOpenExemptRunsAtTripEnd(nThreadId, stRawLogInfo, &stSession, pvtChargeInserts);
 		}
 
 		// 주정차 판정은 RAW_VLD 와 무관하게 원시 GPS 좌표로 수행한다 (2026-08-22 사용자 확정).
@@ -3823,6 +4027,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		{
 			*pbTripEnded = true;
 			FlushNodeStepRunsAtTripEnd(nThreadId, stRawLogInfo, &stSession, pvtChargeInserts);
+			FlushOpenExemptRunsAtTripEnd(nThreadId, stRawLogInfo, &stSession, pvtChargeInserts);
 		}
 
 		// 정확도 SKIP — 최근접 있으면 참고용 MATCH_LAT/LON·INTERSECT_LEN(GPS↔세그먼트 교차점 거리) 저장.
@@ -3897,6 +4102,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		{
 			*pbTripEnded = true;
 			FlushNodeStepRunsAtTripEnd(nThreadId, stRawLogInfo, &stSession, pvtChargeInserts);
+			FlushOpenExemptRunsAtTripEnd(nThreadId, stRawLogInfo, &stSession, pvtChargeInserts);
 		}
 
 		// 정합성 SKIP — 최근접 있으면 참고용 MATCH_LAT/LON·INTERSECT_LEN(GPS↔세그먼트 교차점 거리) 저장
@@ -4365,6 +4571,7 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		//   마감하므로 여기서 또 부르면 그 정상 결과를 N/3(AUDIT)로 덮어써버린다 — 그래서 이 안전망은
 		//   반드시 이 fallback 경로(else 이후 도달)에서만 호출한다 (2026-09-03 최정우 추가)
 		FlushNodeStepRunsAtTripEnd(nThreadId, stRawLogInfo, &stSession, pvtChargeInserts);
+		FlushOpenExemptRunsAtTripEnd(nThreadId, stRawLogInfo, &stSession, pvtChargeInserts);
 	}
 
 	return true;
@@ -4437,20 +4644,19 @@ bool CRawLogWorker::RunMapMatch(int nThreadId, const sRawLogInfo& stRawLogInfo,
 	pstMatchLinkInfo->dfIntersectLenSgmt = -1.0;
 	CProcessManager& cProcessManager = m_stConfig.pcProcessManager[nThreadId];
 
-	// 같은 링크 노이즈 보정(1m 강제전진) 억제 판별 — 원시 GPS 좌표·방향(heading)이 직전 tick과
-	//   완전히 같으면(=실제로 정지) 강제전진 대신 세그먼트 매칭이 계산한 실제 좌표를 그대로 쓴다.
-	//   원본 stRawLogInfo(장비 보고값) 기준으로 비교 — stAdjusted 는 heading 계산/보정이 들어가
-	//   같은 값이어도 달라질 수 있어 판별 기준으로 부적합하다 (사용자 지시, 2026-09-02 최정우 추가)
-	const bool bSameRawAndHeadingAsPrev = pstSession->bHasPrevTickRaw
-		&& (stRawLogInfo.dfX == pstSession->dfPrevTickRawX)
-		&& (stRawLogInfo.dfY == pstSession->dfPrevTickRawY)
-		&& (stRawLogInfo.nAngle == pstSession->nPrevTickAngle);
+	// 같은 링크 노이즈 보정(1m 강제전진) 억제 판별용 "직전 tick 원시좌표" 스냅샷 — 비교 자체는
+	//   아래(stAdjusted.fSpeed 확정 후)에서 한다. 여기서는 세션 갱신 전 값만 먼저 떠둔다
+	//   (2026-09-11 최정우 수정 — 아래 이유로 위치 이동)
+	const double dfPrevTickRawX = pstSession->dfPrevTickRawX;
+	const double dfPrevTickRawY = pstSession->dfPrevTickRawY;
+	const sint16 nPrevTickAngle = pstSession->nPrevTickAngle;
+	const bool bHadPrevTickRaw = pstSession->bHasPrevTickRaw;
 	pstSession->dfPrevTickRawX = stRawLogInfo.dfX;
 	pstSession->dfPrevTickRawY = stRawLogInfo.dfY;
 	pstSession->nPrevTickAngle = stRawLogInfo.nAngle;
 	pstSession->bHasPrevTickRaw = true;
 
-	// ── HEADING/SPEED 보정: DB 적재값 우선, NULL(미적재) 이면 직전 매칭좌표로 계산 (2026-07-08 최정우 추가) ──
+	// ── HEADING/SPEED 보정: DB 적재값 우선, NULL(미적재) 이면 직전 매칭좌표로 계산 (2026-07-08 최정우 주석 추가) ──
 	//   · 전제 : 세션에 직전 "매칭 성공" 좌표(dfLastMatchX/Y)와 그 GPS 시각(dtLastMatchGps) 보유 시에만
 	//   · nAngle < 0(NO_ANGLE) / fSpeed < 0(NO_SPEED) 가 곧 DB NULL 을 의미(파서에서 그렇게 세팅)
 	// · 차이 가드: 직전 매칭점과의 시간간격이 (0, MM_CALC_MAX_GAP_SEC] 일 때만 계산(끊긴 구간 오계산 방지)
@@ -4493,6 +4699,32 @@ bool CRawLogWorker::RunMapMatch(int nThreadId, const sRawLogInfo& stRawLogInfo,
 		if (dfGapSec2 > 0.0 && dfGapSec2 <= static_cast<double>(MM_CALC_MAX_GAP_SEC))
 			stAltCtx.dfGapSec = dfGapSec2;
 	}
+
+	// 같은 링크 노이즈 보정(1m 강제전진) 억제 판별 — 원시 GPS 좌표·방향(heading)이 직전 tick과
+	//   완전히 같으면(=실제로 정지) 강제전진 대신 세그먼트 매칭이 계산한 실제 좌표를 그대로 쓴다.
+	//   좌표·방향 비교는 원본 stRawLogInfo(장비 보고값) 기준 — stAdjusted 는 heading 계산/보정이
+	//   들어가 같은 값이어도 달라질 수 있어 판별 기준으로 부적합하다 (사용자 지시, 2026-09-02 최정우 추가)
+	// [버그 수정, 2026-09-11 최정우] 비트 단위 완전동일만 잡던 위 기준은 정차 중 GPS 수신기 자체
+	//   지터(수 m)를 "다른 위치로 이동"으로 오판해 노이즈 전진보정이 매 tick 누적, 실측 최대 20m
+	//   드리프트가 확인됐다(재매칭 검증). 완전동일이 아니어도 저속(MM_SPEED_LOW_KMH 이하)이고 원시
+	//   이동거리가 MM_NOISE_SAME_POS_TOL_M 이내면 "사실상 정지"로 같이 인정한다 — heading 은 정차
+	//   중 노이즈로 요동치는 경우가 흔해 이 경우엔 비교하지 않는다(저속 자체가 "역주행일 리 없다"는
+	//   더 강한 근거, MM_SPEED_LOW_KMH 재사용 근거는 위 ContinueMapMatch.cpp bLowSpeedStationary와 동일).
+	//   속도 판정은 stRawLogInfo.fSpeed(DB 원본, NULL 이면 -1)가 아니라 위에서 NULL 폴백까지 끝난
+	//   stAdjusted.fSpeed 를 써야 한다 — 원본만 보면 SPEED_KMH 가 DB NULL 인 tick(흔함)마다 이 예외가
+	//   전혀 안 걸려 고쳐지지 않은 것처럼 보인다(최초 배포 후 재매칭 대조로 발견 — 000370_20260826143912
+	//   등 여러 정지구간이 수정 후에도 그대로였음).
+	POINT stPrevTickRaw, stCurTickRaw;
+	stPrevTickRaw.dfX = dfPrevTickRawX;  stPrevTickRaw.dfY = dfPrevTickRawY;
+	stCurTickRaw.dfX = stRawLogInfo.dfX; stCurTickRaw.dfY = stRawLogInfo.dfY;
+	const bool bExactSameRawAndHeading = bHadPrevTickRaw
+		&& (stRawLogInfo.dfX == dfPrevTickRawX)
+		&& (stRawLogInfo.dfY == dfPrevTickRawY)
+		&& (stRawLogInfo.nAngle == nPrevTickAngle);
+	const bool bNearSameLowSpeed = bHadPrevTickRaw
+		&& (stAdjusted.fSpeed >= 0.0f) && (stAdjusted.fSpeed <= static_cast<float>(MM_SPEED_LOW_KMH))
+		&& (HaversineMeters(stPrevTickRaw, stCurTickRaw) <= MM_NOISE_SAME_POS_TOL_M);
+	const bool bSameRawAndHeadingAsPrev = bExactSameRawAndHeading || bNearSameLowSpeed;
 
 	// ── 고도 앵커 → 연속 맵매칭 컨텍스트 (Begin 미적용) ──
 	//   · 전제: bHasPrevAlt (직전 매칭 성공 시 ALTITUDE_M 있었음)
@@ -4537,6 +4769,17 @@ bool CRawLogWorker::RunMapMatch(int nThreadId, const sRawLogInfo& stRawLogInfo,
 	{
 		double dfNewLinkPos = static_cast<double>(pstMatchLinkInfo->wLenFromLink)
 			+ pstMatchLinkInfo->dfSgmtMatchLen;
+
+		// [버그 수정, 2026-09-11 최정우 — 사용자 지시] 정지 중(bSameRawAndHeadingAsPrev)인데도
+		//   SgmtMatch() 가 매 tick 새로 세그먼트 위 수선의 발을 계산해, GPS 저주파 위치표류를 그대로
+		//   반영하는 현상(실측 최대 20m) — 매칭좌표(dfMatchX/Y)를 여기서 직접 덮어쓰는 첫 시도는
+		//   바로 아래 nPendingIntersectLen 계산(CalcIntersectLen, 매칭 신뢰도 지표)도 오염시켜
+		//   MATCH_STATUS 2건 회귀로 이어져 되돌렸다. 좌표 자체는 그대로 두고, 5개 과금함수가 거리
+		//   누적(dfAccumDistM) 여부를 판단할 수 있게 신호만 실어 보낸다 — 매칭 판정(SKIP/MATCHED,
+		//   intersect_len, 경계클램프 등)에는 전혀 영향 없음. bReverseSuspect 와 동일한 원리로
+		//   pstSession->stPendingMatchLinkInfo 에 그대로 복사돼 CommitPendingRow 경유 과금함수까지
+		//   전달된다.
+		pstMatchLinkInfo->bSameRawAndHeadingAsPrev = bSameRawAndHeadingAsPrev;
 
 		// 연속 역행 스트릭 갱신 — bReverseSuspect(위치 역행 + heading 도 역방향 일치) 연속 횟수를 센다.
 		//   GPS 노이즈성 흔들림(heading은 여전히 정방향)은 스트릭에 안 잡히고 실제 역행(heading도 반대)만
@@ -4757,12 +5000,24 @@ void CRawLogWorker::ProcessOpenGateCharge(int nThreadId, const sRawLogInfo& stRa
 		if (bSameZone)
 		{
 			stRun.nExitTicks = 0;
-			POINT stPrev, stCur;
-			stPrev.dfX = stRun.dfLastX;  stPrev.dfY = stRun.dfLastY;
-			stCur.dfX = stMatchLinkInfo.dfMatchX;  stCur.dfY = stMatchLinkInfo.dfMatchY;
-			stRun.dfAccumDistM += HaversineMeters(stPrev, stCur);
-			stRun.dfLastX = stMatchLinkInfo.dfMatchX;
-			stRun.dfLastY = stMatchLinkInfo.dfMatchY;
+			// [버그 수정, 2026-09-11 최정우 — 1차 수정 자체 발견+재수정] 정지 중(bSameRawAndHeadingAsPrev)
+			//   GPS 저주파 위치표류가 매 tick 세그먼트 재투영에 반영돼 dist_m 이 과다 계상되는 걸
+			//   막는다(NODE_STEP/EXEMPT 동일 수정과 같은 근거). ProcessClosedRoadCharge()/
+			//   ProcessSpeedZoneCharge() 와 동일하게, "거리누적·누적기준점"(dfAccumDistM/dfLastX/Y)만
+			//   가드 안에 넣고, "구역 안에서 마지막으로 확인된 링크/시각"(qwLastLinkID/dtLastInZoneTime/
+			//   dwLastInZoneGpsSeq — stay_seconds·경계통과 시각보간·end_gps_seq 의 근거)은 정지 중에도
+			//   매 tick 갱신돼야 한다 — 최초 배선 시 이 셋까지 같은 가드에 넣어버려서, 정지 상태로
+			//   구역이 끝나면 stay_seconds 가 짧게 계산되고 end_gps_seq 도 부정확해지는 회귀가 있었다
+			//   (전체 재검증으로 자체 발견).
+			if (!stMatchLinkInfo.bSameRawAndHeadingAsPrev)
+			{
+				POINT stPrev, stCur;
+				stPrev.dfX = stRun.dfLastX;  stPrev.dfY = stRun.dfLastY;
+				stCur.dfX = stMatchLinkInfo.dfMatchX;  stCur.dfY = stMatchLinkInfo.dfMatchY;
+				stRun.dfAccumDistM += HaversineMeters(stPrev, stCur);
+				stRun.dfLastX = stMatchLinkInfo.dfMatchX;
+				stRun.dfLastY = stMatchLinkInfo.dfMatchY;
+			}
 			stRun.qwLastLinkID = stMatchLinkInfo.qwLinkID;
 			stRun.dtLastInZoneTime = stRawLogInfo.dtGPS;
 			stRun.dwLastInZoneGpsSeq = stRawLogInfo.dwSeqNo;
@@ -4833,11 +5088,30 @@ void CRawLogWorker::ProcessOpenGateCharge(int nThreadId, const sRawLogInfo& stRa
 			pstSession->nChargeSeq, dtOpenExitTime, stRun.dwLastInZoneGpsSeq, &stRow);
 		pvtChargeInserts->push_back(stRow);
 
-		LOGFMTI("[#%02d] open zone exit recorded!device=[%s] trip_id=[%s] seq=[%d] road=[%s] "
-			"started_by_trip=[%d] gate_crossed=[%d] dist_m=[%s] avg_speed=[%s] trip_ending=[%d]",
-			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstSession->nChargeSeq,
-			stRun.szRoadID, static_cast<int>(stRun.bStartedByTrip), static_cast<int>(stRun.bGateCrossed),
-			stRow.strDistM.c_str(), stRow.strSpeedKmh.c_str(), static_cast<int>(bTripEnding));
+		if (stRow.strNonChargeReason.empty())
+		{
+			LOGFMTI("[#%02d] open zone exit recorded!device=[%s] trip_id=[%s] seq=[%d] road=[%s] "
+				"started_by_trip=[%d] gate_crossed=[%d] dist_m=[%s] avg_speed=[%s] trip_ending=[%d] "
+				"non_charge_reason=[%d:%s]",
+				nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstSession->nChargeSeq,
+				stRun.szRoadID, static_cast<int>(stRun.bStartedByTrip), static_cast<int>(stRun.bGateCrossed),
+				stRow.strDistM.c_str(), stRow.strSpeedKmh.c_str(), static_cast<int>(bTripEnding),
+				NCR_NORMAL, m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), NCR_NORMAL));
+		}
+		else
+		{
+			// [버그 수정, 2026-09-11 최정우] non_charge_reason 이 채워진(=N/3) 케이스는 WARN 으로
+			//   승격 + 코드·메시지를 남겨 trip_id/charge_seq 로 원인 추적 가능하게 한다
+			const int nNonChargeReason = atoi(stRow.strNonChargeReason.c_str());
+			LOGFMTW("[#%02d] open zone exit recorded(AUDIT)!device=[%s] trip_id=[%s] seq=[%d] road=[%s] "
+				"started_by_trip=[%d] gate_crossed=[%d] dist_m=[%s] avg_speed=[%s] trip_ending=[%d] "
+				"non_charge_reason=[%d:%s]",
+				nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstSession->nChargeSeq,
+				stRun.szRoadID, static_cast<int>(stRun.bStartedByTrip), static_cast<int>(stRun.bGateCrossed),
+				stRow.strDistM.c_str(), stRow.strSpeedKmh.c_str(), static_cast<int>(bTripEnding),
+				nNonChargeReason,
+				m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), nNonChargeReason));
+		}
 
 		pstSession->nChargeSeq += 1;
 		pstSession->vtOpenRuns.erase(pstSession->vtOpenRuns.begin() + si);
@@ -5043,6 +5317,11 @@ void CRawLogWorker::ProcessClosedRoadCharge(int nThreadId, const sRawLogInfo& st
 		//   틱들도 빠짐없이 누적돼 있어야 한다(실측 000376_20260819140856 RL-Z00003 — 게이트를
 		//   찾긴 했지만 위치 미도달로 대기만 하다 트립이 끝난 케이스에서 처음엔 이 갱신이 빠져
 		//   dist_m=0으로 남는 문제 발견, 2026-08-25 최정우 추가)
+		// [버그 수정, 2026-09-11 최정우] 정지 중(bSameRawAndHeadingAsPrev) GPS 저주파 위치표류가
+		//   매 tick 세그먼트 재투영에 반영돼 dist_m 이 과다 계상되는 걸 막는다(OPEN/EXEMPT/NODE_STEP
+		//   동일 수정과 같은 근거) — "게이트 확정 여부와 무관하게 매 틱 갱신"이라는 위 의도는
+		//   그대로 유지하면서, 진짜 정지 tick만 추가로 제외한다.
+		if (!stMatchLinkInfo.bSameRawAndHeadingAsPrev)
 		{
 			POINT stPrevPos, stCurPos;
 			stPrevPos.dfX = pstSession->dfClosedLastX;  stPrevPos.dfY = pstSession->dfClosedLastY;
@@ -5181,16 +5460,25 @@ void CRawLogWorker::ProcessClosedRoadCharge(int nThreadId, const sRawLogInfo& st
 			// 입/출구 게이트 이상(둘이 같거나 하나라도 비어있음) — 정상 과금 대상 아님으로 표시.
 			//   charge_status=3(AUDIT=심사대상) — 완전 배제(SKIP=4)가 아니라 사람이 재확인하도록 표시
 			//   (사용자 지시, 2026-08-13 — 원래 4(SKIP)였다가 3(AUDIT)으로 정정)
-			bool bGateAnomaly = (pstSession->szEntryTollgateId[0] == '\0') ||
-				(pstExitGate->szTollgateID[0] == '\0') ||
-				(strcmp(pstSession->szEntryTollgateId, pstExitGate->szTollgateID) == 0);
+			const bool bEntryMissing = (pstSession->szEntryTollgateId[0] == '\0');
+			const bool bExitMissing = (pstExitGate->szTollgateID[0] == '\0');
+			const bool bEntryEqualsExit = !bEntryMissing && !bExitMissing
+				&& (strcmp(pstSession->szEntryTollgateId, pstExitGate->szTollgateID) == 0);
+			bool bGateAnomaly = bEntryMissing || bExitMissing || bEntryEqualsExit;
 			stRow.strChargeYn = bGateAnomaly ? "N" : "Y";
 			stRow.strChargeStatus = bGateAnomaly ? "3" : "0";
 			if (bGateAnomaly)
 			{
-				LOGFMTW("[#%02d] closed road gate anomaly!device=[%s] trip_id=[%s] entry=[%s] exit=[%s] -> charge_yn=N",
-					nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID,
-					pstSession->szEntryTollgateId, pstExitGate->szTollgateID);
+				// [버그 수정, 2026-09-11 최정우] non_charge_reason 정식 코드 기록 — 판정(bGateAnomaly,
+				//   N/3) 자체는 안 건드리고 세 사유 중 어느 것인지만 구분해서 남긴다. 우선순위는
+				//   원래 OR 조건 순서(입구 미확인→출구 미확인→입구==출구)와 동일
+				const int nNonChargeReason = bEntryMissing ? NCR_CLOSED_ENTRY_UNOBSERVED
+					: bExitMissing ? NCR_CLOSED_EXIT_UNCONFIRMED : NCR_CLOSED_ENTRY_EQUALS_EXIT;
+				char szReason[8];
+				snprintf(szReason, sizeof(szReason), "%d", nNonChargeReason);
+				stRow.strNonChargeReason = szReason;
+				// 로그는 아래 push_back 직후 한 곳에서 Y/N 공통 형식으로 남긴다(중복 로그 방지,
+				//   2026-09-11 최정우 — open zone exit recorded() 와 동일 패턴)
 			}
 
 			// 출구 게이트 통과 시각 보간 — 직전 확정 tick~이번 tick 사이에서 게이트를 지났을 시각을
@@ -5326,9 +5614,25 @@ void CRawLogWorker::ProcessClosedRoadCharge(int nThreadId, const sRawLogInfo& st
 
 			pvtChargeInserts->push_back(stRow);
 
-			LOGFMTI("[#%02d] closed road exit charge queued!device=[%s] trip_id=[%s] seq=[%d] entry=[%s] exit=[%s] dist_m=[%s]",
-				nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstSession->nChargeSeq,
-				pstSession->szEntryTollgateId, pstExitGate->szTollgateID, szDistM);
+			// [사용자 지시, 2026-09-11 최정우] Y/0·N/x 공통 형식 — 사유가 있으면(=N/3) WARN 승격,
+			//   없으면(=Y/0) INFO 로 코드 0(정상 과금) 표시. trip_id/seq 로 동일하게 추적 가능
+			if (stRow.strNonChargeReason.empty())
+			{
+				LOGFMTI("[#%02d] closed road exit charge queued!device=[%s] trip_id=[%s] seq=[%d] entry=[%s] "
+					"exit=[%s] dist_m=[%s] non_charge_reason=[%d:%s]",
+					nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstSession->nChargeSeq,
+					pstSession->szEntryTollgateId, pstExitGate->szTollgateID, szDistM,
+					NCR_NORMAL, m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), NCR_NORMAL));
+			}
+			else
+			{
+				const int nNonChargeReason = atoi(stRow.strNonChargeReason.c_str());
+				LOGFMTW("[#%02d] closed road exit charge queued(AUDIT)!device=[%s] trip_id=[%s] seq=[%d] "
+					"entry=[%s] exit=[%s] dist_m=[%s] non_charge_reason=[%d:%s]",
+					nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstSession->nChargeSeq,
+					pstSession->szEntryTollgateId, pstExitGate->szTollgateID, szDistM, nNonChargeReason,
+					m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), nNonChargeReason));
+			}
 
 			pstSession->nChargeSeq += 1;
 			// 진출게이트 지점을 이월해 둔다 — 다음 일반도로 run 이 이 지점부터 시작하도록
@@ -5442,13 +5746,21 @@ void CRawLogWorker::ProcessClosedRoadCharge(int nThreadId, const sRawLogInfo& st
 
 			stRow.strChargeYn = "N";							// 출구 게이트 미확인 — 항상 AUDIT
 			stRow.strChargeStatus = "3";
+			// [버그 수정, 2026-09-11 최정우] non_charge_reason 정식 코드 기록 — 판정(N/3)은 안 건드림.
+			//   이 분기는 경유경로 재구성으로도 출구게이트를 못 찾고 구역만 확정 이탈한 케이스라
+			//   bGateAnomaly 분기(21/22/23)와 동일한 사유(23, 출구 미확인)
+			char szReason[8];
+			snprintf(szReason, sizeof(szReason), "%d", NCR_CLOSED_EXIT_UNCONFIRMED);
+			stRow.strNonChargeReason = szReason;
 
 			pvtChargeInserts->push_back(stRow);
 
 			LOGFMTW("[#%02d] closed road exit unconfirmed(zone left)!device=[%s] trip_id=[%s] seq=[%d] "
-				"entry=[%s] road=[%s] dist_m=[%s]",
+				"entry=[%s] road=[%s] dist_m=[%s] non_charge_reason=[%d:%s]",
 				nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstSession->nChargeSeq,
-				pstSession->szEntryTollgateId, pstSession->szClosedRoadId, szDistM);
+				pstSession->szEntryTollgateId, pstSession->szClosedRoadId, szDistM,
+				NCR_CLOSED_EXIT_UNCONFIRMED, m_cCodeMap.GetValue(NonChargeReasonTable,
+				NOE(NonChargeReasonTable), NCR_CLOSED_EXIT_UNCONFIRMED));
 
 			pstSession->nChargeSeq += 1;
 			pstSession->bInClosedRoad = false;
@@ -5693,6 +6005,9 @@ void CRawLogWorker::ProcessSpeedZoneCharge(int nThreadId, const sRawLogInfo& stR
 	{
 		// 실시간 누적거리·마지막 위치 갱신 — ProcessClosedRoadCharge() 와 동일 근거·위치(게이트
 		//   확정 여부와 무관하게 매 틱 항상 최신 유지) (2026-08-25 최정우 추가)
+		// [버그 수정, 2026-09-11 최정우] 정지 중(bSameRawAndHeadingAsPrev) GPS 저주파 위치표류 제외 —
+		//   ProcessClosedRoadCharge() 동일 수정과 같은 근거.
+		if (!stMatchLinkInfo.bSameRawAndHeadingAsPrev)
 		{
 			POINT stPrevPos, stCurPos;
 			stPrevPos.dfX = pstSession->dfSpeedLastX;  stPrevPos.dfY = pstSession->dfSpeedLastY;
@@ -5947,11 +6262,29 @@ void CRawLogWorker::ProcessSpeedZoneCharge(int nThreadId, const sRawLogInfo& stR
 			//   단, 입구 게이트를 확정 못 한(진입 판정이 애매해 비워둔) 경우는 CLOSED_ROAD와 동일하게
 			//   AUDIT(N/3) — "다른 유형과 동일하게"라는 원 지시 취지에 맞춤(2026-08-25 최정우 추가,
 			//   ProcessClosedRoadCharge() bGateAnomaly 참고)
-			bool bGateAnomaly = (pstSession->szSpeedEntryTollgateId[0] == '\0') ||
-				(pstExitGate->szTollgateID[0] == '\0') ||
-				(strcmp(pstSession->szSpeedEntryTollgateId, pstExitGate->szTollgateID) == 0);
+			const bool bEntryMissing = (pstSession->szSpeedEntryTollgateId[0] == '\0');
+			const bool bExitMissing = (pstExitGate->szTollgateID[0] == '\0');
+			const bool bEntryEqualsExit = !bEntryMissing && !bExitMissing
+				&& (strcmp(pstSession->szSpeedEntryTollgateId, pstExitGate->szTollgateID) == 0);
+			bool bGateAnomaly = bEntryMissing || bExitMissing || bEntryEqualsExit;
 			stRow.strChargeYn = bGateAnomaly ? "N" : "Y";
 			stRow.strChargeStatus = bGateAnomaly ? "3" : "0";
+			if (bGateAnomaly)
+			{
+				// [버그 수정, 2026-09-11 최정우] non_charge_reason 정식 코드 기록 — CLOSED_ROAD와
+				//   동일 근거·우선순위(입구 미확인→출구 미확인→입구==출구)
+				const int nNonChargeReason = bEntryMissing ? NCR_SPEED_ENTRY_UNOBSERVED
+					: bExitMissing ? NCR_SPEED_EXIT_UNCONFIRMED : NCR_SPEED_ENTRY_EQUALS_EXIT;
+				char szReason[8];
+				snprintf(szReason, sizeof(szReason), "%d", nNonChargeReason);
+				stRow.strNonChargeReason = szReason;
+
+				LOGFMTW("[#%02d] speed zone gate anomaly!device=[%s] trip_id=[%s] seq=[%d] entry=[%s] "
+					"exit=[%s] -> charge_yn=N non_charge_reason=[%d:%s]",
+					nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstSession->nChargeSeq,
+					pstSession->szSpeedEntryTollgateId, pstExitGate->szTollgateID, nNonChargeReason,
+					m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), nNonChargeReason));
+			}
 
 			// NODE_STEP 일반도로 확장(케이스1) — 평균속도 vs 제한속도로 위반 여부 직접 판정.
 			//   제한속도를 모르면(pstZone==nullptr 이거나 등록값 0) 판정 불가라 기존 그대로 SPEED만
@@ -5974,9 +6307,11 @@ void CRawLogWorker::ProcessSpeedZoneCharge(int nThreadId, const sRawLogInfo& stR
 			if (!bGateAnomaly && (!bSpeedLimitKnown || bViolated))
 			{
 				pvtChargeInserts->push_back(stRow);
-				LOGFMTI("[#%02d] speed zone exit charge queued!device=[%s] trip_id=[%s] seq=[%d] road=[%s] dist_m=[%s] avg_speed=[%s]",
+				LOGFMTI("[#%02d] speed zone exit charge queued!device=[%s] trip_id=[%s] seq=[%d] road=[%s] "
+					"dist_m=[%s] avg_speed=[%s] non_charge_reason=[%d:%s]",
 					nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstSession->nChargeSeq,
-					pstSession->szSpeedZoneRoadId, szDistM, stRow.strSpeedKmh.c_str());
+					pstSession->szSpeedZoneRoadId, szDistM, stRow.strSpeedKmh.c_str(),
+					NCR_NORMAL, m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), NCR_NORMAL));
 				pstSession->nChargeSeq += 1;
 			}
 			if (bSpeedLimitKnown)
@@ -6023,10 +6358,11 @@ void CRawLogWorker::ProcessSpeedZoneCharge(int nThreadId, const sRawLogInfo& stR
 				pstSession->dwHeldSpeedMirrorSeq = stRawLogInfo.dwSeqNo;
 
 				LOGFMTI("[#%02d] node step (from speed zone %s) held for handoff merge!device=[%s] "
-					"trip_id=[%s] road=[%s] dist_m=[%s] avg_speed=[%s]", nThreadId,
+					"trip_id=[%s] road=[%s] dist_m=[%s] avg_speed=[%s] non_charge_reason=[%d:%s]", nThreadId,
 					bViolated ? "violation" : "non-violation",
 					stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID,
-					pstSession->szSpeedZoneRoadId, szDistM, stRow.strSpeedKmh.c_str());
+					pstSession->szSpeedZoneRoadId, szDistM, stRow.strSpeedKmh.c_str(),
+					NCR_NORMAL, m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), NCR_NORMAL));
 			}
 
 			pstSession->bInSpeedZone = false;
@@ -6138,6 +6474,13 @@ void CRawLogWorker::ProcessSpeedZoneCharge(int nThreadId, const sRawLogInfo& stR
 
 			stRow.strChargeYn = "N";							// 출구 게이트 미확인 — 항상 AUDIT
 			stRow.strChargeStatus = "3";
+			// [버그 수정, 2026-09-11 최정우] non_charge_reason 정식 코드 기록 — 판정(N/3)은 안 건드림.
+			//   ProcessClosedRoadCharge() 의 동일 패턴(출구 미확인, 구역 확정 이탈)과 같은 사유
+			{
+				char szReason[8];
+				snprintf(szReason, sizeof(szReason), "%d", NCR_SPEED_EXIT_UNCONFIRMED);
+				stRow.strNonChargeReason = szReason;
+			}
 
 			// NODE_STEP 일반도로 확장(케이스1) — 위 게이트확정 이탈과 동일 근거로 위반 여부를
 			//   먼저 판정해 SPEED row 를 등록할지(위반/미상) NODE_STEP만 등록할지(비위반) 가른다.
@@ -6152,9 +6495,11 @@ void CRawLogWorker::ProcessSpeedZoneCharge(int nThreadId, const sRawLogInfo& stR
 			{
 				pvtChargeInserts->push_back(stRow);
 				LOGFMTW("[#%02d] speed zone exit unconfirmed(zone left)!device=[%s] trip_id=[%s] seq=[%d] "
-					"entry=[%s] road=[%s] dist_m=[%s]",
+					"entry=[%s] road=[%s] dist_m=[%s] non_charge_reason=[%d:%s]",
 					nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstSession->nChargeSeq,
-					pstSession->szSpeedEntryTollgateId, pstSession->szSpeedZoneRoadId, szDistM);
+					pstSession->szSpeedEntryTollgateId, pstSession->szSpeedZoneRoadId, szDistM,
+					NCR_SPEED_EXIT_UNCONFIRMED, m_cCodeMap.GetValue(NonChargeReasonTable,
+					NOE(NonChargeReasonTable), NCR_SPEED_EXIT_UNCONFIRMED));
 				pstSession->nChargeSeq += 1;
 			}
 			if (bSpeedLimitKnown2)
@@ -6171,9 +6516,11 @@ void CRawLogWorker::ProcessSpeedZoneCharge(int nThreadId, const sRawLogInfo& stR
 				pvtChargeInserts->push_back(stNodeStepRow);
 
 				LOGFMTI("[#%02d] node step (from speed zone %s, unconfirmed exit)!device=[%s] trip_id=[%s] "
-					"seq=[%d] road=[%s] dist_m=[%s]", nThreadId, bViolated2 ? "violation" : "non-violation",
+					"seq=[%d] road=[%s] dist_m=[%s] non_charge_reason=[%d:%s]", nThreadId,
+					bViolated2 ? "violation" : "non-violation",
 					stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstSession->nChargeSeq,
-					pstSession->szSpeedZoneRoadId, szDistM);
+					pstSession->szSpeedZoneRoadId, szDistM,
+					NCR_NORMAL, m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), NCR_NORMAL));
 				pstSession->nChargeSeq += 1;
 			}
 
@@ -6414,11 +6761,24 @@ void CRawLogWorker::CheckClosedRoadExitByRawGps(int nThreadId, const sRawLogInfo
 	stRow.strFromId = pstSession->szEntryTollgateId;
 	stRow.strToId = pstExitGate->szTollgateID;
 
-	bool bGateAnomaly = (pstSession->szEntryTollgateId[0] == '\0') ||
-		(pstExitGate->szTollgateID[0] == '\0') ||
-		(strcmp(pstSession->szEntryTollgateId, pstExitGate->szTollgateID) == 0);
+	const bool bEntryMissing = (pstSession->szEntryTollgateId[0] == '\0');
+	const bool bExitMissing = (pstExitGate->szTollgateID[0] == '\0');
+	const bool bEntryEqualsExit = !bEntryMissing && !bExitMissing
+		&& (strcmp(pstSession->szEntryTollgateId, pstExitGate->szTollgateID) == 0);
+	bool bGateAnomaly = bEntryMissing || bExitMissing || bEntryEqualsExit;
 	stRow.strChargeYn = bGateAnomaly ? "N" : "Y";
 	stRow.strChargeStatus = bGateAnomaly ? "3" : "0";
+	if (bGateAnomaly)
+	{
+		// [버그 수정, 2026-09-11 최정우] non_charge_reason 정식 코드 기록 — ProcessClosedRoadCharge()
+		//   와 동일 근거·우선순위(입구 미확인→출구 미확인→입구==출구)
+		const int nNonChargeReason = bEntryMissing ? NCR_CLOSED_ENTRY_UNOBSERVED
+			: bExitMissing ? NCR_CLOSED_EXIT_UNCONFIRMED : NCR_CLOSED_ENTRY_EQUALS_EXIT;
+		char szReason[8];
+		snprintf(szReason, sizeof(szReason), "%d", nNonChargeReason);
+		stRow.strNonChargeReason = szReason;
+		// 로그는 아래 push_back 직후 한 곳에서 Y/N 공통 형식으로 남긴다(중복 로그 방지)
+	}
 
 	char szFromLat[32], szFromLon[32], szToLat[32], szToLon[32];
 	snprintf(szFromLat, sizeof(szFromLat), "%.06lf", pstSession->dfEntryFromLat);
@@ -6433,7 +6793,21 @@ void CRawLogWorker::CheckClosedRoadExitByRawGps(int nThreadId, const sRawLogInfo
 	stRow.strZoneId = pstSession->szClosedRoadId;
 	stRow.strZoneName = pstZone->szRoadNm;
 
-	double dfLengthM = pstZone->dfLengthM;
+	// 진입 자체가 애매(bClosedEntryAmbiguous)했으면 "구역 전체를 다 지났다"는 전제가 성립하지
+	//   않으므로 실제 출발지점~출구 게이트 실거리를 쓴다 — ProcessClosedRoadCharge()의 정상매칭
+	//   경로(2026-08-25)와 동일 처리를 raw GPS 기준 SKIP 이탈 경로에도 적용(2026-09-11 최정우 추가)
+	double dfLengthM;
+	if (pstSession->bClosedEntryAmbiguous)
+	{
+		POINT stStartPos, stGatePos2;
+		stStartPos.dfX = pstSession->dfEntryFromLon;  stStartPos.dfY = pstSession->dfEntryFromLat;
+		stGatePos2.dfX = pstExitGate->dfLon;          stGatePos2.dfY = pstExitGate->dfLat;
+		dfLengthM = HaversineMeters(stStartPos, stGatePos2);
+	}
+	else
+	{
+		dfLengthM = pstZone->dfLengthM;
+	}
 	char szDistM[16];
 	snprintf(szDistM, sizeof(szDistM), "%d", static_cast<int>(dfLengthM + 0.5));
 	stRow.strDistM = szDistM;
@@ -6475,11 +6849,25 @@ void CRawLogWorker::CheckClosedRoadExitByRawGps(int nThreadId, const sRawLogInfo
 
 	pvtChargeInserts->push_back(stRow);
 
-	LOGFMTI("[#%02d] closed road exit charge queued (raw gps)!device=[%s] trip_id=[%s] seq=[%d] "
-		"entry=[%s] exit=[%s] dist_m=[%s] margin_over=[%.1f]m",
-		nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstSession->nChargeSeq,
-		pstSession->szEntryTollgateId, pstExitGate->szTollgateID, szDistM,
-		dfRawFromStart - dfGateFromStart);
+	if (stRow.strNonChargeReason.empty())
+	{
+		LOGFMTI("[#%02d] closed road exit charge queued (raw gps)!device=[%s] trip_id=[%s] seq=[%d] "
+			"entry=[%s] exit=[%s] dist_m=[%s] margin_over=[%.1f]m non_charge_reason=[%d:%s]",
+			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstSession->nChargeSeq,
+			pstSession->szEntryTollgateId, pstExitGate->szTollgateID, szDistM,
+			dfRawFromStart - dfGateFromStart,
+			NCR_NORMAL, m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), NCR_NORMAL));
+	}
+	else
+	{
+		const int nNonChargeReason = atoi(stRow.strNonChargeReason.c_str());
+		LOGFMTW("[#%02d] closed road exit charge queued(AUDIT, raw gps)!device=[%s] trip_id=[%s] seq=[%d] "
+			"entry=[%s] exit=[%s] dist_m=[%s] margin_over=[%.1f]m non_charge_reason=[%d:%s]",
+			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstSession->nChargeSeq,
+			pstSession->szEntryTollgateId, pstExitGate->szTollgateID, szDistM,
+			dfRawFromStart - dfGateFromStart, nNonChargeReason,
+			m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), nNonChargeReason));
+	}
 
 	pstSession->nChargeSeq += 1;
 
@@ -6575,13 +6963,33 @@ void CRawLogWorker::CheckSpeedZoneExitByRawGps(int nThreadId, const sRawLogInfo&
 	stRow.strZoneId = pstSession->szSpeedZoneRoadId;
 	stRow.strZoneName = pstZoneForRow->szRoadNm;
 
-	double dfLengthM = pstZoneForRow->dfLengthM;
+	// 진입 애매(bSpeedEntryAmbiguous)했으면 "구역 전체를 다 지났다"는 전제가 성립하지 않으므로
+	//   실제 관측 출발지점~출구 게이트 실거리를 쓴다 — 위 FROM_LAT/LON(2026-09-10 수정)과 같은
+	//   근거인데 dfLengthM 만 빠져 있었다. ProcessSpeedZoneCharge() 정상매칭 경로(2026-08-25)와
+	//   동일 처리를 raw GPS 기준 SKIP 이탈 경로에도 적용(2026-09-11 최정우 추가)
+	double dfLengthM;
+	if (pstSession->bSpeedEntryAmbiguous)
+	{
+		POINT stStartPos, stGatePos2;
+		stStartPos.dfX = pstSession->dfSpeedEntryFromLon;  stStartPos.dfY = pstSession->dfSpeedEntryFromLat;
+		stGatePos2.dfX = pstExitGate->dfLon;               stGatePos2.dfY = pstExitGate->dfLat;
+		dfLengthM = HaversineMeters(stStartPos, stGatePos2);
+	}
+	else
+	{
+		dfLengthM = pstZoneForRow->dfLengthM;
+	}
 	char szDistM[16];
 	snprintf(szDistM, sizeof(szDistM), "%d", static_cast<int>(dfLengthM + 0.5));
 	stRow.strDistM = szDistM;
 
 	double dfElapsedSec = difftime(stRawLogInfo.dtGPS, pstSession->dtSpeedEntryTime);
-	if (dfElapsedSec > 0.0)
+	// [버그 수정, 2026-09-11 최정우] 진입~진출이 같은 초(또는 시각 역행)면 dfElapsedSec<=0 이 되어
+	//   평균속도 계산이 통째로 건너뛰어지고 strSpeedKmh 가 빈 값(→query.sql CASE 문으로 0 저장)으로
+	//   남아 실제로는 빠르게 지나간 구간이 speed_kmh=0 으로 잘못 기록됐다. 다른 형제 함수들
+	//   (ProcessSpeedZoneCharge 등, RawLogWorker.cpp:639/1129/6075)과 동일하게 최소 1초로 클램프.
+	if (dfElapsedSec < 1.0)
+		dfElapsedSec = 1.0;
 	{
 		double dfAvgSpeedKmh = (dfLengthM / dfElapsedSec) * 3.6;
 		char szSpeedKmh[16];
@@ -6616,11 +7024,29 @@ void CRawLogWorker::CheckSpeedZoneExitByRawGps(int nThreadId, const sRawLogInfo&
 	stRow.strUpdDt = stRow.strRegDt;
 
 	// ProcessSpeedZoneCharge() 와 동일 근거 — 입구 게이트 미확정 시 AUDIT(N/3) (2026-08-25 최정우 추가)
-	bool bGateAnomaly = (pstSession->szSpeedEntryTollgateId[0] == '\0') ||
-		(pstExitGate->szTollgateID[0] == '\0') ||
-		(strcmp(pstSession->szSpeedEntryTollgateId, pstExitGate->szTollgateID) == 0);
+	const bool bEntryMissing = (pstSession->szSpeedEntryTollgateId[0] == '\0');
+	const bool bExitMissing = (pstExitGate->szTollgateID[0] == '\0');
+	const bool bEntryEqualsExit = !bEntryMissing && !bExitMissing
+		&& (strcmp(pstSession->szSpeedEntryTollgateId, pstExitGate->szTollgateID) == 0);
+	bool bGateAnomaly = bEntryMissing || bExitMissing || bEntryEqualsExit;
 	stRow.strChargeYn = bGateAnomaly ? "N" : "Y";
 	stRow.strChargeStatus = bGateAnomaly ? "3" : "0";
+	if (bGateAnomaly)
+	{
+		// [버그 수정, 2026-09-11 최정우] non_charge_reason 정식 코드 기록 — ProcessSpeedZoneCharge()
+		//   와 동일 근거·우선순위(입구 미확인→출구 미확인→입구==출구)
+		const int nNonChargeReason = bEntryMissing ? NCR_SPEED_ENTRY_UNOBSERVED
+			: bExitMissing ? NCR_SPEED_EXIT_UNCONFIRMED : NCR_SPEED_ENTRY_EQUALS_EXIT;
+		char szReason[8];
+		snprintf(szReason, sizeof(szReason), "%d", nNonChargeReason);
+		stRow.strNonChargeReason = szReason;
+
+		LOGFMTW("[#%02d] speed zone gate anomaly(raw-gps exit)!device=[%s] trip_id=[%s] seq=[%d] "
+			"entry=[%s] exit=[%s] -> charge_yn=N non_charge_reason=[%d:%s]",
+			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstSession->nChargeSeq,
+			pstSession->szSpeedEntryTollgateId, pstExitGate->szTollgateID, nNonChargeReason,
+			m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), nNonChargeReason));
+	}
 
 	// [버그 수정, 2026-09-10 최정우] ProcessSpeedZoneCharge() 는 2026-09-06부터 "진입게이트 확인 +
 	// 진출게이트 확인 + 평균속도>=제한속도(위반)" 를 모두 충족해야만 SPEED 레코드를 만드는데(적재
@@ -6636,9 +7062,10 @@ void CRawLogWorker::CheckSpeedZoneExitByRawGps(int nThreadId, const sRawLogInfo&
 		pvtChargeInserts->push_back(stRow);
 
 		LOGFMTI("[#%02d] speed zone exit charge queued (raw gps)!device=[%s] trip_id=[%s] seq=[%d] "
-			"road=[%s] dist_m=[%s] margin_over=[%.1f]m",
+			"road=[%s] dist_m=[%s] margin_over=[%.1f]m non_charge_reason=[%d:%s]",
 			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstSession->nChargeSeq,
-			pstSession->szSpeedZoneRoadId, szDistM, dfRawFromStart - dfGateFromStart);
+			pstSession->szSpeedZoneRoadId, szDistM, dfRawFromStart - dfGateFromStart,
+			NCR_NORMAL, m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), NCR_NORMAL));
 
 		pstSession->nChargeSeq += 1;
 	}
@@ -6666,10 +7093,11 @@ void CRawLogWorker::CheckSpeedZoneExitByRawGps(int nThreadId, const sRawLogInfo&
 		pstSession->dwHeldSpeedMirrorSeq = stRawLogInfo.dwSeqNo;
 
 		LOGFMTI("[#%02d] node step (from speed zone %s, raw gps) held for handoff merge!device=[%s] "
-			"trip_id=[%s] road=[%s] dist_m=[%s]", nThreadId,
+			"trip_id=[%s] road=[%s] dist_m=[%s] non_charge_reason=[%d:%s]", nThreadId,
 			bViolated ? "violation" : "non-violation",
 			stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID,
-			pstSession->szSpeedZoneRoadId, szDistM);
+			pstSession->szSpeedZoneRoadId, szDistM,
+			NCR_NORMAL, m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), NCR_NORMAL));
 	}
 
 	pstSession->bInSpeedZone = false;
@@ -6742,16 +7170,27 @@ void CRawLogWorker::ProcessExemptZoneCharge(int nThreadId, const sRawLogInfo& st
 		//    64m 구역에 719m 가 기록되는 문제가 있었다. 2026-08-14 의 "유예 구간 포함" 지시를 대체)
 		if (bSameZone)
 		{
-			POINT stPrev, stCur;
-			stPrev.dfX = stRun.dfLastX;  stPrev.dfY = stRun.dfLastY;
-			stCur.dfX = stMatchLinkInfo.dfMatchX;  stCur.dfY = stMatchLinkInfo.dfMatchY;
-			stRun.dfAccumDistM += HaversineMeters(stPrev, stCur);
-			stRun.dfLastX = stMatchLinkInfo.dfMatchX;
-			stRun.dfLastY = stMatchLinkInfo.dfMatchY;
-			stRun.dtLastInZoneTime = stRawLogInfo.dtGPS;		// to_lat/lon·stay_seconds 기준 tick
-			stRun.dwLastInZoneGpsSeq = stRawLogInfo.dwSeqNo;	// end_gps_seq
-			stRun.qwLastLinkID = stMatchLinkInfo.qwLinkID;
 			stRun.dtFirstOut = 0;								// 재진입 — 이탈 보간 기준점 리셋
+
+			// 역행의심(bReverseSuspect) tick — reverse_confirm 스트릭이 확정돼 맵매칭 자체는
+			//   MATCHED로 인정되더라도, EXEMPT 누적 관점에서는 여전히 "직전 위치보다 뒤로 간 것"이라
+			//   run의 마지막 위치·누적거리를 갱신하지 않고 그대로 대기한다. NODE_STEP의 동일 처리
+			//   (2026-09-03) 와 같은 근거 (2026-09-11 최정우 추가)
+			// [버그 수정, 2026-09-11 최정우] 정지 중(bSameRawAndHeadingAsPrev) GPS 저주파 위치표류도
+			//   같은 이유로 제외 — 차가 안 움직이는데 세그먼트 재투영이 매 tick 완만히 다른 점으로
+			//   튀어 dist_m 이 과다 계상되는 걸 막는다(재매칭 검증으로 최대 20m 확인).
+			if (!stMatchLinkInfo.bReverseSuspect && !stMatchLinkInfo.bSameRawAndHeadingAsPrev)
+			{
+				POINT stPrev, stCur;
+				stPrev.dfX = stRun.dfLastX;  stPrev.dfY = stRun.dfLastY;
+				stCur.dfX = stMatchLinkInfo.dfMatchX;  stCur.dfY = stMatchLinkInfo.dfMatchY;
+				stRun.dfAccumDistM += HaversineMeters(stPrev, stCur);
+				stRun.dfLastX = stMatchLinkInfo.dfMatchX;
+				stRun.dfLastY = stMatchLinkInfo.dfMatchY;
+				stRun.dtLastInZoneTime = stRawLogInfo.dtGPS;		// to_lat/lon·stay_seconds 기준 tick
+				stRun.dwLastInZoneGpsSeq = stRawLogInfo.dwSeqNo;	// end_gps_seq
+				stRun.qwLastLinkID = stMatchLinkInfo.qwLinkID;
+			}
 		}
 		else if (stRun.dtFirstOut == 0)
 		{
@@ -6821,9 +7260,10 @@ void CRawLogWorker::ProcessExemptZoneCharge(int nThreadId, const sRawLogInfo& st
 		pvtChargeInserts->push_back(stRow);
 
 		LOGFMTI("[#%02d] exempt zone exit recorded!device=[%s] trip_id=[%s] seq=[%d] road=[%s] "
-			"dist_m=[%s] trip_ending=[%d]",
+			"dist_m=[%s] trip_ending=[%d] non_charge_reason=[%d:%s]",
 			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstSession->nChargeSeq,
-			stRun.szRoadID, stRow.strDistM.c_str(), static_cast<int>(bTripEnding));
+			stRun.szRoadID, stRow.strDistM.c_str(), static_cast<int>(bTripEnding),
+			NCR_NORMAL, m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), NCR_NORMAL));
 
 		pstSession->nChargeSeq += 1;
 		pstSession->vtExemptRuns.erase(pstSession->vtExemptRuns.begin() + si);
@@ -7061,17 +7501,13 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 	//   최소 1 tick 을 들고 있다가, 접촉이 없으면 그때 원래 값 그대로 등록한다. 보류분이
 	//   유실될 일은 없다 — TTL 만료·세션 종료·트립 종료 3경로가 모두 흘려보낸다
 	//   (2026-09-06 최정우 수정, 사용자 지시)
-	if (pstSession->bHasHeldSpeedMirrorRun && !bInParkingZone
-		&& (stRawLogInfo.dwSeqNo != pstSession->dwHeldSpeedMirrorSeq))
-	{
-		CHARGE_INSERT_ROW stMirrorRow;
-		BuildNodeStepRow(pstSession->stHeldSpeedMirrorRun, stRawLogInfo.szTripID, stRawLogInfo.szDeviceKey,
-			pstSession->nChargeSeq, pstSession->stHeldSpeedMirrorRun.dtLastInZoneTime,
-			pstSession->stHeldSpeedMirrorRun.dwLastInZoneGpsSeq, "Y", "0", &stMirrorRow);
-		pvtChargeInserts->push_back(stMirrorRow);
-		pstSession->nChargeSeq += 1;
-		pstSession->bHasHeldSpeedMirrorRun = false;
-	}
+	// [버그 수정, 2026-09-11 최정우 — 사용자 지시] 여기서 곧장 bHasMergeCarry 로 변환하면, 그
+	//   변환이 "② 새 run 개시"(같은 tick, 이 지점보다 한참 아래)보다 먼저 실행되긴 하지만, 1틱
+	//   지연 커밋 + 사후 브릿지 보정이 겹치면 실제로는 ②가 이미 다른 tick에서 먼저 새 run을 열어
+	//   버린 뒤에야 이 변환이 뒤늦게 일어나는 순서가 실측으로 확인됐다(000370_20260911141637 —
+	//   미러가 진입정보를 못 넘기고 새 run 자신의(더 늦은) 진입값으로 굳어짐). 타이밍에 기대지
+	//   않도록 이 지점에서는 상태만 유지하고, 실제 변환·소비는 "② 새 run 개시" 바로 앞(같은 호출
+	//   안에서 새 run 생성 직전)으로 옮겨 타이밍 격차 자체를 없앤다 — 아래 참고.
 
 	// 주정차 접촉(폴리곤 직접 접촉이든 이탈 디바운스 유예든 사유 불문) 구간의 소급 버퍼링 —
 	//   "구역과 접촉해 NODE_STEP이 억제된 tick"을 전부 이 버퍼에 쌓아뒀다가, 이탈이 "확정"되는
@@ -7678,6 +8114,25 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 		}
 	}
 
+	// 게이트 진출 이월(bHasGateExitCarry) 무효화 — 이월값은 "게이트 진출 직후 곧바로 일반도로가
+	//   이어짐"을 전제로 다음 run 진입 시각을 그 게이트 통과시각으로 앞당겨 잡는다. 그런데 진출
+	//   직후 이 tick이 일반도로가 아니라 다른 과금유형(EXEMPT/SPEED/PARKING/CLOSED/OPEN)이면, 그
+	//   이월값은 소비되지 못한 채 세션에 계속 남아있다가 한참 뒤 처음 열리는 엉뚱한 일반도로 run에
+	//   흡수돼 진입시각이 그 run 자신의 실제 시각보다 훨씬 앞선 값으로 역전된다 — 실측
+	//   000370_20260911141637: CLOSED(seq9~20) 진출로 세팅된 이월값이 EXEMPT(22~27)·SPEED(28~36)를
+	//   거치는 18tick(54초) 동안 방치되다 seq38에 새로 여는 미등록run에 잘못 흡수돼 entry_time이
+	//   실제 seq38 시각보다 49초나 이전으로 나왔다(run 병합 로그의 진입시각 역전으로 발견). 게이트
+	//   ~이 tick 사이는 이미 다른 과금유형이 점유했으므로 일반도로로 이어붙일 근거가 없다 — 이번
+	//   tick이 일반도로 카테고리가 전혀 아니면(등록구역도 미등록도 아니면) 이월값을 폐기한다. 단
+	//   이월값이 방금 이번 tick에 세팅됐다면(게이트 진출과 동시에 일반도로 판정이 같은 tick에 나온
+	//   경우) 건드리지 않는다 (2026-09-11 최정우 추가, 사용자 지시 — 근본 해결)
+	if (!bInParkingZone && vtZones.empty() && !bTouchesUnregistered
+		&& pstSession->bHasGateExitCarry && (pstSession->dwGateExitGpsSeq != stRawLogInfo.dwSeqNo))
+	{
+		pstSession->bHasGateExitCarry = false;
+		pstSession->bGateExitAtTick = false;
+	}
+
 	// 트립 종료(TRIP_EVENT=2) — 구역 위인 채로 끝나면 "이탈" 신호가 영영 안 옴, 즉시 강제 마감.
 	//   ProcessRawLog() 가 스퓨리어스(순서역전) END 검사까지 마친 bTrustedTripEnd 를 그대로 씀
 	//   (2026-08-25 최정우 수정)
@@ -7793,7 +8248,10 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 			//   자체(맵매칭 신뢰 판정)는 전혀 건드리지 않고, NODE_STEP 통계 산출에서만 별도로
 			//   보수적으로 처리 (사용자 지시, 2026-09-03 최정우 추가 — 실측
 			//   000376_20260826150010 seq128->131)
-			if (!stMatchLinkInfo.bReverseSuspect)
+			// [버그 수정, 2026-09-11 최정우] 정지 중(bSameRawAndHeadingAsPrev) GPS 저주파 위치표류도
+			//   같은 이유로 제외 — 차가 안 움직이는데 세그먼트 재투영이 매 tick 완만히 다른 점으로
+			//   튀어 dist_m 이 과다 계상되는 걸 막는다(재매칭 검증으로 최대 20m 확인).
+			if (!stMatchLinkInfo.bReverseSuspect && !stMatchLinkInfo.bSameRawAndHeadingAsPrev)
 			{
 				POINT stPrev, stCur;
 				stPrev.dfX = stRun.dfLastX;  stPrev.dfY = stRun.dfLastY;
@@ -7937,18 +8395,36 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 				}
 				if (!bOtherActive) continue;
 
-				stOther.dtEntryTime = stRun.dtEntryTime;
-				stOther.dfEntryX = stRun.dfEntryX;
-				stOther.dfEntryY = stRun.dfEntryY;
-				stOther.dwEntryGpsSeq = stRun.dwEntryGpsSeq;
-				stOther.qwEntryLinkID = stRun.qwEntryLinkID;
+				// [버그 수정, 2026-09-11 최정우] 진입정보는 "닫히는 쪽(stRun)이 항상 더 이르다"고
+				//   가정하고 무조건 stRun 걸로 덮어썼었는데, 이 가정이 항상 성립하지 않는다 — 예를 들어
+				//   막 새로 연(진입시각이 늦은) run이 이미 한참 진행 중이던(진입시각이 이른) run 쪽으로
+				//   병합되는 순서도 실제로 나온다(실측 000370_20260911141637 trip_seq=6, RL-Z00002가
+				//   seq38부터 열려 있었는데 seq66에 새로 연 미등록 run과 병합되며 진입점이 66으로
+				//   퇴보). 두 run 중 실제로 더 이른 진입시각을 가진 쪽의 진입정보를 그대로 보존한다.
+				const uint32 dwOtherEntrySeqBefore = stOther.dwEntryGpsSeq;
+				const time_t dtOtherEntryTimeBefore = stOther.dtEntryTime;
+				const bool bRunIsEarlier = (stOther.dtEntryTime == 0)
+					|| (stRun.dtEntryTime != 0 && stRun.dtEntryTime < stOther.dtEntryTime);
+				if (bRunIsEarlier)
+				{
+					stOther.dtEntryTime = stRun.dtEntryTime;
+					stOther.dfEntryX = stRun.dfEntryX;
+					stOther.dfEntryY = stRun.dfEntryY;
+					stOther.dwEntryGpsSeq = stRun.dwEntryGpsSeq;
+					stOther.qwEntryLinkID = stRun.qwEntryLinkID;
+				}
 				stOther.dfAccumDistM += stRun.dfAccumDistM;
 				bMerged = true;
 
 				LOGFMTI("[#%02d] node step run merged(continuous general road)!device=[%s] trip_id=[%s] "
-					"from_road=[%s] into_road=[%s] carried_dist=[%.1f]m",
+					"from_road=[%s] into_road=[%s] carried_dist=[%.1f]m entry_kept=[%s] "
+					"from_entry_seq=[%u] from_entry_time=[%ld] into_entry_seq_before=[%u] "
+					"into_entry_time_before=[%ld]",
 					nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID,
-					stRun.szRoadID, stOther.szRoadID, stRun.dfAccumDistM);
+					stRun.szRoadID, stOther.szRoadID, stRun.dfAccumDistM,
+					bRunIsEarlier ? "from_road" : "into_road",
+					stRun.dwEntryGpsSeq, static_cast<long>(stRun.dtEntryTime),
+					dwOtherEntrySeqBefore, static_cast<long>(dtOtherEntryTimeBefore));
 				break;
 			}
 
@@ -8085,10 +8561,11 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 		pvtChargeInserts->push_back(stRow);
 
 		LOGFMTI("[#%02d] node step exit recorded!device=[%s] trip_id=[%s] seq=[%d] road=[%s] "
-			"dist_m=[%s] avg_speed=[%s] trip_ending=[%d]",
+			"dist_m=[%s] avg_speed=[%s] trip_ending=[%d] non_charge_reason=[%d:%s]",
 			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstSession->nChargeSeq,
 			stRun.szRoadID, stRow.strDistM.c_str(), stRow.strSpeedKmh.c_str(),
-			static_cast<int>(bTripEnding));
+			static_cast<int>(bTripEnding),
+			NCR_NORMAL, m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), NCR_NORMAL));
 
 		pstSession->nChargeSeq += 1;
 		pstSession->vtNodeStepRuns.erase(pstSession->vtNodeStepRuns.begin() + si);
@@ -8097,6 +8574,40 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 	// ── ② 새로 진입한 구역 세션 개시 ─────────────────────────────────────────
 	if (bTripEnding)
 		return;											// 종료 틱에서는 새로 열지 않는다
+
+	// [버그 수정, 2026-09-11 최정우 — 사용자 지시, 근본 해결] 구간단속 마감 시 보류해둔 일반도로
+	//   미러(stHeldSpeedMirrorRun)를 여기, 새 run 을 실제로 여는 지점 바로 앞에서 bHasMergeCarry 로
+	//   변환한다 — 이 함수 앞쪽(위 ①보다도 전)에서 미리 변환해뒀다가 여기서 소비되길 "기다리는"
+	//   기존 설계는, 1틱 지연 커밋 + 사후 브릿지 보정이 겹치면 변환 시점과 소비 시점(이 지점) 사이에
+	//   실제로는 다른 tick 의 호출이 끼어들어 순서가 어긋날 수 있었다(실측 000370_20260911141637 —
+	//   미러가 새 run 에 진입정보를 못 넘기고 새 run 자신의 더 늦은 진입값으로 굳어짐). 변환과
+	//   소비를 같은 호출·같은 지점으로 합쳐 타이밍 격차 자체를 없앤다. 이미 다른 이월값
+	//   (bHasMergeCarry)이 대기 중이면 덮어쓰지 않고 단독 레코드로 안전하게 폴백한다(드문 동시발생,
+	//   기존 폴백 원칙과 동일).
+	if (pstSession->bHasHeldSpeedMirrorRun && !bInParkingZone
+		&& (stRawLogInfo.dwSeqNo != pstSession->dwHeldSpeedMirrorSeq))
+	{
+		if (!pstSession->bHasMergeCarry)
+		{
+			pstSession->stMergeCarry = pstSession->stHeldSpeedMirrorRun;
+			pstSession->bHasMergeCarry = true;
+
+			LOGFMTI("[#%02d] node step (from speed zone) carried over(continuous general road, "
+				"pending open)!device=[%s] trip_id=[%s] seq=[%u] held_seq=[%u] dist=[%.1f]m",
+				nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRawLogInfo.dwSeqNo,
+				pstSession->dwHeldSpeedMirrorSeq, pstSession->stHeldSpeedMirrorRun.dfAccumDistM);
+		}
+		else
+		{
+			CHARGE_INSERT_ROW stMirrorRow;
+			BuildNodeStepRow(pstSession->stHeldSpeedMirrorRun, stRawLogInfo.szTripID, stRawLogInfo.szDeviceKey,
+				pstSession->nChargeSeq, pstSession->stHeldSpeedMirrorRun.dtLastInZoneTime,
+				pstSession->stHeldSpeedMirrorRun.dwLastInZoneGpsSeq, "Y", "0", &stMirrorRow);
+			pvtChargeInserts->push_back(stMirrorRow);
+			pstSession->nChargeSeq += 1;
+		}
+		pstSession->bHasHeldSpeedMirrorRun = false;
+	}
 
 	for (size_t e = 0; e < vtZones.size(); ++e)
 	{
@@ -8107,6 +8618,12 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 			{ bOpen = true; break; }
 		}
 		if (bOpen) continue;
+
+		// 신뢰할 수 없는 tick(사후 SKIP 재판정 등)은 새 run 을 열지 않는다 — 아래 미등록
+		//   pseudo-zone 개시 분기(2026-09-07 추가)와 동일 가드를 등록구역에도 적용. 이게 없으면
+		//   CommitPendingRow 사후보정으로 SKIP 재판정된 링크가 등록 NODE_STEP 구역일 때 실측되지
+		//   않은 좌표로 run 이 개시된다(2026-09-11 최정우 추가)
+		if (!bTrustedMatch) continue;
 
 		ZONE_RUN_SESSION stRun;
 		strncpy(stRun.szRoadID, vtZones[e]->szRoadID, sizeof(stRun.szRoadID) - 1);
@@ -8159,9 +8676,10 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 		}
 		pstSession->vtNodeStepRuns.push_back(stRun);
 
-		LOGFMTI("[#%02d] node step entry!device=[%s] trip_id=[%s] road=[%s] open=[%zu]",
-			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRun.szRoadID,
-			pstSession->vtNodeStepRuns.size());
+		LOGFMTI("[#%02d] node step entry!device=[%s] trip_id=[%s] seq=[%u] road=[%s] open=[%zu] "
+			"entry_gps_seq=[%u]",
+			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, stRawLogInfo.dwSeqNo,
+			stRun.szRoadID, pstSession->vtNodeStepRuns.size(), stRun.dwEntryGpsSeq);
 	}
 
 	// NODE_STEP 일반도로 확장(케이스2) — 미등록 pseudo-zone(szRoadID=="") 진입. 위 정식구역 루프와
@@ -8536,11 +9054,13 @@ void CRawLogWorker::ProcessParkingCharge(int nThreadId, const sRawLogInfo& stRaw
 		// gps_seq 범위를 함께 남긴다 — 미적재(registered=0)면 DB 에 흔적이 없어 어느 구간이
 		//   한 세션이었는지 로그만으로 추적할 수 있어야 한다 (2026-09-07 최정우 추가, 사용자 지시)
 		LOGFMTI("[#%02d] parking dwell recorded!device=[%s] trip_id=[%s] seq=[%d] road=[%s] "
-			"gps_seq=[%s~%s] dwell=[%s]s dist_m=[%s] avg_speed=[%s] trip_ending=[%d] registered=[%d]",
+			"gps_seq=[%s~%s] dwell=[%s]s dist_m=[%s] avg_speed=[%s] trip_ending=[%d] registered=[%d] "
+			"non_charge_reason=[%d:%s]",
 			nThreadId, stRawLogInfo.szDeviceKey, stRawLogInfo.szTripID, pstSession->nChargeSeq,
 			stRun.szRoadID, stRow.strStartGpsSeq.c_str(), stRow.strEndGpsSeq.c_str(),
 			stRow.strStaySeconds.c_str(), stRow.strDistM.c_str(),
-			stRow.strSpeedKmh.c_str(), static_cast<int>(bTripEnding), static_cast<int>(bMeetsFineMin));
+			stRow.strSpeedKmh.c_str(), static_cast<int>(bTripEnding), static_cast<int>(bMeetsFineMin),
+			NCR_NORMAL, m_cCodeMap.GetValue(NonChargeReasonTable, NOE(NonChargeReasonTable), NCR_NORMAL));
 
 		pstSession->nChargeSeq += 1;
 		pstSession->vtParkRuns.erase(pstSession->vtParkRuns.begin() + si);
@@ -8997,13 +9517,50 @@ bool CRawLogWorker::BulkReleaseRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDA
 		}
 	}
 
+	// [버그 수정, 2026-09-11 최정우] vtPending/vtError 를 트랜잭션 없이 독립된 UPDATE 두 번으로
+	//   나눠 실행했다 — UpdateTripSeqOrder() 의 2026-09-10 수정과 동일 클래스 버그. 앞(vtPending)
+	//   UPDATE 가 성공한 직후 뒤(vtError) UPDATE 가 실패(DB 순단 등)하면, 재시도 소진으로 마땅히
+	//   ERROR(4) 로 마감돼야 할 행들이 PROCESSING(2) 에 영구히 남는다(결국 RecoverStaleProcessing()
+	//   이 stale_sec 뒤에 회수하므로 데이터 유실은 아니지만, 그동안 재시도 카운터·DB 상태가
+	//   불일치한다). UpdateTripSeqOrder() 의 동일한 BEGIN/COMMIT/ROLLBACK 패턴을 그대로 재사용.
+	auto fnTxn = [pcConn](const char *pszCmd) -> bool
+	{
+		PGresult *pcTxnResult = PQexec(pcConn, pszCmd);
+		const bool bCmdOk = (pcTxnResult != nullptr)
+			&& (PQresultStatus(pcTxnResult) == PGRES_COMMAND_OK);
+		if (pcTxnResult != nullptr)
+			PQclear(pcTxnResult);
+		return bCmdOk;
+	};
+
+	if (!fnTxn("BEGIN"))
+	{
+		LOGFMTE("worker bulk release begin failed! pending=[%zu] error=[%zu]",
+			vtPending.size(), vtError.size());
+		return false;
+	}
+
 	bool bOk = true;
 	if (!vtPending.empty())
 		bOk = BulkUpdateRawLogs(pcConn, vtPending) && bOk;
-	if (!vtError.empty())
+	if (bOk && !vtError.empty())
 		bOk = BulkUpdateRawLogs(pcConn, vtError) && bOk;
 
-	return bOk;
+	if (!bOk)
+	{
+		fnTxn("ROLLBACK");
+		return false;
+	}
+
+	if (!fnTxn("COMMIT"))
+	{
+		LOGFMTE("worker bulk release commit failed! pending=[%zu] error=[%zu]",
+			vtPending.size(), vtError.size());
+		fnTxn("ROLLBACK");
+		return false;
+	}
+
+	return true;
 }
 
 /**
@@ -9152,7 +9709,11 @@ void CRawLogWorker::DropNodeStepRowsWithoutMatch(vector<CHARGE_INSERT_ROW> *pvtC
 				bool bSeen = false, bMatchedAny = false;
 				for (long q = nStart; (q <= nEnd) && !bMatchedAny; ++q)
 				{
-					char szSeq[16];
+					// [버그 수정, 2026-09-11 최정우] GPS_SEQ 는 트립 내 순번이라 실제로는 항상 작은
+					//   값이지만, q(long)는 문자열에서 런타임에 읽은 값이라 컴파일러가 상한을 증명
+					//   못해 long 이론상 최댓값(부호+19자리+NUL=21바이트) 기준으로 -Wformat-truncation
+					//   경고를 낸다(16바이트는 부족) — 무해한 경고였지만 여유 있게 24바이트로 확장
+					char szSeq[24];
 					snprintf(szSeq, sizeof(szSeq), "%ld", q);
 					map<string, bool>::const_iterator it =
 						mapTickMatched.find(stRow.strTripId + "|" + szSeq);

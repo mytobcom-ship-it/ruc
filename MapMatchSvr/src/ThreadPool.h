@@ -14,8 +14,10 @@
 #include "Mutex.h"
 #include "Condition.h"
 #include "Thread.h"
+#include "log4z.h"
 
 using namespace std;
+using namespace zsummer::log4z;
 
 /**
  * @enum EWORKER_STATE
@@ -65,6 +67,11 @@ public:
 	void RequestShutdown();
 	bool WaitForIdle(int nMaxWaitMs);
 	bool WaitForActiveIdle(int nMaxWaitMs);
+	// [버그 수정, 2026-09-11 최정우] 소멸자(delete) 전에 호출 — 전체 워커가 실제로 run() 을 빠져나가
+	//   EWS_STOPPED 에 도달했는지 확인용. false 반환 시 호출측(CServer)은 ThreadPool 뿐 아니라
+	//   그 하위에서 참조되는 RawLogWorker/ProcessManager/DataLoader/ChargeDataLoader/PostgrePool
+	//   delete 도 함께 건너뛰어야 한다(아직 실행 중인 detach 워커의 use-after-free 방지).
+	bool WaitForAllStopped(int nMaxWaitMs);
 	void DrainQueuedBatches(vector<RAW_LOG_BATCH> *pvtBatches);
 
 private:

@@ -265,6 +265,13 @@ typedef struct sAltitudeScoreConfig
 //   GPS 에서 수 m 이내라 이 검사에 걸릴 수 없다 — 원인(앵커 갱신 조건 불일치)을 건드리지 않고
 //   결과만 막는 안전장치다
 #define MM_NOISE_FIX_SANITY_M		100.0								// (단위: m) 보정 결과와 GPS 좌표의 허용 거리
+// 원시좌표가 직전 tick과 완전히 "비트 단위 동일"할 때만 정지로 인정하던 기존 기준(bSameRawAndHeadingAsPrev,
+//   2026-09-02 추가)은 실제 GPS 가 정차 중에도 수신기 자체 지터로 매 tick 미세하게(수 m) 흔들리는
+//   경우를 못 잡아, 그 구간에서 노이즈 전진보정이 매 tick 누적돼 실측 최대 20m 드리프트가 확인됐다
+//   (2026-09-11 사용자 지시 — 재매칭 검증으로 확인, MM_NOISE_FORWARD_NUDGE_M 단위버그 수정과 반드시
+//   같이 적용할 것. 단위버그만 고치면 전진량이 ~3.2배 커져 이 드리프트가 더 심해진다). 원시좌표 이동
+//   거리가 이 반경(m) 이내면 저속(MM_SPEED_LOW_KMH 이하)일 때 "사실상 정지"로 보고 강제전진을 생략한다.
+#define MM_NOISE_SAME_POS_TOL_M	2.0									// (단위: m) 저속 시 "사실상 동일 위치"로 볼 반경
 // 내부 좌표 스케일 — 경위도(도) x 360000. 위도 1도 약 111,320m 이므로 1m 는 약 3.2339 단위
 #define MM_COORD_UNITS_PER_M		3.2339
 
@@ -362,12 +369,32 @@ typedef struct sAltitudeScoreConfig
 #define MM_ZONE_OUTSIDE_SPEED_MAX_KMH	1.0									// (단위: km/h) 이 값 이하일 때만 검사 대상
 
 // ── NON_CHARGE_REASON 코드 (PRIM_CHARGEHAND.non_charge_reason, smallint) ──
-//   임시 코드 체계 — 정식 에러코드 정리 시 값 재배정 예정. 각 코드는 "이 레코드의 dist_m/
-//   speed_kmh/stay_seconds 중 일부를 신뢰할 수 없어 근사·생략 처리했다"는 예외사유 기록용
-//   (2026-09-01 최정우 추가)
+//   CHARGE_YN/CHARGE_STATUS 가 Y/0(정상) 이 아닐 때 그 사유를 남기는 부가 설명 컬럼 — 이 컬럼은
+//   과금 판정(CHARGE_YN/STATUS) 자체에는 전혀 영향을 주지 않는다(판정은 그대로, 사유만 기록).
+//   도로 유형(charge_type)마다 10개씩 번호 대역을 배정해, 한 유형에 사유가 늘어나도 다른 유형의
+//   번호를 안 건드리게 설계했다 — 0(정상)/1~10(NODE_STEP 일반도로)/11~20(OPEN 개방형)/
+//   21~30(CLOSED 폐쇄형)/31~40(SPEED 구간단속)/41~50(PARKING 주정차, 현재 고유사유 없음)/
+//   51~60(EXEMPT 면제도로)/61~70(공통, TTL·강제종료) — 각 대역 안에 실제 쓰는 값만 정의하고
+//   나머지는 예약(값 미정의) (2026-09-01 최정우 추가, 2026-09-11 밤 도로유형별 10단위 대역으로
+//   전면 재설계 — [[project_non_charge_reason_code_design_2026_09_10]] 참고, 상세 근거는 메모리에)
+#define NCR_NORMAL						0									// 전체 공통 — 정상 과금(Y/0). 로그 기록용(코드→메시지 조회)
+																			//   상수일 뿐 DB non_charge_reason 컬럼에는 안 넣는다(Y/0은
+																			//   빈 값이 기존 관례) (2026-09-11 최정우 추가)
 #define NCR_NODE_STEP_GAP_ANCHOR_LOST	1									// NODE_STEP SKIP구간 브릿지(케이스3) 시 직전 확정위치 소실
 																			//   (세션갭 30초 초과 리셋 등)로 dist_m 은 실측 누적값,
 																			//   speed_kmh/stay_seconds 는 산출 근거 없어 0으로 기록
+#define NCR_NODE_STEP_GAP_APPROX		2									// NODE_STEP SKIP구간 브릿지(케이스3) — 직전 확정위치는
+																			//   유효하나 경로기반 아닌 직선거리로 근사
+#define NCR_OPEN_ENTRY_GATE_MISSED		11									// OPEN(개방형) — 트립 중간시작으로 진입게이트 미통과
+#define NCR_CLOSED_ENTRY_UNOBSERVED	21									// CLOSED(폐쇄형) — 진입게이트 미확인(트립이 구역 중간에서 시작)
+#define NCR_CLOSED_ENTRY_EQUALS_EXIT	22									// CLOSED(폐쇄형) — 입구==출구 동일 게이트(유턴 등)
+#define NCR_CLOSED_EXIT_UNCONFIRMED	23									// CLOSED(폐쇄형) — 출구게이트 미확인
+#define NCR_SPEED_ENTRY_UNOBSERVED		31									// SPEED(구간단속) — 진입게이트 미확인
+#define NCR_SPEED_ENTRY_EQUALS_EXIT	32									// SPEED(구간단속) — 입구==출구 동일 게이트
+#define NCR_SPEED_EXIT_UNCONFIRMED		33									// SPEED(구간단속) — 출구게이트 미확인
+#define NCR_EXEMPT_TTL_FORCED_CLOSE	51									// EXEMPT(면제도로) — TTL 만료·신호두절 강제종료(N/4)
+#define NCR_TTL_FORCED_CLOSE			61									// 공통(NODE_STEP/OPEN/CLOSED/SPEED/PARKING) — TTL 만료·
+																			//   신호두절 강제종료(N/3), [trip_abend] SQL 사후전환 포함
 
 /**
  * @enum eCoordinateType

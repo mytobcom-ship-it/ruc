@@ -187,8 +187,16 @@ bool CGISUtil::IsCrossSgmt2Sgmt(POINT& stPoint1, POINT& stPoint2,
 */
 const uint16 CGISUtil::GetSgmtLength(const POINT& stPoint1, const POINT& stPoint2)
 {
-	uint16 wLenSgmt = 0;
-	wLenSgmt = static_cast<uint16>(round(sqrt(pow((stPoint1.dfX - stPoint2.dfX) * 360000, 2.0) + pow((stPoint1.dfY - stPoint2.dfY) * 360000, 2.0))));
+	// [버그 수정, 2026-09-11 최정우] CreateData/src/GISUtil.cpp가 2026-08-24에 이미 고친 것과
+	//   동일 버그 — 기존 구현은 경위도 차이에 360000(내부 좌표 스케일)만 곱하고 실제 미터 환산
+	//   (1도≈111,320m, 경도는 cos(위도) 보정 필요)을 하지 않아 위도 37°대에서 약 3.2~4.1배
+	//   부풀려진 값을 돌려주고 있었다 — GetDistanceGEO2()(방금 위에서 단위버그를 같이 고침,
+	//   입력 단위: 순수 WGS84 도)로 위임해 실제 지리 거리(m)를 구하도록 수정. 현재 이 함수
+	//   호출부가 없어(dead code) 실피해는 없었지만, "고쳐진 코드"로 착각하고 재사용할 때 즉시
+	//   재발하는 걸 막는다.
+	POINT stP1 = stPoint1;
+	POINT stP2 = stPoint2;
+	uint16 wLenSgmt = static_cast<uint16>(round(GetDistanceGEO2(stP1, stP2)));
 	if (wLenSgmt <= 0) wLenSgmt = 1;
 
 	return wLenSgmt;
@@ -725,6 +733,10 @@ const double CGISUtil::GetDistanceGEO1(POINT& stPoint, POINT& stIntersect)
 	double dfLat = (stIntersect.dfY - stPoint.dfY) / 360000.0;
 
 	double dfValue = pow(sin(RAD(dfLat) / 2.0), 2.0) + cos(RAD(stPoint.dfY / 360000.0)) * cos(RAD(stIntersect.dfY / 360000.0)) * pow(sin(RAD(dfLon) / 2.0), 2.0);
+	// [버그 수정, 2026-09-11 최정우] 부동소수점 오차로 dfValue 가 1.0 을 살짝 넘으면 sqrt(1-dfValue)
+	//   가 음수의 제곱근이 돼 NaN 이 나온다 — 같은 파일의 HaversineMetersDeg() 에 이미 있는 클램프와
+	//   동일하게 적용. 도로망 스케일(수백m 이내)에서는 사실상 발현 안 하지만 방어적으로 추가.
+	if (dfValue > 1.0) dfValue = 1.0;
 	return 2.0 * atan(sqrt(dfValue) / sqrt(1 - dfValue)) * 6378137;
 }
 
@@ -742,6 +754,14 @@ const double CGISUtil::GetDistanceGEO2(POINT& stPoint, POINT& stIntersect)
 	double dfLon = stIntersect.dfX - stPoint.dfX;
 	double dfLat = stIntersect.dfY - stPoint.dfY;
 
-	double dfValue = pow(sin(RAD(dfLat) / 2.0), 2.0) + cos(RAD(stPoint.dfY / 360000.0)) * cos(RAD(stIntersect.dfY / 360000.0)) * pow(sin(RAD(dfLon) / 2.0), 2.0);
+	// [버그 수정, 2026-09-11 최정우] CreateData/src/GISUtil.cpp가 2026-08-24에 이미 고친 것과
+	//   동일 버그 — GetDistanceGEO1()(입력 단위: 도×360000)을 그대로 복사해오면서 cos(위도) 항의
+	//   "/360000.0"을 못 지워, 이 함수(입력 단위: 순수 도)에서는 cos(위도/360000)≈cos(0)≈1 로
+	//   사실상 무력화돼 있었다 — 위도 37°대 기준 cos(37°)=0.794 대신 1을 써서 거리가 약 1.2~1.26배
+	//   부풀려짐. 현재 이 함수 호출부가 없어(dead code) 실피해는 없었지만, CreateData 쪽과 똑같이
+	//   맞춰 "고쳐진 코드"로 착각하고 재사용할 때 즉시 재발하는 걸 막는다.
+	double dfValue = pow(sin(RAD(dfLat) / 2.0), 2.0) + cos(RAD(stPoint.dfY)) * cos(RAD(stIntersect.dfY)) * pow(sin(RAD(dfLon) / 2.0), 2.0);
+	// GetDistanceGEO1() 과 동일 근거 — dfValue 상한 클램프 (2026-09-11 최정우 추가)
+	if (dfValue > 1.0) dfValue = 1.0;
 	return 2.0 * atan(sqrt(dfValue) / sqrt(1 - dfValue)) * 6378137;
 }

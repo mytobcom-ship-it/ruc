@@ -14,6 +14,7 @@
 #include "PostgrePool.h"
 #include "ProcessManager.h"
 #include "ChargeDataLoader.h"
+#include "CodeMap.h"
 
 using namespace std;
 
@@ -986,6 +987,16 @@ private:
 	//   회귀가 실측 확인됨, 2026-09-03) (2026-09-03 최정우 추가)
 	void FlushNodeStepRunsAtTripEnd(int nThreadId, const sRawLogInfo& stRawLogInfo,
 		VEHICLE_TRIP_SESSION *pstSession, vector<CHARGE_INSERT_ROW> *pvtChargeInserts);
+	// [버그 수정, 2026-09-11 최정우] 개방형·면제구역판 FlushNodeStepRunsAtTripEnd() — 반드시 그 함수와
+	//   똑같은 지점(이번 tick 자체가 맵매칭 실패로 곧장 return 하는 조기반환 경로)에서만 호출할 것.
+	//   처음엔 CLOSED/SPEED 의 "무조건 매칭 시도 전에 flush" 패턴을 그대로 베꼈다가, OPEN/EXEMPT 는
+	//   "트립 마지막 tick 자체가 정상 매칭되며 끝나는" 케이스가 흔해서(bMatched 블록의 정상 Y/0
+	//   종료가 이 tick 에서 바로 일어남) 그 정상 종료까지 먼저 가로채 N/3(AUDIT)으로 잘못
+	//   강등시키는 회귀를 냈다(재매칭 대조로 발견) — FlushNodeStepRunsAtTripEnd() 선언부 주석의
+	//   2026-09-03 사례와 근본원인이 완전히 같다. bMatched 로 정상 확정되는 경로에는 절대 호출하지
+	//   말 것(자세한 배경은 .cpp 주석 참고)
+	void FlushOpenExemptRunsAtTripEnd(int nThreadId, const sRawLogInfo& stRawLogInfo,
+		VEHICLE_TRIP_SESSION *pstSession, vector<CHARGE_INSERT_ROW> *pvtChargeInserts);
 	// NODE_STEP 일반도로 등록 확장(2026-09-01 최정우 추가) — LINK_ID 를 FROM_ID~TO_ID 로 삼는
 	//   신규 스코프(구간단속 위반 추가분/SKIP 구간 브릿지) 공용 row 생성. BuildNodeStepRow() 와 달리
 	//   road_id 기반 ZONE_RUN_SESSION 없이 호출측이 이미 계산해둔 값을 그대로 채운다.
@@ -1032,6 +1043,13 @@ private:
 	//   [trip_abend] UPDATE(query.sql)가 뒤이어 TRIP_END_DT IS NULL 인 이 행을 찾아 N/3(AUDIT)로
 	//   정정한다(다른 유형과 동일한 2단계 처리, AppendExpiredNodeStepCharge 참고) (2026-08-25 최정우 추가)
 	void AppendExpiredOpenGateCharge(int nThreadId, const string& strDeviceKey,
+		const VEHICLE_TRIP_SESSION& stSession, vector<CHARGE_INSERT_ROW> *pvtOut);
+	// [버그 수정, 2026-09-11 최정우] 트립 정상종료(TRIP_EVENT=2) 시 마지막 tick 자체의 맵매칭이
+	//   실패하면 ProcessOpenGateCharge()가 안 불려 개방형 run 이 과금 레코드 없이 사라지던 버그 —
+	//   CLOSED/SPEED 의 무조건 flush(ProcessRawLog bTrustedTripEnd 블록)와 동일 안전망. run 별
+	//   dtLastInZoneTime/dwLastInZoneGpsSeq(정확한 GPS 종료시각) 사용, AppendExpiredOpenGateCharge()
+	//   와 달리 wall-clock(dtLastSeen) 아님 — 자세한 배경은 .cpp 주석 참고
+	void AppendTripEndOpenGateCharge(int nThreadId, const string& strDeviceKey,
 		const VEHICLE_TRIP_SESSION& stSession, vector<CHARGE_INSERT_ROW> *pvtOut);
 	// 세션이 지워지기(TTL) 또는 정리되기(트립 정상종료, TRIP_EVENT=2) 직전, 아직 입구만 통과하고
 	//   출구를 못 찾은 폐쇄형 세션이면 N/3(AUDIT)로 1건 기록 — 출구를 못 봐서 dist_m/speed_kmh/
@@ -1140,6 +1158,9 @@ private:
 	RAWLOG_WORKER_CONFIG				m_stConfig;
 	vector<unordered_map<string, VEHICLE_TRIP_SESSION> > m_vtTripSessions;
 	CGISUtil							m_cGISUtil;							// 방위각(GetDirAngleDegree) 계산용, stateless (2026-07-08 최정우 추가)
+	CCodeMap							m_cCodeMap;							// NON_CHARGE_REASON 코드→메시지 조회용, stateless
+																			//   (MapMatch.cpp 의 ErrorCodeTable/m_cCodeMap 과 동일
+																			//   패턴, 2026-09-11 최정우 추가)
 };
 
 #endif //__RAWLOGWORKER_H__

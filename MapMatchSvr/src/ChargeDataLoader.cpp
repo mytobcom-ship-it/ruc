@@ -240,10 +240,22 @@ bool CChargeDataLoader::LoadGates()
 		const char *pszTollgateID = PQgetvalue(pcResult, i, 0);
 		const char *pszRoadID = PQgetvalue(pcResult, i, 1);
 		const char *pszGateDiv = PQgetvalue(pcResult, i, 2);
-		const char *pszLon = PQgetvalue(pcResult, i, 3);
-		const char *pszLat = PQgetvalue(pcResult, i, 4);
 		bool bLinkIdNull = PQgetisnull(pcResult, i, 5);
 		const char *pszLinkID = bLinkIdNull ? nullptr : PQgetvalue(pcResult, i, 5);
+
+		// [버그 수정, 2026-09-11 최정우] LON/LAT(BASE_TOLLGATE 스키마상 NULL 허용 컬럼, NOT NULL
+		//   제약 없음)은 여태 NULL 체크 없이 바로 atof() 했다 — NULL 이면 PQgetvalue 가 빈 문자열을
+		//   반환해 atof("")=0.0 이 되어 게이트가 조용히 (0,0)으로 캐시되고 에러 로그도 없이 넘어갔다.
+		//   link_id 처럼 명시적으로 걸러서 이 행 자체를 스킵한다.
+		bool bLonNull = PQgetisnull(pcResult, i, 3);
+		bool bLatNull = PQgetisnull(pcResult, i, 4);
+		if (bLonNull || bLatNull)
+		{
+			LOGFMTE("gate lon/lat is null!skip row - gate id=[%s] road_id=[%s]", pszTollgateID, pszRoadID);
+			continue;
+		}
+		const char *pszLon = PQgetvalue(pcResult, i, 3);
+		const char *pszLat = PQgetvalue(pcResult, i, 4);
 
 		// link_id 없는 게이트는 아직 폴백(좌표거리) 전용 조회 경로가 없어 캐시에서 제외
 		//   — GetGateNearby 는 현재 "이미 로드된" 게이트 목록을 선형 탐색하는 구조라 무관하지만,
@@ -479,6 +491,22 @@ bool CChargeDataLoader::LoadZones()
 		const char *pszLinkIds = PQgetvalue(pcResult, i, 6);
 		const char *pszCoords = PQgetvalue(pcResult, i, 7);
 		const char *pszLengthM = PQgetvalue(pcResult, i, 8);
+
+		// [버그 수정, 2026-09-11 최정우] FIRST/LAST_LON/LAT 는 query.sql [zone_select] 에서
+		//   COORDS->0->>0 등으로 계산되는데, COORDS(NOT NULL 컬럼이지만 빈 배열 '[]' 은 허용됨)가
+		//   빈 배열이면 인덱스 접근 결과가 NULL 이 된다 — 지금까지 NULL 체크 없이 바로 atof() 해서
+		//   조용히 (0,0)으로 캐시됐다. 좌표 폴리라인 자체가 없는(등록이 깨진) 구역이라 이 구역으로는
+		//   과금 판정 자체가 의미 없으므로, 통째로 스킵한다(LENGTH_M 만 SQL 의 COALESCE 로 보호돼
+		//   있어 이 검사와 무관하게 항상 0 — 값 검사 필요 없음).
+		bool bFirstLonNull = PQgetisnull(pcResult, i, 9);
+		bool bFirstLatNull = PQgetisnull(pcResult, i, 10);
+		bool bLastLonNull = PQgetisnull(pcResult, i, 11);
+		bool bLastLatNull = PQgetisnull(pcResult, i, 12);
+		if (bFirstLonNull || bFirstLatNull || bLastLonNull || bLastLatNull)
+		{
+			LOGFMTE("zone coords is empty!skip row - zone id=[%s] road_kind=[%s]", pszRoadID, pszRoadKind);
+			continue;
+		}
 		const char *pszFirstLon = PQgetvalue(pcResult, i, 9);
 		const char *pszFirstLat = PQgetvalue(pcResult, i, 10);
 		const char *pszLastLon = PQgetvalue(pcResult, i, 11);

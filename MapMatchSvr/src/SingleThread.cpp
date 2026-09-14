@@ -7,6 +7,7 @@
 long CSingleThread::m_nId = 0;
 pthread_attr_t CSingleThread::m_attr;
 long CSingleThread::m_nAttrRefCount = 0;
+pthread_mutex_t CSingleThread::m_staticMutex = PTHREAD_MUTEX_INITIALIZER;
 
 /**
  * @brief 쓰레드 핸들러
@@ -79,8 +80,15 @@ CSingleThread::~CSingleThread()
 	// 터질 수 있는 구조적 결함). m_nId 는 threadHandler() 에서 다른 용도(-1 리셋)로 이미 쓰이고
 	// 있어 재활용하면 위험해, 이 카운터만 별도로 둬서 마지막 살아있는 인스턴스가 소멸할 때만
 	// destroy 하도록 고친다.
+	// [버그 수정, 2026-09-11 최정우] 위 카운터 자체가 static(전 인스턴스 공유)인데 여기선 아예
+	// 락 없이 감소시키고 있었다 — 두 인스턴스가 동시에 소멸하면 감소 자체가 레이스(카운트 유실 →
+	// pthread_attr_destroy 누락 또는 다른 인스턴스가 pthread_create(..., &m_attr, ...) 호출 중에
+	// 조기 destroy 되는 UB). m_staticMutex 로 감소~destroy 를 원자적으로 묶는다.
+	pthread_mutex_lock(&m_staticMutex);
 	if (--m_nAttrRefCount <= 0)
 		pthread_attr_destroy(&m_attr);
+	pthread_mutex_unlock(&m_staticMutex);
+
 	pthread_mutex_destroy(&m_mutex);
 	pthread_cond_destroy(&m_cond);
 }
@@ -99,7 +107,12 @@ void CSingleThread::Initialize(const string& name)
 	pthread_cond_init(&m_cond, nullptr);
 	m_nState = static_cast<int>(ESS_INITIAL);
 
-	pthread_mutex_lock(&m_mutex);
+	// [버그 수정, 2026-09-11 최정우] m_nId/m_attr/m_nAttrRefCount 는 static(전 인스턴스 공유)인데
+	//   원래 여기서 "이 인스턴스" 전용 m_mutex(막 pthread_mutex_init 한 것)로 잠갔다 — 서로 다른
+	//   인스턴스는 서로 다른 m_mutex 를 쓰므로 두 인스턴스가 동시에 Initialize() 를 타면 이 락은
+	//   static 상태를 전혀 보호하지 못한다(생성 시점이 겹칠 일이 드물어 지금까지 증상은 없었지만
+	//   보호 자체가 안 되는 구조였음). static 상태 전용 m_staticMutex 로 교체.
+	pthread_mutex_lock(&m_staticMutex);
 	if (m_nId == 0)
 	{
 		pthread_attr_init(&m_attr);
@@ -107,7 +120,7 @@ void CSingleThread::Initialize(const string& name)
 	}
 	m_nId++;
 	m_nAttrRefCount++;			// (2026-09-10 최정우 추가) — 소멸자의 destroy-once 가드 카운터
-	pthread_mutex_unlock(&m_mutex);
+	pthread_mutex_unlock(&m_staticMutex);
 }
 
 /**

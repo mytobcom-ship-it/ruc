@@ -30,9 +30,12 @@ uint32 Runnable::GetThreadHandle()
  * @brief 생성자
  * @param[in] nThreadId 쓰레드 아이디
 */
-CThread::CThread(int nThreadId) : 
-	m_nState(ETS_CREATED), 
-	m_nThreadId(nThreadId)
+CThread::CThread(int nThreadId) :
+	m_hHandle(0),
+	m_nState(ETS_CREATED),
+	m_nThreadId(nThreadId),
+	m_pcRunnable(nullptr),
+	m_context(nullptr)
 {
 }
 
@@ -41,10 +44,12 @@ CThread::CThread(int nThreadId) :
  * @param[in] nThreadId Thread 아이디
  * @param[in] pcRunnable Thread 에서 실행할 Runable 클래스를 상속 받은 클래스
 */
-CThread::CThread(int nThreadId, Runnable *pcRunnable) : 
-	m_nState(ETS_CREATED), 
-	m_nThreadId(nThreadId), 
-	m_pcRunnable(pcRunnable)
+CThread::CThread(int nThreadId, Runnable *pcRunnable) :
+	m_hHandle(0),
+	m_nState(ETS_CREATED),
+	m_nThreadId(nThreadId),
+	m_pcRunnable(pcRunnable),
+	m_context(nullptr)
 {
 }
 
@@ -136,7 +141,13 @@ void CThread::sleep(long millis)
 */
 void CThread::detach()
 {
+	// [버그 수정, 2026-09-11 최정우] detach 후에도 m_hHandle 을 그대로 남겨두면, 소멸자의
+	//   `if (m_hHandle != 0) pthread_join(...)` 가 이미 detach 된 스레드를 또 join() 하게 된다 —
+	//   POSIX 정의되지 않은 동작(join()이 같은 이유로 m_hHandle=0 리셋하는 것과 동일 근거).
+	//   CThreadPool 은 생성자에서 start() 직후 곧바로 detach() 하므로(m_bDetatch=true, 운영 기본값)
+	//   매 정상 종료마다 재현됐다.
 	pthread_detach(m_hHandle);
+	m_hHandle = 0;
 }
 
 /**

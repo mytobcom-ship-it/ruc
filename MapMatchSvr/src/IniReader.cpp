@@ -206,7 +206,13 @@ bool CIniReader::ReadKeyValue(char *pszBuf, char *pszKey, char *pszVal)
 	while ((*pszBuf == ' ') || (*pszBuf == '\t'))
 		pszBuf++;
 
-	while (*pszBuf != '\0')
+	// [버그 수정, 2026-09-11 최정우] 줄 맨 앞 '#'/';' 만 주석으로 인정하던 것과 달리, 값 뒤에
+	//   붙는 인라인 주석("key=value # comment")은 지원이 안 돼 주석 텍스트가 그대로 값에
+	//   포함됐었다 — 숫자 파라미터라면 Isdigit()/Isdecimal() 검사에서 조용히 기본값으로 폴백.
+	//   query.sql(다른 파서 CSQLAccessor 가 읽음, ';' 가 SQL 문장 종결자라 여기 적용하면 안 됨)이
+	//   아니라 config.ini 전용이라 값에 '#'/';' 가 올 일이 없음을 확인하고 적용(현재 config.ini
+	//   전체에 값 안에 이 두 문자를 쓰는 줄이 0건).
+	while ((*pszBuf != '\0') && (*pszBuf != '#') && (*pszBuf != ';'))
 		*pszPos++ = *pszBuf++;
 
 	// Value 우측 공백 무시
@@ -356,12 +362,18 @@ bool CIniReader::GetProfileFloat(const string strSection, const string strKey, c
 		return false;
 	}							// if (itKey == mapKey->end())
 
-	// 실수인지 검사 (2024-01-19 최정우 추가)
-	if (!m_cUtil.Isdecimal(itKey->second))
+	// 실수인지 검사 — CUtil::Isdecimal() 은 선행 '-'(음수)를 지원하지 않는다. GetProfileInt() 의
+	//   동일 수정(2026-09-10)과 같은 이유로, 부호 있는 실수 설정값을 다루는 여기서도 선행 '-' 를
+	//   떼고 나머지만 검사한다 (2026-09-11 최정우 수정 — Isdigit() 만 고쳐지고 Isdecimal() 은
+	//   누락돼있던 것을 재분석 중 발견)
+	string strDecimalCheck = itKey->second;
+	if (!strDecimalCheck.empty() && (strDecimalCheck[0] == '-'))
+		strDecimalCheck.erase(0, 1);
+	if (strDecimalCheck.empty() || !m_cUtil.Isdecimal(strDecimalCheck))
 	{
 		fValue = fDefault;
 		return false;
-	}							// if (!m_cUtil.Isdecimal(itKey->second))
+	}							// if (!m_cUtil.Isdecimal(strDecimalCheck))
 
 	// 예외 처리 추가 (2025-12-04 최정우 추가)
 	try
@@ -417,12 +429,18 @@ bool CIniReader::GetProfileDouble(const string strSection, const string strKey, 
 		return false;
 	}							// if (itKey == mapKey->end())
 
-	// 실수인지 검사 (2024-01-19 최정우 추가)
-	if (!m_cUtil.Isdecimal(itKey->second))
+	// 실수인지 검사 — CUtil::Isdecimal() 은 선행 '-'(음수)를 지원하지 않는다. GetProfileInt() 의
+	//   동일 수정(2026-09-10)과 같은 이유로, 부호 있는 실수 설정값을 다루는 여기서도 선행 '-' 를
+	//   떼고 나머지만 검사한다 (2026-09-11 최정우 수정 — Isdigit() 만 고쳐지고 Isdecimal() 은
+	//   누락돼있던 것을 재분석 중 발견)
+	string strDecimalCheck = itKey->second;
+	if (!strDecimalCheck.empty() && (strDecimalCheck[0] == '-'))
+		strDecimalCheck.erase(0, 1);
+	if (strDecimalCheck.empty() || !m_cUtil.Isdecimal(strDecimalCheck))
 	{
 		dfValue = dfDefault;
 		return false;
-	}							// if (!m_cUtil.Isdecimal(itKey->second))
+	}							// if (!m_cUtil.Isdecimal(strDecimalCheck))
 
 	// 예외 처리 추가 (2025-12-04 최정우 추가)
 	try

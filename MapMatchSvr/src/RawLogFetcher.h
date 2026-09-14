@@ -14,6 +14,8 @@
 #include "SingleThread.h"
 #include "PostgrePool.h"
 #include "ThreadPool.h"
+#include "Mutex.h"
+#include "Condition.h"
 #include "log4z.h"
 
 using namespace zsummer::log4z;
@@ -45,6 +47,19 @@ public:
 
 	static bool RunRecover(CPostgrePool *pcPostgrePool,
 		const string& strRecoverSQL);
+
+	// [버그 수정, 2026-09-11 최정우] 기존엔 종료 시 CSingleThread::interrupt() (SIGUSR1 →
+	//   InterruptedException 강제 언와인드) 로 sleep 을 끊었다 — CServer 가 2026-07-10 에 바로
+	//   이 메커니즘(당시는 pthread_cond_timedwait 언와인드가 조건변수 내부 상태를 오염시켜
+	//   종료 시 pthread_cond_destroy 가 무한대기하는 사고)을 겪고 자기 자신의 run 루프에서는
+	//   제거했는데(Server.cpp 상단 주석 참고), CRawLogFetcher::interrupt() 호출부(Server.cpp
+	//   Uninitialize())만 그대로 남아있었다 — run() 의 대기 지점이 pthread_cond_timedwait 가
+	//   아니라 select() 기반 CUtil::Sleep() 이라 정확히 같은 증상은 아니지만, 시그널 핸들러에서
+	//   C++ 예외를 던져 임의의 C 라이브러리 블로킹 호출(FetchAndDispatch 실행 중이면 libpq 내부
+	//   상태까지) 을 강제 언와인드하는 것 자체가 여전히 정의되지 않은 동작이다. m_pbRun 플래그
+	//   기반의 안전한 조건변수 대기로 교체 — CServer 자신의 run 루프(m_cRunCondition.waitTimed)
+	//   와 동일한 패턴. WakeUp() 은 대기 중인 sleep 을 즉시 깨워 종료 지연 없이 반응하게 한다.
+	void WakeUp();
 
 private:
 	virtual void run();
@@ -82,6 +97,8 @@ private:
 	int								m_nQueueMaxCount;					// 큐 더 차면 대기 최대 구간 (건)
 	int								m_nQueueBusyMin;					// 큐 혼잡 시 조회 대기 최소 (ms)
 	int								m_nQueueBusyMax;					// 큐 혼잡 시 조회 대기 최대 (ms)
+	CMutex							m_cSleepMutex;						// run() 적응형 대기 보호용 (2026-09-11 최정우 추가)
+	CCondition						m_cSleepCondition;					// WakeUp() 이 즉시 깨움 (2026-09-11 최정우 추가)
 };
 
 #endif //__RAWLOGFETCHER_H__

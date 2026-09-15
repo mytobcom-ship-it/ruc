@@ -304,6 +304,11 @@ SELECT MIN(FROM_MIN) FROM RUC.BASE_PARKING_FINE;
 --   $6=LINK_ID[](실측상 항상 빈값) $7=FROM_ID[](모르면 NULL) $8=TO_ID[](모르면 NULL) $9=FROM_LAT[](모르면 NULL) $10=FROM_LON[](모르면 NULL)
 --   $11=TO_LAT[](모르면 NULL) $12=TO_LON[](모르면 NULL) $13=ZONE_ID[] $14=ZONE_NAME[] $15=DIST_M[](개방형은 빈값) $16=SPEED_KMH[](계산 불가 시 빈값)
 --   $17=SPEED_LIMIT_KMH[] $18=OCCUR_DT[] $19=TRIP_START_DT[] $20=TOLLGATE_ID[](실측상 항상 빈값)
+--     ※ OCCUR_DT 기준은 과금유형별로 다르다 — 일반도로(CHARGE_TYPE=0)만 구간 **진출** 시각이고
+--       나머지 5유형은 구간 **진입** 시각이다(2026-08-14 사용자 지시, RawLogWorker.cpp 의
+--       "혼동해서 통일하지 말 것" 주석 참고). 조회측이 구간 시간범위를 구할 때 일반도로는
+--       (OCCUR_DT-STAY_SECONDS ~ OCCUR_DT), 그 외는 (OCCUR_DT ~ OCCUR_DT+STAY_SECONDS) 다.
+--       (2026-09-15 최정우 추가 — DB 컬럼 코멘트에도 동일 내용 반영)
 --   $21=ENTRY_TOLLGATE_ID[](폐쇄형 전용, 개방형은 빈값) $22=EXIT_TOLLGATE_ID[](폐쇄형 전용) $23=REG_DT[] $24=UPD_DT[](REG_DT와 항상 동일)
 --   $25=CHARGE_YN[](빈값=DB기본 Y, 이상 시 "N" — 폐쇄형·구간단속 게이트 이상, 개방형 트립시작 run
 --     게이트 미통과, TTL flush 등)
@@ -314,6 +319,10 @@ SELECT MIN(FROM_MIN) FROM RUC.BASE_PARKING_FINE;
 --     빈값=NULL 유지, 실제 TRIP_EVENT=2 수신 시 [trip_end] UPDATE 가 별도로 채움) (2026-08-13 최정우 추가)
 --   $29=START_GPS_SEQ[] $30=END_GPS_SEQ[](진입/구역 안에서 실제로 마지막 확인된 PRIM_RAWGPS.GPS_SEQ —
 --     웹뷰어 G순번과 동일 개념. 빈값=DB기본 0) (2026-08-28 최정우 추가)
+--   $31=NON_CHARGE_REASON[](DataDefine.h 의 NCR_* 코드. 빈값=0=NCR_NORMAL(정상 과금) — 2026-09-15
+--     최정우 수정, 사용자 지시: 종전엔 빈값을 NULL 로 넣어 Y/0 행이 전부 NULL 이었으나, 코드표에
+--     0(정상 과금)이 이미 정의돼 있는데 DB 에만 안 들어가 일관성이 없었다. 이제 항상 채워지는
+--     상태코드로 취급한다 — 조회측이 NULL 분기를 둘 필요가 없다)
 -- ON CONFLICT: 배치 release 후 재시도되는 케이스의 중복 INSERT 방어(정상 흐름에서는 trip_seq 가 매번 새 값)
 [charge_insert]
 INSERT INTO RUC.PRIM_CHARGEHAND (
@@ -353,7 +362,7 @@ SELECT
 	NULLIF(U.TRIP_END_DT, ''),
 	CASE WHEN U.START_GPS_SEQ <> '' THEN U.START_GPS_SEQ::BIGINT ELSE 0 END,
 	CASE WHEN U.END_GPS_SEQ <> '' THEN U.END_GPS_SEQ::BIGINT ELSE 0 END,
-	NULLIF(U.NON_CHARGE_REASON, '')::SMALLINT
+	CASE WHEN U.NON_CHARGE_REASON <> '' THEN U.NON_CHARGE_REASON::SMALLINT ELSE 0 END
 FROM UNNEST(
 	$1::TEXT[], $2::TEXT[], $3::TEXT[], $4::TEXT[], $5::TEXT[], $6::TEXT[], $7::TEXT[],
 	$8::TEXT[], $9::TEXT[], $10::TEXT[], $11::TEXT[], $12::TEXT[], $13::TEXT[], $14::TEXT[],

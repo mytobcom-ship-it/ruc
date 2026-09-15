@@ -506,22 +506,25 @@ def _query_trip_charges_postgis(conn, trip_id, line_buf_m):
             --   끊기면(SKIP) 실제로는 하나인 과금기록이 run 두 개로 쪼개져 순번 대응이 어긋난다
             --   (실측 000376_20260819094414 RL-Z00003 trip_seq=5). "engine 이 이미 확정한 시간창으로
             --   gps_seq 를 복원"하는 t_rng 를 우선 적용해 이를 방지한다.
-            --   주의: occur_dt 의미가 과금유형마다 다르다(RawLogWorker.cpp 실측) — PARKING(4)·
-            --   CLOSED_ROAD(2)·SPEED_ZONE(3)·OPEN_ROAD(1)은 "진입"(또는 순간통과) 시각이라 창이
-            --   [occur_dt, occur_dt+stay] 이지만, NODE_STEP(0)·EXEMPT(5)는 "진출" 시각으로 기록돼
-            --   창이 거꾸로 [occur_dt-stay, occur_dt] 다 — 방향을 안 가리면 진입시각형은 stay_seconds
+            --   주의: occur_dt 의미가 과금유형마다 다르다 — **NODE_STEP(0) 만** "진출" 시각이라
+            --   창이 [occur_dt-stay, occur_dt] 이고, 나머지 5유형(OPEN_ROAD 1·CLOSED_ROAD 2·
+            --   SPEED_ZONE 3·PARKING 4·EXEMPT 5)은 "진입" 시각이라 [occur_dt, occur_dt+stay] 다.
+            --   [버그 수정, 2026-09-15 최정우] EXEMPT(5)를 진출형으로 분류하고 있었으나 실제로는
+            --   BuildExemptRow() 가 2026-08-30 부터 stRun.dtEntryTime(진입)을 쓴다 — 전 트립 실측
+            --   대조로 확인(0=진출 98/98, 1~5=진입). 그대로 두면 면제구역 행의 창이 통째로 과거로
+            --   밀려 t_rng 가 빈 결과를 내고 M순번이 엉뚱한 구간을 가리킨다 — 방향을 안 가리면 진입시각형은 stay_seconds
             --   만큼 미래로 밀려 실제 구간을 완전히 벗어난다(실측 000376_20260819140532 RL-Z00002
             --   trip_seq=1). t_rng 가 못 찾으면(예외 상황) 기존 run 기반 m_rng 로 폴백한다
             --   (2026-08-22 최정우 추가, 2026-08-24 최정우 수정 — POLY 전용에서 전체 확장 + 과금유형별
             --   진입/진출 방향 반영, 2026-08-28 최정우 수정 — G 관련 부분 제거, M 전용으로 축소)
             t_win AS (
                 SELECT ch.trip_seq, ch.zone_id,
-                       CASE WHEN ch.charge_type IN (0, 5)
+                       CASE WHEN ch.charge_type = 0
                             THEN to_timestamp(ch.occur_dt, 'YYYYMMDDHH24MISS')
                                  - (COALESCE(ch.stay_seconds, 0) || ' seconds')::interval
                             ELSE to_timestamp(ch.occur_dt, 'YYYYMMDDHH24MISS')
                        END AS dt_from,
-                       CASE WHEN ch.charge_type IN (0, 5)
+                       CASE WHEN ch.charge_type = 0
                             THEN to_timestamp(ch.occur_dt, 'YYYYMMDDHH24MISS')
                             ELSE to_timestamp(ch.occur_dt, 'YYYYMMDDHH24MISS')
                                  + (COALESCE(ch.stay_seconds, 0) || ' seconds')::interval
@@ -559,7 +562,10 @@ def _query_trip_charges_postgis(conn, trip_id, line_buf_m):
                    ch.tollgate_id, ch.entry_tollgate_id, ch.exit_tollgate_id,
                    ch.from_id, ch.to_id,
                    ch.dist_m, ch.speed_kmh, ch.speed_limit_kmh, ch.stay_seconds,
-                   ch.occur_dt, ch.charge_yn,
+                   -- [2026-09-15 최정우 추가] charge_status/non_charge_reason 노출 — 종전엔
+                   --   최종 투영에서 빠져 있어 "N 인데 왜 N 인지"를 로그 grep 외엔 볼 수 없었다.
+                   --   코드 0 적재 정책 변경으로 이제 모든 행에 값이 있어 노출 가치가 커졌다
+                   ch.occur_dt, ch.charge_yn, ch.charge_status, ch.non_charge_reason,
                    NULLIF(ch.start_gps_seq, 0) AS g_from,
                    NULLIF(ch.end_gps_seq, 0) AS g_to,
                    COALESCE(t_rng.s_m, t_rng.s_all, m_rng.s) AS m_from,
@@ -620,14 +626,17 @@ def _query_trip_charges_no_postgis(conn, trip_id):
                        ROW_NUMBER() OVER (PARTITION BY c.zone_id ORDER BY c.trip_seq) AS zone_rn
                 FROM ruc.prim_chargehand c WHERE c.trip_id = %(tid)s
             ),
+            -- occur_dt 방향은 위 PostGIS 경로와 동일 규칙 — NODE_STEP(0)만 "진출" 시각이라
+            --   창이 [occur_dt-stay, occur_dt] 이고 나머지 5유형은 "진입"이라 [occur_dt, occur_dt+stay].
+            --   [버그 수정, 2026-09-15 최정우] EXEMPT(5)를 진출형으로 묶고 있던 것을 정정(실측 대조)
             t_win AS (
                 SELECT ch.trip_seq,
-                       CASE WHEN ch.charge_type IN (0, 5)
+                       CASE WHEN ch.charge_type = 0
                             THEN to_timestamp(ch.occur_dt, 'YYYYMMDDHH24MISS')
                                  - (COALESCE(ch.stay_seconds, 0) || ' seconds')::interval
                             ELSE to_timestamp(ch.occur_dt, 'YYYYMMDDHH24MISS')
                        END AS dt_from,
-                       CASE WHEN ch.charge_type IN (0, 5)
+                       CASE WHEN ch.charge_type = 0
                             THEN to_timestamp(ch.occur_dt, 'YYYYMMDDHH24MISS')
                             ELSE to_timestamp(ch.occur_dt, 'YYYYMMDDHH24MISS')
                                  + (COALESCE(ch.stay_seconds, 0) || ' seconds')::interval
@@ -653,7 +662,10 @@ def _query_trip_charges_no_postgis(conn, trip_id):
                    ch.tollgate_id, ch.entry_tollgate_id, ch.exit_tollgate_id,
                    ch.from_id, ch.to_id,
                    ch.dist_m, ch.speed_kmh, ch.speed_limit_kmh, ch.stay_seconds,
-                   ch.occur_dt, ch.charge_yn,
+                   -- [2026-09-15 최정우 추가] charge_status/non_charge_reason 노출 — 종전엔
+                   --   최종 투영에서 빠져 있어 "N 인데 왜 N 인지"를 로그 grep 외엔 볼 수 없었다.
+                   --   코드 0 적재 정책 변경으로 이제 모든 행에 값이 있어 노출 가치가 커졌다
+                   ch.occur_dt, ch.charge_yn, ch.charge_status, ch.non_charge_reason,
                    NULLIF(ch.start_gps_seq, 0) AS g_from,
                    NULLIF(ch.end_gps_seq, 0) AS g_to,
                    COALESCE(t_rng.s, m_rng.s) AS m_from,

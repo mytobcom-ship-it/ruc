@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <algorithm>									// stable_sort — MergeAdjacentNodeStepRows() 병합 순서 정렬용 (2026-09-15 최정우 추가)
 #include "TypeDefine.h"
 #include "MessageType.h"
 #include "Thread.h"
@@ -224,6 +225,12 @@ typedef struct sVehicleTripSession
 	uint32							dwClosedLastZoneGpsSeq;					// dtClosedLastZoneTime 과 동일 tick 의 GPS_SEQ —
 																			//   PRIM_CHARGEHAND.end_gps_seq 원본(정상 진출,
 																			//   bExitOnPrevLink 케이스) (2026-08-28 최정우 추가)
+	// [2026-09-15 최정우 추가] 구역 **안**에서 마지막으로 확인된 매칭 위치 — dfClosedLastX/Y 와
+	//   구분해야 한다. 그쪽은 구역 밖에서도 매 tick 갱신되는 "다음 구간 측정 기준점"이라, 거리
+	//   누적을 구역 내부로 게이팅한 뒤에는 TO_LAT/LON 으로 쓰면 거리·좌표가 서로 다른 구간을
+	//   가리킨다. 면제도로(ProcessExemptZoneCharge)의 stRun.dfLastX/Y 와 같은 역할.
+	double							dfClosedLastZoneX;						// 구역 안 마지막 확인 위치 경도
+	double							dfClosedLastZoneY;						// 구역 안 마지막 확인 위치 위도
 	// "방금 출구 처리한 링크/구역으로 즉시 재진입 방지" 가드는 더 이상 세션에 안 둠 — 세션에 두면
 	//   트립이 끝날 때까지 안 풀려서 같은 구역 재통과(진짜 재진입)까지 막아버리는 버그였음. 실제로
 	//   막아야 하는 범위는 "출구 처리 직후 같은 tick 안에서 바로 이어지는 입구 후보 검사"뿐이라
@@ -264,6 +271,9 @@ typedef struct sVehicleTripSession
 	uint32							dwSpeedLastZoneGpsSeq;					// dtSpeedLastZoneTime 과 동일 tick 의 GPS_SEQ —
 																			//   PRIM_CHARGEHAND.end_gps_seq 원본(정상 진출,
 																			//   bExitOnPrevLink 케이스) (2026-08-28 최정우 추가)
+	// [2026-09-15 최정우 추가] 구역 **안** 마지막 확인 위치 — dfClosedLastZoneX/Y 와 동일 근거
+	double							dfSpeedLastZoneX;						// 구역 안 마지막 확인 위치 경도
+	double							dfSpeedLastZoneY;						// 구역 안 마지막 확인 위치 위도
 	// qwSpeedZoneJustExitedLinkID/szSpeedZoneJustExitedRoadId 도 동일 이유로 제거(2026-08-20 최정우 수정) — 위 주석 참고
 
 	// 주정차 트랙 — 게이트/구간단속과 별도 독립 상태(폐쇄형 고속도로 위 정차 등 동시 진행 가능).
@@ -455,6 +465,14 @@ typedef struct sVehicleTripSession
 																			//   dist/시간 평균속도 계산이 성립하지 않는다 — 그 대신 쓸 "그 tick
 																			//   자체의" 실측 속도(현재 처리 중인 다른 tick 값을 쓰면 값이 새 버림,
 																			//   실측 000376/000382 강릉 두 트립에서 확인) (2026-09-04 최정우 추가)
+	// SKIP 갭 해소 tick 에 일반도로 run 이 흡수한 이동거리 — ProcessNodeStepCharge() 가 먼저 돌며
+	//   "직전 확정위치 → 재매칭 위치" 직선거리를 run 에 통째로 더하고, 그 뒤 ResolveSkipGapNodeStep()
+	//   이 같은 구간을 더 정확한 경로거리로 다시 구한다. 두 값이 그대로 남으면 같은 구간이 두 번
+	//   기록되므로(이중 과금), 브릿지 쪽에서 이 값을 빼고 자기 값을 더해 "교체"한다
+	//   (2026-09-15 최정우 추가, 사용자 지시)
+	double							dfSkipGapTickDistM;						// 그 tick 에 run 에 더해진 직선거리(m)
+	uint32							dwSkipGapTickGpsSeq;					// 그 tick 의 GPS_SEQ — 다른 tick 값 오용 방지
+	uint32							dwSkipGapTickRunEntry;					// 더해진 run 의 dwEntryGpsSeq (run 식별자)
 	// 왕복분리 반대편 링크 N틱 연속 오매칭 보정용 (2026-08-24 최정우 추가, opp_streakmax 설정).
 	//   스트릭이 시작될 때의 "진짜" 확정 링크를 앵커로 고정해두고(qwLastConfirmedLinkID 는 매 틱
 	//   갱신되므로 별도 보관 필요), 스트릭 동안 pvtUpdates 에 커밋한 인덱스를 쌓아뒀다가 앵커로
@@ -568,7 +586,9 @@ typedef struct sVehicleTripSession
 		dfClosedAccumDistM(0.0),	// (2026-08-25 최정우 추가)
 		qwClosedLastZoneLinkID(0),	// (2026-08-25 최정우 추가)
 		dtClosedLastZoneTime(0),	// (2026-08-25 최정우 추가)
-		dwClosedLastZoneGpsSeq(0),	// (2026-08-28 최정우 추가)
+		dwClosedLastZoneGpsSeq(0),
+		dfClosedLastZoneX(0.0),	// (2026-09-15 최정우 추가)
+		dfClosedLastZoneY(0.0),	// (2026-09-15 최정우 추가)	// (2026-08-28 최정우 추가)
 		bInSpeedZone(false),	// (2026-08-12 최정우 추가)
 		dtSpeedEntryTime(0),	// (2026-08-12 최정우 추가)
 		dwSpeedEntryGpsSeq(0),	// (2026-08-28 최정우 추가)
@@ -582,7 +602,9 @@ typedef struct sVehicleTripSession
 		dfSpeedAccumDistM(0.0),	// (2026-08-25 최정우 추가)
 		qwSpeedLastZoneLinkID(0),	// (2026-08-25 최정우 추가)
 		dtSpeedLastZoneTime(0),	// (2026-08-25 최정우 추가)
-		dwSpeedLastZoneGpsSeq(0),	// (2026-08-28 최정우 추가)
+		dwSpeedLastZoneGpsSeq(0),
+		dfSpeedLastZoneX(0.0),	// (2026-09-15 최정우 추가)
+		dfSpeedLastZoneY(0.0),	// (2026-09-15 최정우 추가)	// (2026-08-28 최정우 추가)
 		dfLastRawTickX(0.0),	// (2026-08-24 최정우 추가)
 		dfLastRawTickY(0.0),	// (2026-08-24 최정우 추가)
 		dtLastRawTick(0),	// (2026-08-24 최정우 추가)
@@ -632,6 +654,9 @@ typedef struct sVehicleTripSession
 		dtLastConfirmedLinkTime(0),	// (2026-08-24 최정우 추가)
 		dwLastConfirmedLinkGpsSeq(0),	// (2026-09-01 최정우 추가)
 		fLastConfirmedLinkSpeed(0.0f),	// (2026-09-04 최정우 추가)
+		dfSkipGapTickDistM(0.0),	// (2026-09-15 최정우 추가)
+		dwSkipGapTickGpsSeq(0),	// (2026-09-15 최정우 추가)
+		dwSkipGapTickRunEntry(0),	// (2026-09-15 최정우 추가)
 		qwOppStreakAnchorLinkID(0),	// (2026-08-24 최정우 추가)
 		qwAmbigReverseRunLinkID(0),	// (2026-08-28 최정우 추가)
 		qwClampRunLinkID(0),	// (2026-08-28 최정우 추가)
@@ -723,7 +748,9 @@ typedef struct sChargeInsertRow
 																		//   (2026-08-28 최정우 추가)
 	string							strEndGpsSeq;						// 구역 안에서 실제로 마지막 확인된 GPS_SEQ(보간 경계 tick이 아님)
 																		//   (2026-08-28 최정우 추가)
-	string							strNonChargeReason;					// 빈 값=NULL(정상). NCR_* 코드(DataDefine.h) — 이 행의
+	string							strNonChargeReason;					// 빈 값=0(NCR_NORMAL, 정상 과금 — [charge_insert]가 변환.
+																		//   2026-09-15 최정우 수정, 종전엔 NULL 이었음).
+																		//   그 외는 NCR_* 코드(DataDefine.h) — 이 행의
 																		//   일부 값(주로 speed_kmh/stay_seconds)을 신뢰할 수 없어
 																		//   근사·생략 처리했다는 예외사유. 임시 코드 체계, 추후
 																		//   정식 에러코드 정리 시 재배정 예정 (2026-09-01 최정우 추가)
@@ -980,9 +1007,15 @@ private:
 	void BuildNodeStepRow(const ZONE_RUN_SESSION& stRun, const string& strTripId,
 		const string& strDeviceKey, int nChargeSeq, time_t dtEnd, uint32 dwEndGpsSeq,
 		const char *pszChargeYn, const char *pszChargeStatus, CHARGE_INSERT_ROW *pstRow);
+	// bStationaryTripEnd: 트립이 신뢰 가능한 END 로 끝나면서(TTL 만료 아님) 그 시점 DRIVE_STATUS 가
+	//   정차·주차/일시정지인 경우 true — 이때는 심사대상(N/3) 대신 정상마감(Y/0)으로 기록한다
+	//   (사용자 지시, 2026-09-14 최정우 추가 — 실측 000376_20260819141002 trip_seq=6: seq102 이후
+	//   SKIP 구간이 속도 0·DRIVE_STATUS=PARKED 인 채로 트립이 정상 종료됐는데도 "확정 못 한 채 끝남"
+	//   취급돼 N/3 으로 나가던 문제). TTL 스윕(세션 자체 만료, 신뢰할 END 신호 자체가 없음) 호출부는
+	//   항상 false 로 호출.
 	void AppendExpiredNodeStepCharge(int nThreadId, const string& strDeviceKey,
 		const VEHICLE_TRIP_SESSION& stSession, time_t dtEnd, uint32 dwEndGpsSeq,
-		vector<CHARGE_INSERT_ROW> *pvtOut);
+		bool bStationaryTripEnd, vector<CHARGE_INSERT_ROW> *pvtOut);
 	// 트립종료(TRIP_EVENT=END) 처리 중 "이번 틱이 신뢰 못할 매칭(bUntrustedMatch)이거나 매칭 자체를
 	//   못 한" 조기 반환 경로들 전용 — CommitPendingRow() 가 이번 틱이 아니라 훨씬 이전에 보류돼있던
 	//   행을 커밋하면서 그 행 자신의(트립종료 아닌) TRIP_EVENT 기준으로 bTrustedTripEnd 를 다시 판정해
@@ -1067,6 +1100,11 @@ private:
 	//   측이 상황에 맞는 값을 넘겨줌(2026-08-20 최정우 수정 — 트립 정상종료 시에도 호출되도록 확장)
 	void AppendExpiredClosedRoadCharge(int nThreadId, const string& strDeviceKey,
 		const VEHICLE_TRIP_SESSION& stSession, time_t dtEndTime, vector<CHARGE_INSERT_ROW> *pvtOut);
+	// 구역 이탈 경계 보정(구간단속·폐쇄형 공용) — 면제도로가 쓰던 것과 동일 원리.
+	//   거리 누적을 "구역 안 tick 만"으로 바꾼 뒤 생긴 경계 구간 누락을 메운다
+	//   (2026-09-15 최정우 추가, 상세 근거는 .cpp 함수 주석 참고)
+	double ApplyZoneExitTailDist(uint64 qwLastZoneLinkID,
+		double *pdfLastZoneX, double *pdfLastZoneY, double *pdfAccumDistM);
 	// 세션이 지워지기(TTL) 또는 정리되기(트립 정상종료) 직전, 아직 입구만 통과하고 출구를 못 찾은
 	//   구간단속 세션이면 N/3(AUDIT)로 1건 기록 — 폐쇄형과 동일 이유로 dist_m/speed_kmh/to_lat·lon은
 	//   비워둠 (2026-08-14 최정우 추가, 2026-08-20 최정우 수정 — dtEndTime 파라미터화, 근거는

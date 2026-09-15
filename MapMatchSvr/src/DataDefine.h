@@ -377,15 +377,24 @@ typedef struct sAltitudeScoreConfig
 //   51~60(EXEMPT 면제도로)/61~70(공통, TTL·강제종료) — 각 대역 안에 실제 쓰는 값만 정의하고
 //   나머지는 예약(값 미정의) (2026-09-01 최정우 추가, 2026-09-11 밤 도로유형별 10단위 대역으로
 //   전면 재설계 — [[project_non_charge_reason_code_design_2026_09_10]] 참고, 상세 근거는 메모리에)
-#define NCR_NORMAL						0									// 전체 공통 — 정상 과금(Y/0). 로그 기록용(코드→메시지 조회)
-																			//   상수일 뿐 DB non_charge_reason 컬럼에는 안 넣는다(Y/0은
-																			//   빈 값이 기존 관례) (2026-09-11 최정우 추가)
+#define NCR_NORMAL						0									// 전체 공통 — 정상 과금(Y/0). (2026-09-11 최정우 추가)
+																			//   [2026-09-15 최정우 수정, 사용자 지시] DB non_charge_reason
+																			//   컬럼에도 이 값이 들어간다 — 종전엔 Y/0 을 빈 값(NULL)로
+																			//   두었으나, 코드표에 0 이 정의돼 있는데 DB 에만 안 넣어
+																			//   일관성이 없었다. query.sql [charge_insert] 가 빈 문자열을
+																			//   0 으로 변환하므로 C++ 쪽은 빈 값으로 두면 된다.
+																			//   결과적으로 이 컬럼에 NULL 은 존재하지 않는다
 #define NCR_NODE_STEP_GAP_ANCHOR_LOST	1									// NODE_STEP SKIP구간 브릿지(케이스3) 시 직전 확정위치 소실
 																			//   (세션갭 30초 초과 리셋 등)로 dist_m 은 실측 누적값,
 																			//   speed_kmh/stay_seconds 는 산출 근거 없어 0으로 기록
 #define NCR_NODE_STEP_GAP_APPROX		2									// NODE_STEP SKIP구간 브릿지(케이스3) — 직전 확정위치는
 																			//   유효하나 경로기반 아닌 직선거리로 근사
 #define NCR_OPEN_ENTRY_GATE_MISSED		11									// OPEN(개방형) — 트립 중간시작으로 진입게이트 미통과
+#define NCR_OPEN_GATE_NOT_ON_PATH		12									// OPEN(개방형) — GPS 간격 사이로 구역을 스쳐 지나 게이트
+																			//   통과 미확정. EmitForeignSpan() 이 경로재구성으로만
+																			//   복원한 구간 전용 — 트립 시작과 무관한데 11번(트립
+																			//   중간시작)으로 잘못 표기되던 것을 분리
+																			//   (2026-09-15 최정우 추가)
 #define NCR_CLOSED_ENTRY_UNOBSERVED	21									// CLOSED(폐쇄형) — 진입게이트 미확인(트립이 구역 중간에서 시작)
 #define NCR_CLOSED_ENTRY_EQUALS_EXIT	22									// CLOSED(폐쇄형) — 입구==출구 동일 게이트(유턴 등)
 #define NCR_CLOSED_EXIT_UNCONFIRMED	23									// CLOSED(폐쇄형) — 출구게이트 미확인

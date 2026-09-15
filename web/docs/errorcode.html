@@ -167,12 +167,12 @@
   </header>
 
   <div class="group">
-    <div class="group-head"><span class="name">정상</span><span class="range">0</span></div>
+    <div class="group-head"><span class="name">공통(정상)</span><span class="range">0</span></div>
     <div class="table-wrap"><table><tbody>
       <tr class="success">
         <td class="code-cell">0</td>
         <td class="status-cell">Y / 0</td>
-        <td class="reason-cell">정상 과금</td>
+        <td class="reason-cell">정상 과금 (도로 유형과 무관한 전 유형 공통 코드 — 유형별로 나누지 않는다)</td>
       </tr>
     </tbody></table></div>
   </div>
@@ -206,8 +206,13 @@
         <td class="status-cell">N / 3</td>
         <td class="reason-cell">통행 도중부터 기록이 시작되어 진입 지점을 확인하지 못함</td>
       </tr>
+      <tr>
+        <td class="code-cell">12</td>
+        <td class="status-cell">N / 3</td>
+        <td class="reason-cell">위치 수신 간격 사이로 구역을 스쳐 지나가 진입 지점 통과를 확인하지 못함</td>
+      </tr>
       <tr class="reserved">
-        <td class="code-cell">12–20</td>
+        <td class="code-cell">13–20</td>
         <td class="status-cell">—</td>
         <td class="reason-cell">에러코드 예약</td>
       </tr>
@@ -310,7 +315,7 @@
   </div>
 
   <footer>
-    현재 실제로 <code>non_charge_reason</code> 값이 기록되는 코드는 <code>1</code> 하나뿐이며, 나머지는 과금 판정(Y/N, STATUS) 자체는 이미 반영되고 있으나 사유 코드 기록은 아직 구현 전입니다.
+    <code>non_charge_reason</code> 은 <b>모든 행에 항상 기록</b>됩니다(정상 과금은 <code>0</code>, NULL 없음 — 2026-09-15 정책 변경). 로컬 실데이터에서 실제로 관측된 코드는 <code>0 · 1 · 2 · 11 · 12 · 21 · 61</code> 이고, 나머지 코드는 구현돼 있으나 해당 조건의 데이터가 아직 없습니다. 단 <code>31</code>·<code>32</code> 는 구간단속 정책상 레코드 자체가 적재되지 않아 <b>DB 에는 구조적으로 나타나지 않고 로그로만</b> 확인됩니다.
   </footer>
 </div>
 </body>

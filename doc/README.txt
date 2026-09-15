@@ -227,3 +227,62 @@ J. [2026-08-08] 개방식(OPEN) 임시 게이트 테스트 스캐폴드 생성
       → 위 DDL·샘플데이터 문서화 (charge-tables.html과 별개 문서, 사이드바에서 상호 링크)
   용도: 원격 DB 접속 없이 로컬에서 개방식 게이트 통과 판정 흐름 테스트. I-7 이슈(게이트 점 vs 링크 hop)의
   정식 해결과는 무관 — 임시 테스트 목적으로 원 설계안을 그대로 채택한 것뿐.
+
+K. [2026-09-15] 전체 재매칭(백필) 표준 절차
+  ※ 최초 작성분(같은 날 오전)은 "TTL 스윕이 안 돌아 잔여 세션이 유실된다"는 잘못된 전제와, END
+    위치를 min(gps_seq)로만 조회해 두 번째 END를 놓친 사례표를 담고 있었다. 실제로 절차를 돌려
+    검증한 결과 회수 0건이었고, 원인도 TTL이 아니었다. 아래가 정정본이다.
+
+  K-1. 표준 절차
+    1) MapMatchSvr 정지 — kill_svr.sh 실행 후 pgrep -x MapMatchSvr 로 실제 종료 확인
+       ※ **반드시 정지 상태에서 리셋할 것.** 켜진 채 리셋하면 기동 시 stale 회수로 마지막 틱이
+         먼저 처리되고 앞 틱이 뒤늦게 들어가 세션이 꼬인다 — 실측에서 stay_seconds 가 -7/-238 로
+         기록됐다(지금은 BulkInsertCharges 가 0 으로 보정하고 WARN 을 남기지만, 애초에 안 만드는
+         게 맞다).
+    2) 리셋:
+         BEGIN;
+         DELETE FROM ruc.prim_chargehand;
+         UPDATE ruc.prim_rawgps
+            SET match_status=0, match_lat=NULL, match_lon=NULL, match_link_id=NULL,
+                intersect_len=0, match_rsv_dt=NULL;
+         COMMIT;
+    3) 기동 후 match_status IN (0,2) 가 0 이 될 때까지 대기 = 재매칭 완료
+       ※ ttl_sec 을 건드릴 필요 없다. K-2 참고.
+    4) 검증 포인트
+       - LOG_ERROR 0건
+       - non_charge_reason NULL 0건 (Y/0 은 코드 0 이 적재된다)
+       - stay_seconds / speed_kmh 음수 0건
+       - 같은 charge_type=0 Y/0 행끼리 gps_seq 구간이 겹치지 않을 것
+       - 두 번 연속 재매칭한 결과가 완전히 동일할 것(배치 구성에 따라 갈리면 안 됨)
+
+  K-2. TTL 에 대한 사실관계 (오해 주의)
+    - TTL 만료 판정은 GPS 시각이 아니라 **벽시계** 기준이다(stSession.dtLastSeen = time(nullptr)).
+      과거 데이터를 넣어도 즉시 만료되지 않는다. TTL 분기를 일부러 태우려면 config.ini 의
+      ttl_sec 을 낮춰야 한다(2026-09-15 개방형 TTL 거리계산 검증에 이 방법을 썼다).
+    - 로그의 "ttl expiry" 문구는 트립종료 경로도 같은 함수를 쓰기 때문에 나온다 — **TTL 만료의
+      증거가 아니다.**
+    - 세션 맵의 키는 TRIP_ID 가 아니라 **DEVICE_KEY** 다(차량당 세션 1개). 같은 차량의 다음 운행이
+      시작되면 이전 세션은 그 자리에서 초기화되므로, TTL 이 회수할 수 있는 건 사실상 "그 차량의
+      마지막 운행" 뿐이다. 재매칭 뒤에 TTL 스윕을 유도해도 앞 트립들은 회수되지 않는다(실측 확인).
+    - **[미해결] 종료 신호 없이 끝난 운행의 열린 run 은 현재 아무도 마감하지 않는다.**
+      ResetTripSessionForBegin() 이 vtOpenRuns/vtExemptRuns/vtNodeStepRuns 를 flush 없이 clear()
+      하고 폐쇄형·구간단속 상태도 플래그만 리셋하므로, 다음 운행 START 시점에 레코드 없이 사라진다
+      = 과금 누락. 실측 대상은 K-3 의 000370_20260824140015(END 가 6/41 틱, 이후 종료신호 없음).
+      2026-09-15 에 "다음 운행 시작 시 강제 마감"(NON_CHARGE_REASON=62)을 구현했다가, 합성
+      시나리오 검증에서 마감 직후 같은 틱에 이전 트립 앵커로 새 run 이 열려 **trip_id 는 새 운행,
+      occur_dt/start_gps_seq 는 이전 운행**인 잡종 레코드가 나오는 걸 확인하고 전량 되돌렸다
+      (코드 62 도 함께 제거 — DataDefine.h/NonChargeReasonTable/errorcode.html 어디에도 없다).
+      제대로 고치려면 "세션 리셋 시 어디까지를 이전 트립 소유로 볼 것인가"를 재정의해야 하는데,
+      맵매칭 앵커(qwLastConfirmedLinkID·dtLastConfirmedLinkTime·dfLastMatchX/Y)는 트립이 바뀌어도
+      **의도적으로 유지**되는 값이라(차량은 이어서 달린다) 건드리면 맵매칭 품질에 영향이 간다.
+      → 재설계 대상. 수집서버가 TRIP_EVENT 를 바로잡으면(K-3) 불필요해질 수도 있다.
+
+  K-3. 수집 데이터 TRIP_EVENT 이상 (엔진 밖, 확인 요청 필요)
+    END(TRIP_EVENT=2) 틱은 직전 틱의 좌표·시각 복사본으로 스트림 맨 끝에 붙는 것이 정상인데,
+    58개 트립 중 아래가 어긋난다. 엔진은 IsTrustedTripEnd()/코드 62 로 방어하고 있으나 근본
+    해결은 수집서버 쪽이다.
+      END 0개 : 1건
+      END 1개 : 55건 (정상)
+      END 2개 : 2건  — 000370_20260824135458(4,96) / 000376_20260819140856(19,23).
+                        둘 다 마지막 틱에도 END 가 있어 정상 마감된다.
+      중간 END 후 미종료 : 000370_20260824140015 (END=6/총41틱, 이후 종료 신호 없음)

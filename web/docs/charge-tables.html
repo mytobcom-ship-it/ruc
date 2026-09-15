@@ -520,9 +520,9 @@ erDiagram
         <tr><td>speed_limit_kmh</td><td>smallint</td><td>제한 속도(km/h). 0이면 해당 없음</td></tr>
         <tr><td>stay_seconds</td><td>integer</td><td>체류 시간(초). 주정차 위반 판단</td></tr>
         <tr><td>zone_id / zone_name</td><td>varchar</td><td>관련 구역 ID/명 — 협력사 기준정보 역정규화(비정규화 저장)</td></tr>
-        <tr><td>occur_dt</td><td>varchar(14)</td><td>과금/위반 발생 시각</td></tr>
+        <tr><td>occur_dt</td><td>varchar(14)</td><td>과금/위반 발생 시각 — <b>기준이 과금유형별로 다름</b>: 일반도로(charge_type=0)는 구간 <b>진출</b> 시각, 나머지 5유형은 구간 <b>진입</b> 시각. 구간 시간범위는 일반도로가 (occur_dt−stay_seconds ~ occur_dt), 그 외는 (occur_dt ~ occur_dt+stay_seconds)</td></tr>
         <tr><td>trip_start_dt / trip_end_dt</td><td>varchar(14)</td><td>운행 시작/종료 시각</td></tr>
-        <tr><td>charge_status</td><td>smallint</td><td>0:PENDING(대기), 1:PROCESSING(처리중), 2:CHARGED(완료), 3:SKIP(제외)</td></tr>
+        <tr><td>charge_status</td><td>smallint</td><td>0:PENDING(대기), 1:PROCESSING(처리중), 2:CHARGED(완료), <b>3:AUDIT(심사대상)</b>, <b>4:SKIP(과금제외)</b> — 엔진은 비정상 마감 시 3(AUDIT)을 쓰고, 4 는 면제도로(charge_type=5) TTL 만료에만 쓴다</td></tr>
         <tr><td>reg_dt / upd_dt</td><td>varchar(14)</td><td>등록/최종 수정 일시</td></tr>
         <tr><td>charge_yn</td><td>varchar(1)</td><td>과금 대상 여부(Y/N) — 위치검증서버에서 적재</td></tr>
         <tr><td>non_charge_reason</td><td>smallint</td><td>비과금 사유 — 위치검증서버에서 적재</td></tr>

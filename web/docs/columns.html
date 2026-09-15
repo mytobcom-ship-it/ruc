@@ -151,7 +151,7 @@
       </tr>
       <tr>
         <td class="col-name">non_charge_reason</td>
-        <td colspan="5" class="na">charge_yn='N'일 때만 채움 — 5유형 공통 예외 처리용, 값 목록 미정</td>
+        <td colspan="5">Y/N 무관 <b>항상 채움</b>(정상 과금=0, NULL 없음 — 2026-09-15 정책 변경). 도로 유형별 10단위 대역 체계이며 값 목록은 <a href="errorcode.html">비과금 에러코드</a> 참고</td>
       </tr>
 
       <tr class="grp-row"><td colspan="6">위치/거리(구간 식별)</td></tr>
@@ -260,11 +260,11 @@
       </tr>
       <tr>
         <td class="col-name">occur_dt</td>
-        <td>구간 종료 시각</td>
-        <td>게이트 통과 시각</td>
-        <td>진출 시각</td>
-        <td>회랑 이탈(평균속도 확정) 시각</td>
-        <td>이동 재개(정차 종료) 시각</td>
+        <td><b>구간 진출</b> 시각 — 일반도로만 진출 기준</td>
+        <td><b>구역 진입</b> 시각</td>
+        <td><b>구역 진입</b> 시각(입구 게이트 통과)</td>
+        <td><b>구역 진입</b> 시각(진입 게이트 통과)</td>
+        <td><b>구역 진입</b> 시각(정차 시작)</td>
       </tr>
       <tr>
         <td class="col-name">trip_start_dt / trip_end_dt</td>

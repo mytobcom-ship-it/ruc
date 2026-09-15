@@ -200,9 +200,9 @@ public:
 	static bool IsPointInPolygon(double dfLon, double dfLat, const vector<POINT>& vtPoly);
 	static double DistanceToPolygonBoundaryMeters(double dfLon, double dfLat, const vector<POINT>& vtPoly);
 
-	inline const bool IsLoad() const { return m_bLoad; }
+	inline bool IsLoad() const { return m_bLoad; }
 	size_t GetGateCount() const;
-	inline const size_t GetZoneCount() const
+	inline size_t GetZoneCount() const
 	{
 		lock_guard<CMutex> cLock(m_cZoneCacheMutex);
 		return m_mapZoneInfo.size();

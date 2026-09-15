@@ -41,6 +41,16 @@ void CContinueMapMatch::SetAltitudeConfig(const ALTITUDE_SCORE_CONFIG& stAltConf
  *   링크 UID 집합 — CMapMatch::ContinueMapMatch()가 Begin 병행폴백 후보의 "진짜 갈림길" 여부
  *   판별에 사용 (2026-08-21 최정우 추가)
  * @return true(성공), false(실패)
+ * @warning **stSgmtMatchInput 은 이 함수 안에서 비가역적으로 변조된다**(좌표가 검색 스케일로
+ *   변환되고 qwPrevLinkID 등 내부 필드가 채워진다). 따라서 **호출 후 그 구조체를 다시 읽거나
+ *   다른 매칭 호출에 재사용하면 안 된다** — "아직 변환 전"을 전제로 한 코드가 이미 변환된 값을
+ *   받아 조용히 틀린 결과를 낸다(컴파일 경고도 없다).
+ *   [2026-09-15 최정우 확인] 현재 호출부는 안전하다: CMapMatch::ContinueMapMatch()가 매번 새
+ *   로컬을 선언해 넘기고(MapMatch.cpp), 호출 후 그 구조체를 읽지 않으며, 같은 함수 안의 Begin
+ *   병행폴백은 **별도 구조체(stBeginSgmtMatchInput)를 원본 stMapMatchInput 에서 새로 채운다**.
+ *   2026-09-11 소스리뷰에서 "값 전달로 바꾸려면 StartMapMatch 하위 호출 전체를 재설계해야 한다"며
+ *   보류했던 항목 — 재확인 결과 현재는 무해하므로 고치지 않고 이 경고만 남긴다.
+ *   **새 호출부를 추가할 때는 반드시 새 구조체를 원본에서 채워 넘길 것.**
 */
 bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& stSgmtMatchInput,
 		uint64& qwLinkID, sint16& nSearchStep, uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry,

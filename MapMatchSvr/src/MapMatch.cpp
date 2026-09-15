@@ -676,7 +676,10 @@ bool CMapMatch::IsValidAngle(sint16& nAngle)
 */
 bool CMapMatch::IsValidSearchStep(sint16& nSearchStep)
 {
-	if ((nSearchStep < 0) || (nSearchStep > 32767))
+	// [경고 정리, 2026-09-15 최정우] 상한 검사(> 32767)는 sint16 의 최댓값이 32767 이라 절대
+	//   성립하지 않는다(-Wtype-limits). 타입이 보장하는 조건이므로 제거하고 하한만 남긴다 —
+	//   인자 타입을 더 넓은 정수로 바꾸게 되면 상한 검사를 다시 넣을 것.
+	if (nSearchStep < 0)
 		return false;
 
 	return true;

@@ -180,19 +180,19 @@ class CGISUtil
 public:
 	CGISUtil();
 	virtual ~CGISUtil();
-	const uint32 GetGridID(double& dfX, double& dfY);
-	inline const uint32 GetMaxGridCount() { return X_GRID_COUNT * Y_GRID_COUNT; }
-	inline const uint32 GetGridID(uint32 dwColNo, uint32 dwRowNo) { return (dwRowNo * X_GRID_COUNT) + dwColNo; }
-	const sint32 GetGridColNo(double& dfX);
-	const sint32 GetGridRowNo(double& dfY);
+	uint32 GetGridID(double& dfX, double& dfY);
+	inline uint32 GetMaxGridCount() { return X_GRID_COUNT * Y_GRID_COUNT; }
+	inline uint32 GetGridID(uint32 dwColNo, uint32 dwRowNo) { return (dwRowNo * X_GRID_COUNT) + dwColNo; }
+	sint32 GetGridColNo(double& dfX);
+	sint32 GetGridRowNo(double& dfY);
 	bool IsCrossSgmt2Grid(POINT& stPoint1, POINT& stPoint2, 
 		uint32& dwGridColNo, uint32& dwGridRowNo);
 	bool IsCrossSgmt2Sgmt(POINT& stPoint1, POINT& stPoint2, 
 		double& dfXMin, double& dfYMin, double& dfXMax, double& dfYMax);
-	const uint16 GetSgmtLength(const POINT& stPoint1, const POINT& stPoint2);
-	const double GridBorderDistance(const uint32& dwGridID, const double& dfX, 
+	uint16 GetSgmtLength(const POINT& stPoint1, const POINT& stPoint2);
+	double GridBorderDistance(const uint32& dwGridID, const double& dfX, 
 		const double& dfY, GRID_BORDER_DIST& stGridBorderDist);
-	const uint8 GridSplitIndex(const uint32& dwGridID, const double& dfX, const double& dfY);
+	uint8 GridSplitIndex(const uint32& dwGridID, const double& dfX, const double& dfY);
 	void GetNearGridID(const uint32& dwGridID, const SGMT_MATCH_INPUT& stSgmtMatchInput, 
 		vector<uint32>& vtNearGridIDList);
 	bool SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtInfo, SGMT_MATCH_RES *pstSgmtMatchRes,
@@ -201,9 +201,9 @@ public:
 		const ALTITUDE_SCORE_CONFIG& stAltConfig) const;
 	sint16 GetAngleDiff(sint16& nAngle1, sint16& nAngle2);
 	bool GetDirAngle(POINT& stSgmtPoint, POINT& stPoint, sint16 *pnDirAngle);
-	const sint16 GetDirAngleDegree(POINT& stPoint1, POINT& stPoint2);
-	const double GetDistanceGEO1(POINT& stPoint, POINT& stIntersect);
-	const double GetDistanceGEO2(POINT& stPoint, POINT& stIntersect);
+	sint16 GetDirAngleDegree(POINT& stPoint1, POINT& stPoint2);
+	double GetDistanceGEO1(POINT& stPoint, POINT& stIntersect);
+	double GetDistanceGEO2(POINT& stPoint, POINT& stIntersect);
 };
 
 #endif //__GISUTIL_H__

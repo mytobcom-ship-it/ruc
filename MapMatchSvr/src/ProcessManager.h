@@ -152,7 +152,7 @@ private:
 		uint64& qwInOutLinkID, uint64 qwPrevLinkId, MATCH_LINK_INFO *pstMatchLinkInfo,
 		const ALT_MATCH_CTX *pstAltCtx);
 	time_t GetConvertTime(char *pszDate);
-	const double GetDistance(POINT stPrePoint, 
+	double GetDistance(POINT stPrePoint, 
 		MATCH_LINK_INFO stMatchLinkInfo);
 	bool GetDirAzimuth(POINT& stMatchPt, POINT& stPoint, sint16 *pnHeading);
 

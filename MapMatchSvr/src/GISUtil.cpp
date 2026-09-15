@@ -76,7 +76,7 @@ CGISUtil::~CGISUtil()
  * @param[in] dfY Y 좌표
  * @return GRID ID
 */
-const uint32 CGISUtil::GetGridID(double& dfX, double& dfY)
+uint32 CGISUtil::GetGridID(double& dfX, double& dfY)
 {
 	// GetGridColNo/GetGridRowNo(바로 아래)는 범위를 벗어나면 INVALID_GRID_*_NO 를 반환하는데, 이
 	//   함수는 그 방어 없이 바로 곱셈해서 반환하고 있었음 — 그리드 테이블 실제 범위(X_GRID_COUNT×
@@ -98,7 +98,7 @@ const uint32 CGISUtil::GetGridID(double& dfX, double& dfY)
  * @param[in] dfX X 좌표
  * @return GRID X 좌표 번호
 */
-const sint32 CGISUtil::GetGridColNo(double& dfX)
+sint32 CGISUtil::GetGridColNo(double& dfX)
 {
 	sint32 nColNo = floor((dfX - WGS84GEO_LON_MIN) / GRID_CELL_SIZE);
 	if ((nColNo < 0) || (nColNo >= X_GRID_COUNT))
@@ -112,7 +112,7 @@ const sint32 CGISUtil::GetGridColNo(double& dfX)
  * @param[in] dfY Y 좌표
  * @return GRID Y 좌표 번호
 */
-const sint32 CGISUtil::GetGridRowNo(double& dfY)
+sint32 CGISUtil::GetGridRowNo(double& dfY)
 {
 	sint32 nRowNo = floor((dfY - WGS84GEO_LAT_MIN) / GRID_CELL_SIZE);
 	if ((nRowNo < 0) || (nRowNo >= Y_GRID_COUNT))
@@ -123,6 +123,13 @@ const sint32 CGISUtil::GetGridRowNo(double& dfY)
 
 /**
  * @brief 세그먼트 GRID 교차 확인
+ * @warning [2026-09-15 최정우 확인] **MapMatchSvr 전체에서 호출부 0건인 dead code 다.**
+ *   (CreateData 쪽 동명 함수도 마찬가지로 호출부 0건.) 아래 IsCrossSgmt2Sgmt 가 평행·공선
+ *   세그먼트를 교차로 판정하지 못하는 실제 결함을 갖고 있으나(dfSign==0.0 이면 무조건 false),
+ *   이 함수가 안 불리므로 맵매칭 결과에 영향을 줄 수 없다. 2026-09-11 전체 소스리뷰에서
+ *   "제대로 고치려면 겹침 여부까지 기하학적 케이스 분석이 필요하다"며 보류했던 항목인데,
+ *   재확인 결과 실행되지 않는 코드라 수정 가치가 없다. 같은 파일 GetDistanceGEO2()(dead code +
+ *   단위 버그)와 같은 성격. **이 함수를 실제로 쓰기 시작한다면 먼저 평행 케이스부터 고칠 것.**
  * @param[in] stPoint1 세그먼트 시작 X,Y 좌표
  * @param[in] stPoint2 세그먼트 종료 X,Y 좌표
  * @param[in] dwGridColNo X 좌표 GRID 번호
@@ -185,7 +192,7 @@ bool CGISUtil::IsCrossSgmt2Sgmt(POINT& stPoint1, POINT& stPoint2,
  * @param[in] stPoint2 세그먼트 종료 좌표
  * @return 세그먼트 길이
 */
-const uint16 CGISUtil::GetSgmtLength(const POINT& stPoint1, const POINT& stPoint2)
+uint16 CGISUtil::GetSgmtLength(const POINT& stPoint1, const POINT& stPoint2)
 {
 	// [버그 수정, 2026-09-11 최정우] CreateData/src/GISUtil.cpp가 2026-08-24에 이미 고친 것과
 	//   동일 버그 — 기존 구현은 경위도 차이에 360000(내부 좌표 스케일)만 곱하고 실제 미터 환산
@@ -210,7 +217,7 @@ const uint16 CGISUtil::GetSgmtLength(const POINT& stPoint1, const POINT& stPoint
  * @param[out] stGridBorderDist GRID 경계 거리(모서리 거리 포함, m)
  * @return 8방향 중 최소 거리(m)
 */
-const double CGISUtil::GridBorderDistance(const uint32& dwGridID, const double& dfX, 
+double CGISUtil::GridBorderDistance(const uint32& dwGridID, const double& dfX, 
 		const double& dfY, GRID_BORDER_DIST& stGridBorderDist)
 {
 	uint32 dwRowNo = floor(dwGridID / X_GRID_COUNT);
@@ -260,7 +267,7 @@ const double CGISUtil::GridBorderDistance(const uint32& dwGridID, const double& 
  * @param[in] dfY Y 좌표
  * @return 인덱스 (0 ~ 8)
 */
-const uint8 CGISUtil::GridSplitIndex(const uint32& dwGridID, const double& dfX, const double& dfY)
+uint8 CGISUtil::GridSplitIndex(const uint32& dwGridID, const double& dfX, const double& dfY)
 {
 	uint32 dwRowNo = floor(dwGridID / X_GRID_COUNT);
 	uint32 dwColNo = floor(dwGridID - dwRowNo * X_GRID_COUNT);
@@ -712,7 +719,7 @@ bool CGISUtil::GetDirAngle(POINT& stSgmtPoint, POINT& stPoint, sint16 *pnDirAngl
  * @param[in] stPoint2 진출 좌표
  * @return 진행각
 */
-const sint16 CGISUtil::GetDirAngleDegree(POINT& stPoint1, POINT& stPoint2)
+sint16 CGISUtil::GetDirAngleDegree(POINT& stPoint1, POINT& stPoint2)
 {
 	return static_cast<sint16>(round(
 		BearingDegScaled(stPoint1.dfX, stPoint1.dfY, stPoint2.dfX, stPoint2.dfY)));
@@ -724,7 +731,7 @@ const sint16 CGISUtil::GetDirAngleDegree(POINT& stPoint1, POINT& stPoint2)
  * @param[in] stIntersect 세그먼트 교차점 X,Y 좌표
  * @return 세그먼트 시작부터 교차점까지 거리
 */
-const double CGISUtil::GetDistanceGEO1(POINT& stPoint, POINT& stIntersect)
+double CGISUtil::GetDistanceGEO1(POINT& stPoint, POINT& stIntersect)
 {
 	if ((stPoint.dfX == stIntersect.dfX) && (stPoint.dfY == stIntersect.dfY))
 		return 0;
@@ -746,7 +753,7 @@ const double CGISUtil::GetDistanceGEO1(POINT& stPoint, POINT& stIntersect)
  * @param[in] stIntersect 세그먼트 교차점 X,Y 좌표
  * @return 세그먼트 시작부터 교차점까지 거리
 */
-const double CGISUtil::GetDistanceGEO2(POINT& stPoint, POINT& stIntersect)
+double CGISUtil::GetDistanceGEO2(POINT& stPoint, POINT& stIntersect)
 {
 	if ((stPoint.dfX == stIntersect.dfX) && (stPoint.dfY == stIntersect.dfY))
 		return 0;

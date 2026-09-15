@@ -41,10 +41,10 @@ public:
 	PLINK_INFO GetLinkInfo(const uint64 qwLinkID);
 	PTURN_INFO GetTurnInfo(const uint32 dwOffset);
 
-	inline const bool IsLoad() const { return m_bLoad; }
-	inline const sint16 GetSearchStep() const { return m_nMaxStep; }
+	inline bool IsLoad() const { return m_bLoad; }
+	inline sint16 GetSearchStep() const { return m_nMaxStep; }
 	// depth 1단계당 가산 비용(m) — config [mapmatch] hoppenalty. 0=비활성 (2026-08-22 최정우 추가)
-	inline const double GetHopPenalty() const { return m_dfHopPenalty; }
+	inline double GetHopPenalty() const { return m_dfHopPenalty; }
 	inline void SetHopPenalty(const double dfVal) { m_dfHopPenalty = dfVal; }
 	// hop 벌점의 링크길이 비례 상한 — config [mapmatch] hoppenalty_lenratio. 0=비활성(현행)
 	//   hoppenalty 는 우회 매칭을 막으려고 넣었는데(2026-08-22), 짧은 지선을 정상적으로
@@ -53,7 +53,7 @@ public:
 	//   그렇게 누락됐다. 이 값을 주면 벌점을 min(hoppenalty, 링크길이 x ratio) 로 깎는다.
 	//   긴 링크로 우회하는 건 종전대로 막으면서 짧은 조각은 통과시키는 것이 목적
 	//   (2026-08-23 최정우 추가)
-	inline const double GetHopLenRatio() const { return m_dfHopLenRatio; }
+	inline double GetHopLenRatio() const { return m_dfHopLenRatio; }
 	inline void SetHopLenRatio(const double dfVal) { m_dfHopLenRatio = dfVal; }
 
 private:

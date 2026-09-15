@@ -529,7 +529,10 @@ PTURN_INFO CDataLoader::GetTurnInfo(const uint32 dwOffset)
 		return nullptr;
 	}
 
-	if ((dwOffset < 0) || (dwOffset >= m_dwTurnInfoCount))
+	// [경고 정리, 2026-09-15 최정우] 하한 검사(< 0)는 dwOffset 이 uint32(부호 없음)라 절대
+	//   성립하지 않는다(-Wtype-limits). 상한 검사만 남긴다 — 인자를 부호 있는 타입으로 바꾸게
+	//   되면 하한 검사를 다시 넣을 것.
+	if (dwOffset >= m_dwTurnInfoCount)
 		return nullptr;
 
 	return &m_pstTurnInfoList[dwOffset];

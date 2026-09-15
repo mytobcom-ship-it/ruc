@@ -61,7 +61,7 @@ public:
 	void RequestShutdown();
 	bool DrainPendingBatchesAndRelease();
 
-	inline const bool IsRun() { return m_bRun; }
+	inline bool IsRun() { return m_bRun; }
 
 private:
 	virtual void run();

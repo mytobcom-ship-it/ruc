@@ -150,13 +150,37 @@ bool CIniReader::ReadIniFile()
 				*pszToken++ = *pszPos++;
 			*pszToken = '\0';
 
-			pmapCurrentSection = new (std::nothrow)multimap<string, string>;
-			if (pmapCurrentSection == nullptr)
-				return false;
-
 			string strToken(szToken);
 			transform(strToken.begin(), strToken.end(), strToken.begin(), ::toupper);
-			m_mapSection.insert(pair<string, void *>(strToken, pmapCurrentSection));
+
+			// [버그 수정, 2026-09-15 최정우] 같은 섹션명이 두 번 나오는 경우를 처리한다.
+			//   종전에는 무조건 새 multimap 을 할당해 m_mapSection.insert() 했는데, 이건
+			//   std::map 이라 **중복 키에서 삽입이 조용히 실패**한다(반환값도 안 봤다). 그 결과
+			//   (a) 새로 할당한 맵은 어디에도 등록되지 않아 그대로 누수되고,
+			//   (b) pmapCurrentSection 이 그 고아 맵을 가리켜 **두 번째 블록의 키가 전부
+			//       조회 불가**가 된다(전량 기본값 폴백, 경고도 없음).
+			//   config.ini 를 편집하다 섹션을 중복으로 만드는 건 흔한 실수이고, 그때 설정이
+			//   조용히 무시되면 원인을 찾기 매우 어렵다. 기존 섹션을 찾아 이어서 채운다.
+			map<string, void *>::iterator itSection = m_mapSection.find(strToken);
+			if (itSection != m_mapSection.end())
+			{
+				pmapCurrentSection = reinterpret_cast<multimap<string, string> *>(itSection->second);
+				// stderr 로도 낸다 — 이 클래스는 **로거 기동 이전**에 돌아간다(AppMain.cpp:149 에서
+				//   config 를 읽고, ILog4zManager::start() 는 638 행). 그래서 LOGFMTW 만으로는
+				//   아무 데도 안 남는다. run_svr.sh 가 stderr 를 MapMatchSvr_launcher.log 로
+				//   리다이렉트하므로 거기서 확인할 수 있다 (2026-09-15 최정우 추가)
+				fprintf(stderr, "[WARN] ini duplicated section! section=[%s] path=[%s]"
+					" - 기존 섹션에 이어서 읽습니다\n", strToken.c_str(), m_strFullName.c_str());
+				LOGFMTW("ini duplicated section!section=[%s] path=[%s] — 기존 섹션에 이어서 읽는다",
+					strToken.c_str(), m_strFullName.c_str());
+			}
+			else
+			{
+				pmapCurrentSection = new (std::nothrow)multimap<string, string>;
+				if (pmapCurrentSection == nullptr)
+					return false;
+				m_mapSection.insert(pair<string, void *>(strToken, pmapCurrentSection));
+			}
 		}
 		else															// Key
 		{

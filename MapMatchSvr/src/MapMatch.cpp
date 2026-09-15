@@ -19,7 +19,8 @@ CODE_ENTRY ErrorCodeTable[] =
 	{INVALID_SEARCHSTEP,		"탐색 단계 오류"}, 
 	{NOT_FOUND_GRIDINFO,		"GRID 검색 실패"}, 
 	{NOT_FOUND_LINKID,			"LinkID 검색 실패"}, 
-	{MAP_MATCH_FAIL,			"맵매칭 실패"}
+	{MAP_MATCH_FAIL,			"맵매칭 실패"},
+	{NOT_LOADED_MAPDATA,		"지도 데이터 미로드"}		// (2026-09-15 최정우 추가)
 };
 
 /**

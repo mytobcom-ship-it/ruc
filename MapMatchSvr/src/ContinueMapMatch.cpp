@@ -64,6 +64,13 @@ bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPU
 	// 형상 데이터 로더 유효성·로드 상태 확인 (2026-07-08 최정우 주석 추가)
 	if ((m_pcDataLoader == nullptr) || (!m_pcDataLoader->IsLoad()))
 	{
+		// [버그 수정, 2026-09-15 최정우] 에러코드를 세팅하고 반환한다. 종전에는 pwErrorCode 를
+		//   건드리지 않고 false 만 돌려줘, 호출부(MapMatch.cpp)가 초기값 NO_ERROR 를 그대로
+		//   pstMatchLinkInfo->wErrorCode 에 넣고 szErrorMsg 에 "오류 없음" 을 복사했다 —
+		//   **지도 로드 실패라는 치명적 상태가 정상 코드로 기록**된다(link.psf 재로드 실패 직후
+		//   들어온 GPS 가 이 경로를 탄다).
+		if (pwErrorCode != nullptr)
+			*pwErrorCode = NOT_LOADED_MAPDATA;
 		LOGFMTE("data loading fail!");
 		return false;
 	}
@@ -170,16 +177,20 @@ bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPU
 			{
 				const double dfHopBase = m_pcDataLoader->GetHopPenalty();
 				const double dfLenRatio = m_pcDataLoader->GetHopLenRatio();
-				for (list<MATCH_ENTRY>::iterator it = listMatchEntryList.begin();
-					it != listMatchEntryList.end(); ++it)
+				// [가독성, 2026-09-15 최정우] 반복자 이름을 it -> itEntry 로 분리한다. 바깥
+				//   136행에 같은 이름의 depth 목록 반복자가 있어 -Wshadow 경고가 났다. 지금은
+				//   안쪽이 이 블록 안에서만 살아 동작은 정상이지만, 블록 경계가 바뀌거나 코드가
+				//   옮겨지면 조용히 바깥 반복자를 건드리게 되는 자리다.
+				for (list<MATCH_ENTRY>::iterator itEntry = listMatchEntryList.begin();
+					itEntry != listMatchEntryList.end(); ++itEntry)
 				{
 					double dfUnit = dfHopBase;
-					if ((dfLenRatio > 0.0) && (it->dfLen > 0.0))
+					if ((dfLenRatio > 0.0) && (itEntry->dfLen > 0.0))
 					{
-						const double dfCap = it->dfLen * dfLenRatio;
+						const double dfCap = itEntry->dfLen * dfLenRatio;
 						if (dfCap < dfUnit) dfUnit = dfCap;
 					}
-					it->dfCost += static_cast<double>(i) * dfUnit;
+					itEntry->dfCost += static_cast<double>(i) * dfUnit;
 				}
 			}
 			listAllEntryList.insert(listAllEntryList.end(),
@@ -631,7 +642,29 @@ void CContinueMapMatch::TryNearbyRoadNameCandidate(SGMT_MATCH_INPUT& stSgmtMatch
 
 	vector<uint32> vtNearGridIDList;
 	vtNearGridIDList.push_back(dwGridID);
-	m_cGISUtil.GetNearGridID(dwGridID, stSgmtMatchInput, vtNearGridIDList);
+	// [버그 수정, 2026-09-15 최정우 — 소스 재검토] GetNearGridID() 에 **도 단위** 좌표를 넘긴다.
+	//   종전에는 stSgmtMatchInput 을 그대로 넘겼는데, StartMapMatch() 가 진입부에서 stPoint 를
+	//   이미 내부 스케일(×360000)로 바꿔둔 상태다(바로 위 625줄이 /360000 지역변수를 따로 만드는
+	//   이유가 그것). GetNearGridID→GridBorderDistance 는 doc 주석대로 도 단위를 전제로
+	//   HaversineMetersDeg 를 쓰므로, 스케일 값이 들어가면 경계거리가 미터가 아닌 수천 km 로
+	//   나온다(실측: 판교 기준 66.8~267.2m 가 나와야 할 자리에 4,703~11,866km). 그 값이
+	//   nRadius(최대 250m)와 비교되니 **인접 셀이 단 한 번도 추가되지 않았다** — 반경과 무관하게
+	//   항상 자기 셀 1개만 탐색(정상이면 최대 6개). 셀 크기가 300m 라 셀 경계 근처에서는 바로 옆
+	//   반대방향 평행 링크를 영영 못 찾는데, 그 링크를 찾는 것이 이 함수의 존재 목적이다.
+	//   에러 로그도 안 남아 지금까지 드러나지 않았다.
+	//   나머지 호출부 3곳(BeginMapMatch.cpp:241/529, 아래 BridgeNearbyLinkStarts)은 전부 도 단위로
+	//   넘기고 있어 이 한 곳만 어긋나 있었다. 호출측 구조체를 건드리지 않도록 복사본을 쓴다
+	//   (SGMT_MATCH_INPUT 은 POD 스칼라뿐이라 복사 비용 무시 가능).
+	SGMT_MATCH_INPUT stGridInput = stSgmtMatchInput;		// nRadius 등 나머지 조건은 그대로 유지
+	stGridInput.stPoint.dfX = dfRawX;
+	stGridInput.stPoint.dfY = dfRawY;
+	m_cGISUtil.GetNearGridID(dwGridID, stGridInput, vtNearGridIDList);
+
+	// 이 함수는 로그가 하나도 없어서, 위 좌표 단위 버그로 인접 셀 탐색이 3주간 죽어 있었는데도
+	//   아무 흔적이 남지 않았다. 진입 사실과 실제 탐색 셀 수를 남긴다 (2026-09-15 최정우 추가)
+	LOGFMTD("nearby road name candidate search!link=[%llu] road=[%s] radius=[%d] grids=[%d]",
+		static_cast<unsigned long long>(qwCurLinkID), pstCurLinkInfo->szRoadName,
+		static_cast<int>(stGridInput.nRadius), static_cast<int>(vtNearGridIDList.size()));
 
 	set<uint64> setTried;
 	setTried.insert(qwCurLinkID);

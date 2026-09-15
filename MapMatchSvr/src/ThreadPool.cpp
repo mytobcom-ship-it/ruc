@@ -55,7 +55,7 @@ void CThreadPoolWorker::run(int nThreadId, void *context)
  * @param[in] context 호출 클래스 포인터
  * @return void
 */
-void CThreadPoolWorker::stop(int nThreadId, void *context)
+void CThreadPoolWorker::stop(int /* nThreadId */, void *context)	// 전체 정지라 특정 쓰레드 아이디는 쓰지 않음
 {
 	CThreadPool *pcThreadPool = reinterpret_cast<CThreadPool *>(context);
 

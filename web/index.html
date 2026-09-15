@@ -310,13 +310,19 @@
       </div>
 
       <div class="doc-links">
-        <a href="docs/columns.html">4유형별 PRIM_CHARGEHAND 컬럼 비교 ↗</a>
+        <!-- [수정, 2026-09-15 최정우] 비과금 에러코드 링크가 외부 artifact URL(옛 스냅샷)을 가리키고
+             있어, 우리가 갱신하는 로컬 docs/errorcode.html 로 바꿨다. 이 문서는 벤더 설계서 v1.10 의
+             NON_CHARGE_REASON 기술을 대체하는 공식 기준이라 index 에서 바로 닿아야 한다.
+             docs/charge-tables.html 링크도 누락돼 있어 함께 추가. columns.html 은 6유형으로 정정. -->
+        <a href="docs/errorcode.html" target="_blank" rel="noopener"><b>과금 판정 사유 코드(NON_CHARGE_REASON) ↗</b></a>
+        <a href="docs/columns.html" target="_blank" rel="noopener">6유형별 PRIM_CHARGEHAND 컬럼 비교 ↗</a>
+        <a href="docs/charge-tables.html" target="_blank" rel="noopener">과금 마스터/결과 테이블 구조 ↗</a>
+        <a href="docs/tripevent-issues.html" target="_blank" rel="noopener">TRIP_EVENT 이상 데이터 조사 요청(수집서버) ↗</a>
         <a href="docs/charge-issues.html" target="_blank" rel="noopener">과금 유형별 문제점·대응방안 요약 ↗</a>
         <a href="docs/psf-format.html" target="_blank" rel="noopener">link.psf 바이너리 포맷 ↗</a>
         <a href="docs/zone-link-map.html" target="_blank" rel="noopener">과금구역 링크 연결 점검 ↗</a>
         <a href="docs/zone-link-map-offline.html" target="_blank" rel="noopener">과금구역 점검 (오프라인 배포용) ↗</a>
         <a href="docs/node-road-type-codes.html" target="_blank" rel="noopener">노드·링크 코드값 참조 ↗</a>
-        <a href="https://claude.ai/code/artifact/58bc36e2-9411-45e4-8939-5ee5296f72c9" target="_blank" rel="noopener">비과금 에러코드(NON_CHARGE_REASON) ↗</a>
       </div>
     </div>
     <footer class="credit">출처: ruc.road_link (59.11.91.162/ruc, update_date 최대 2026-07-16) — 정적 스냅샷. 로컬 roadnet DB와는 별도 적재본</footer>

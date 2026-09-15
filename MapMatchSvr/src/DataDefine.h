@@ -148,6 +148,9 @@ typedef struct sAltitudeScoreConfig
 #define NOT_FOUND_GRIDINFO			9									// GRID 정보 검색 실패
 #define NOT_FOUND_LINKID			10									// LinkID 검색 실패
 #define MAP_MATCH_FAIL				11									// 맵매칭 실패
+#define NOT_LOADED_MAPDATA			12									// 도로망(link.psf) 미로드 — 로드 실패·재로드 중
+																		//   (2026-09-15 최정우 추가. 새 코드 추가 시
+																		//    MapMatch.cpp 의 ErrorCodeTable 에도 반드시 등록할 것)
 
 // 맵매칭 소프트 비용(방위각 가중) 파라미터 — ±45° 하드컷 대체 (2026-07-08 최정우 추가)
 #define MM_DIR_WEIGHT				1.0									// 방위각 1도당 비용(m 환산) 가중치(w_a). 거리(m)+w_a·|방위각차|
@@ -401,9 +404,15 @@ typedef struct sAltitudeScoreConfig
 #define NCR_SPEED_ENTRY_UNOBSERVED		31									// SPEED(구간단속) — 진입게이트 미확인
 #define NCR_SPEED_ENTRY_EQUALS_EXIT	32									// SPEED(구간단속) — 입구==출구 동일 게이트
 #define NCR_SPEED_EXIT_UNCONFIRMED		33									// SPEED(구간단속) — 출구게이트 미확인
-#define NCR_EXEMPT_TTL_FORCED_CLOSE	51									// EXEMPT(면제도로) — TTL 만료·신호두절 강제종료(N/4)
-#define NCR_TTL_FORCED_CLOSE			61									// 공통(NODE_STEP/OPEN/CLOSED/SPEED/PARKING) — TTL 만료·
-																			//   신호두절 강제종료(N/3), [trip_abend] SQL 사후전환 포함
+#define NCR_EXEMPT_TTL_FORCED_CLOSE	51									// EXEMPT(면제도로) — 종료 미확정 강제마감(N/4).
+																							//   61 과 동일하게 2026-09-15 부터 3경로 공용(위 주석 참고)
+#define NCR_TTL_FORCED_CLOSE			61									// 공통(NODE_STEP/OPEN/CLOSED/SPEED/PARKING) — 종료 미확정
+																			//   강제마감(N/3), [trip_abend] SQL 사후전환 포함.
+																			//   [2026-09-15 적용범위 확대] 상수명은 TTL 이지만 실제로는
+																			//   FlushOpenRunsAsAbnormalEnd() 3경로 공용이다 —
+																			//   ①TTL 만료·신호두절 ②종료신호 이후 잔여 tick
+																			//   ③종료신호 없는 트립 전환. "TTL 이 아닌데 왜 61?" 을
+																			//   막으려면 이 주석을 같이 볼 것
 
 /**
  * @enum eCoordinateType

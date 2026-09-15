@@ -51,5 +51,12 @@ const char *CCodeMap::GetValue(PCODE_ENTRY pstCodeEntry, int nEntryCount, int nC
 			return pstCodeEntry[i].pszValue;
 	}
 
-	return nullptr;
+	// [버그 수정, 2026-09-15 최정우] 미등록 코드에 nullptr 을 돌려주던 것을 안전한 문자열로 바꾼다.
+	//   호출부 40여 곳이 반환값을 그대로 strcpy(MapMatch.cpp 9곳) 하거나 LOGFMT 의 %s 로 넘기는데,
+	//   nullptr 이면 전자는 즉시 SIGSEGV, 후자도 정의되지 않은 동작이다(glibc 가 "(null)" 을 찍어주는
+	//   것에 의존하고 있었을 뿐). 지금까지 터지지 않은 건 쓰이는 코드가 전부 테이블에 있었기 때문이고,
+	//   **새 코드를 추가하면서 테이블 등록을 빠뜨리는 순간 크래시**가 나는 구조였다.
+	//   nullptr 을 기대하는 호출부는 없음을 전수 확인했다(있으면 이 변경이 동작을 바꿨을 것).
+	//   szErrorMsg[48](MessageType.h:216) 에 들어가야 하므로 짧게 유지할 것.
+	return "알 수 없는 코드";
 }

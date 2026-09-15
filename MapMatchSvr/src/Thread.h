@@ -19,7 +19,9 @@ public:
 	Runnable() {}
 	virtual ~Runnable() {}
 	virtual void run(int nThreadId, void *context = nullptr) = 0;
-	virtual void stop(int nThreadId, void *context = nullptr) {}
+	// 기본 구현은 아무것도 하지 않으므로 인자를 쓰지 않는다. 인터페이스 문서용으로 이름은
+	// 남겨두되 주석 처리해 -Wunused-parameter 를 피한다(재정의하는 쪽에서는 실제로 사용).
+	virtual void stop(int /* nThreadId */, void * /* context */ = nullptr) {}
 	static uint32 GetThreadHandle();
 };
 

@@ -209,6 +209,13 @@ bool CBeginMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& 
 	// 형상 데이터 로더 유효성·로드 상태 확인 (2026-07-08 최정우 주석 추가)
 	if ((m_pcDataLoader == nullptr) || (!m_pcDataLoader->IsLoad()))
 	{
+		// [버그 수정, 2026-09-15 최정우] 에러코드를 세팅하고 반환한다. 종전에는 pwErrorCode 를
+		//   건드리지 않고 false 만 돌려줘, 호출부(MapMatch.cpp)가 초기값 NO_ERROR 를 그대로
+		//   pstMatchLinkInfo->wErrorCode 에 넣고 szErrorMsg 에 "오류 없음" 을 복사했다 —
+		//   **지도 로드 실패라는 치명적 상태가 정상 코드로 기록**된다(link.psf 재로드 실패 직후
+		//   들어온 GPS 가 이 경로를 탄다).
+		if (pwErrorCode != nullptr)
+			*pwErrorCode = NOT_LOADED_MAPDATA;
 		LOGFMTE("data loading fail!");
 		return false;
 	}
@@ -315,6 +322,13 @@ bool CBeginMapMatch::GridSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, uint32
 	// 형상 데이터 로더 유효성·로드 상태 확인 (2026-07-08 최정우 주석 추가)
 	if ((m_pcDataLoader == nullptr) || (!m_pcDataLoader->IsLoad()))
 	{
+		// [버그 수정, 2026-09-15 최정우] 에러코드를 세팅하고 반환한다. 종전에는 pwErrorCode 를
+		//   건드리지 않고 false 만 돌려줘, 호출부(MapMatch.cpp)가 초기값 NO_ERROR 를 그대로
+		//   pstMatchLinkInfo->wErrorCode 에 넣고 szErrorMsg 에 "오류 없음" 을 복사했다 —
+		//   **지도 로드 실패라는 치명적 상태가 정상 코드로 기록**된다(link.psf 재로드 실패 직후
+		//   들어온 GPS 가 이 경로를 탄다).
+		if (pwErrorCode != nullptr)
+			*pwErrorCode = NOT_LOADED_MAPDATA;
 		LOGFMTE("data loading fail!");
 		return false;
 	}
@@ -518,6 +532,13 @@ bool CBeginMapMatch::FindGeomNearest(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT
 
 	if ((m_pcDataLoader == nullptr) || (!m_pcDataLoader->IsLoad()))
 	{
+		// [버그 수정, 2026-09-15 최정우] 에러코드를 세팅하고 반환한다. 종전에는 pwErrorCode 를
+		//   건드리지 않고 false 만 돌려줘, 호출부(MapMatch.cpp)가 초기값 NO_ERROR 를 그대로
+		//   pstMatchLinkInfo->wErrorCode 에 넣고 szErrorMsg 에 "오류 없음" 을 복사했다 —
+		//   **지도 로드 실패라는 치명적 상태가 정상 코드로 기록**된다(link.psf 재로드 실패 직후
+		//   들어온 GPS 가 이 경로를 탄다).
+		if (pwErrorCode != nullptr)
+			*pwErrorCode = NOT_LOADED_MAPDATA;
 		LOGFMTE("data loading fail!");
 		return false;
 	}

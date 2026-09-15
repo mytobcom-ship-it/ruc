@@ -157,7 +157,7 @@ erDiagram
 
     BASE_ROADLINK {
         varchar road_id PK
-        varchar road_kind "ROADKIND 0~4"
+        varchar road_kind "ROADKIND 0~5"
     }
     BASE_TOLLGATE {
         varchar tollgate_id PK
@@ -166,14 +166,14 @@ erDiagram
     }
     BASE_MAPINFO {
         varchar zone_id PK
-        varchar zone_kind "ZONEKIND 01~05"
+        varchar zone_kind "ZONEKIND 1~5"
         jsonb coords
     }
     PRIM_CHARGEHAND {
         varchar trip_id PK
         varchar device_key PK
         int trip_seq PK
-        smallint charge_type "0~4, 별도체계"
+        smallint charge_type "0~5, 별도체계"
     }
 </pre>
     </div>
@@ -197,12 +197,27 @@ erDiagram
     <div class="card">
       <table>
         <tr><th>분류</th><th>ZONEKIND<br/>(base_mapinfo.zone_kind)</th><th>ROADKIND<br/>(base_roadlink.road_kind)</th><th>prim_chargehand.charge_type</th></tr>
-        <tr><td>일반도로</td><td><code>01</code></td><td><code>0</code></td><td rowspan="5" style="color:var(--muted)">별도 체계 —<br/>0:NODE_STEP<br/>1:OPEN_ROAD<br/>2:CLOSED_ROAD<br/>3:SPEED<br/>4:PARKING<br/>(NODE_STEP이 끼어있어<br/>단순 매핑 불가)</td></tr>
-        <tr><td>유료도로(개방식)</td><td><code>02</code></td><td><code>1</code></td></tr>
-        <tr><td>유료도로(폐쇄식)</td><td><code>03</code></td><td><code>2</code></td></tr>
-        <tr><td>과속·구간단속</td><td><code>04</code></td><td><code>3</code></td></tr>
-        <tr><td>주정차단속</td><td><code>05</code></td><td><code>4</code></td></tr>
+        <tr><td>일반도로</td><td><code>1</code></td><td><code>0</code></td><td rowspan="6" style="color:var(--muted)">별도 체계 —<br/>0:NODE_STEP<br/>1:OPEN_ROAD<br/>2:CLOSED_ROAD<br/>3:SPEED<br/>4:PARKING<br/>5:EXEMPT<br/>(NODE_STEP이 끼어있어<br/>단순 매핑 불가)</td></tr>
+        <tr><td>유료도로(개방식)</td><td><code>2</code></td><td><code>1</code></td></tr>
+        <tr><td>유료도로(폐쇄식)</td><td><code>3</code></td><td><code>2</code></td></tr>
+        <tr><td>과속·구간단속</td><td><code>4</code></td><td><code>3</code></td></tr>
+        <tr><td>주정차단속</td><td><code>5</code></td><td><code>4</code></td></tr>
+        <tr><td>면제도로(비과금)</td><td style="color:var(--muted)">—</td><td><code>5</code> <b style="color:#c00">※</b></td></tr>
       </table>
+    </div>
+    <div class="note">
+      <b>※ road_kind=5(면제도로) — 2026-09-15 해소됨(로컬 DB)</b> — <code>base_roadlink</code> 에 <code>road_kind='5'</code>
+      행이 3건(RL-Z00007 / RL-Z00016 / RL-Z00018) 운영 중인데 <code>base_codesc</code> 의 <code>ROADKIND</code> 는
+      <code>0</code>~<code>4</code> 뿐이라 조인 시 명칭이 NULL 이었습니다. 엔진은 <code>base_roadlink</code> 를 직접
+      읽어 동작하므로 과금 영향은 없었으나 코드 마스터 기준 화면·리포트에서 면제도로가 빠졌습니다.
+      <b><code>ROADKIND / 5 / 면제도로 / exempt</code> 를 등록해 미매칭 0건</b>이 됐습니다.
+      <b style="color:#c00">단 로컬 검증 DB 에만 반영</b> — 실서버(59.11.91.162)에는 아직 적용되지 않았습니다.
+    </div>
+    <div class="note">
+      <b>코드값 표기 정정(2026-09-15)</b>: 위 ZONEKIND 열을 <code>01</code>~<code>05</code> 로 적어 뒀으나 실제
+      <code>base_codesc.codesc</code> 값은 <b>앞자리 0 없는 한 자리</b>입니다(로컬 ruc DB 실측 — 공통코드 절 참고).
+      같은 문서 안에서 base_mapinfo <i>데이터</i> 값에 대해서는 이미 "앞자리 0 없는 '1'·'2'"라고 정정해 두고도
+      이 표만 옛 표기로 남아 서로 어긋나 있었습니다.
     </div>
     <div class="note">
       추가로 <code>prim_tollcharge.charge_type</code>은 0:NODE_STEP/1:OPEN_ROAD/2:CLOSED_ROAD 3개 값만 쓰고(TOLL 확정
@@ -210,8 +225,10 @@ erDiagram
       완전히 별도의 0-base 2값 체계입니다. 총 <b>5개 코드체계</b>가 같은 개념을 서로 다른 숫자로 표현합니다.
     </div>
     <div class="warn">
-      <b>ROADKIND 데이터 정합성 이슈</b>: <code>base_codesc</code>엔 <code>ROADKIND</code> 5개 행이 정상 존재하지만,
-      부모 테이블 <code>base_codelc</code>엔 <code>ROADKIND</code> 대분류 행 자체가 없습니다(0건) — 등록 누락으로 보임.
+      <b>ROADKIND 데이터 정합성 이슈 — 2026-09-15 해소됨(로컬 DB)</b>: 부모 테이블 <code>base_codelc</code> 에
+      <code>ROADKIND</code> 대분류 행 자체가 없어(0건) 하위 코드만 떠 있는 상태였습니다(두 테이블 사이에 FK 제약이
+      없어 동작에는 영향 없었음). <code>ROADKIND / 과금 도로 유형</code> 행을 등록했습니다.
+      <b style="color:#c00">실서버 미적용</b>. 아래는 발견 당시 기록:
       하드 FK가 없어 조회는 되지만, 코드 관리 화면에서 대분류 목록을 조회하면 ROADKIND가 안 보일 수 있음.
     </div>
   </section>
@@ -248,11 +265,11 @@ erDiagram
       <table>
         <tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
         <tr><td class="pk">road_id</td><td>varchar(20)</td><td>도로 ID — RL-Znnn 자동 채번(PK)</td></tr>
-        <tr><td>road_kind</td><td>varchar(2)</td><td>도로 유형 — base_codesc(ROADKIND): 0 일반/1 유료(개방식)/2 유료(폐쇄식)/3 과속·구간단속/4 주정차단속. CHARGE_TYPE과 번호 체계 일치(단, prim_chargehand.charge_type과는 실제로 다름 — 0-1절 참고)</td></tr>
+        <tr><td>road_kind</td><td>varchar(2)</td><td>도로 유형 — base_codesc(ROADKIND): 0 일반/1 유료(개방식)/2 유료(폐쇄식)/3 과속·구간단속/4 주정차단속, <b>5 면제도로</b>(2026-09-15 코드 마스터 등록 완료 — 로컬 DB 반영, 실서버는 <code>doc/deploy_2026-09-15.sql</code> 적용 시점에 반영. 0-1절 ※ 참고). CHARGE_TYPE과 번호 체계 일치(단, prim_chargehand.charge_type과는 실제로 다름 — 0-1절 참고)</td></tr>
         <tr><td>road_nm</td><td>varchar(100)</td><td>도로명 — 화면 표시용</td></tr>
         <tr><td>geom_type</td><td>varchar(4)</td><td>도형 형태 — LINE(선: 도로/구간) / POLY(면: 단속범위)</td></tr>
         <tr><td>coords</td><td>jsonb</td><td>좌표열 — [[경도,위도],...] WGS84. 지도 클릭으로 찍은 순서</td></tr>
-        <tr><td>speed_limit_kmh</td><td>numeric</td><td>제한속도(km/h) — 과속·구간단속(road_kind=3) 판정 기준. 그 외 유형은 참고 보관</td></tr>
+        <tr><td>speed_limit_kmh</td><td>numeric</td><td>제한속도(km/h) — 과속·구간단속(road_kind=3) 판정 기준. 그 외 유형은 참고 보관. <b>CHECK 제약 <code>base_roadlink_speed_limit_chk</code>: NULL 또는 0~255</b> (2026-09-15 추가, 로컬 DB만 — 실서버 미적용). 종전에는 precision·CHECK 이 전혀 없는 numeric 이라 임의 값이 들어갈 수 있었고, 이 값은 <code>prim_chargehand.speed_limit_kmh</code>(SMALLINT)로 캐스팅되므로 범위 밖 1건이 그 배치의 과금 INSERT 전건을 실패시켰다. 음수는 더 위험 — 평균속도가 항상 제한속도 이상이 되어 <b>모든 통행이 위반으로 적재</b>된다(결함주입으로 실증). 상한 255 는 엔진의 링크 제한속도 표현이 <code>uint8</code>(LINK_INFO.nMaxSpeed)인 데 맞춘 것</td></tr>
         <tr><td>use_yn</td><td>char(1)</td><td>사용 여부 — Y 사용 / N 미사용(지도·판정에서 제외)</td></tr>
         <tr><td>reg_dt / upd_dt</td><td>varchar(14)</td><td>등록/수정 일시 — YYYYMMDDHH24MISS</td></tr>
         <tr><td>admin_id</td><td>varchar(20)</td><td>최종 수정 관리자 근무번호(base_workerinfo.worker_no)</td></tr>
@@ -469,14 +486,21 @@ erDiagram
     <div class="card">
       <table>
         <tr><th>codesc</th><th>codesc_nm</th><th>codesc_note</th></tr>
-        <tr><td>01</td><td>일반도로(거리기반과금)</td><td>dist</td></tr>
-        <tr><td>02</td><td>유료도로(개방식)</td><td>tollOpen</td></tr>
-        <tr><td>03</td><td>유료도로(폐쇄식)</td><td>tollClosed</td></tr>
-        <tr><td>04</td><td>과속·구간단속</td><td>section</td></tr>
-        <tr><td>05</td><td>주정차단속</td><td>parking</td></tr>
+        <tr><td><code>1</code></td><td>일반도로(거리기반과금)</td><td>dist</td></tr>
+        <tr><td><code>2</code></td><td>유료도로(개방식)</td><td>tollOpen</td></tr>
+        <tr><td><code>3</code></td><td>유료도로(폐쇄식)</td><td>tollClosed</td></tr>
+        <tr><td><code>4</code></td><td>과속·구간단속</td><td>section</td></tr>
+        <tr><td><code>5</code></td><td>주정차단속</td><td>parking</td></tr>
       </table>
     </div>
-    <div class="intro">ROADKIND (0-base, base_roadlink.road_kind가 참조 — <span class="badge deprecated" style="margin:0;">base_codelc 부모행 누락</span>):</div>
+    <div class="warn">
+      <b>표기 정정(2026-09-15)</b>: 위 codesc 를 <code>01</code>~<code>05</code> 로 적어 뒀으나 <b>실제 저장값은 앞자리 0 이
+      없는 한 자리</b>입니다. <span class="badge confirmed" style="margin:0;">로컬 ruc DB 실측</span>
+      <code>SELECT codelc, codesc FROM ruc.base_codesc</code> 결과 ZONEKIND <code>1</code>~<code>5</code>,
+      ROADKIND <code>0</code>~<code>4</code>. 이 문서의 나머지 수치는 원격 운영 DB(59.11.91.162, 2026-08-04) 기준이므로,
+      <b>원격 코드 마스터도 같은지는 별도 확인이 필요합니다</b>(스키마·코멘트는 동일하나 데이터는 미확인).
+    </div>
+    <div class="intro">ROADKIND (0-base, base_roadlink.road_kind가 참조 — <span class="badge confirmed" style="margin:0;">2026-09-15 부모행·코드5 등록 완료(로컬)</span>):</div>
     <div class="card">
       <table>
         <tr><th>codesc</th><th>codesc_nm</th><th>codesc_note</th></tr>
@@ -485,6 +509,7 @@ erDiagram
         <tr><td>2</td><td>유료도로(폐쇄식)</td><td>tollClosed</td></tr>
         <tr><td>3</td><td>과속·구간단속</td><td>section</td></tr>
         <tr><td>4</td><td>주정차단속</td><td>parking</td></tr>
+        <tr><td><code>5</code></td><td>면제도로</td><td>exempt</td></tr>
       </table>
     </div>
     <div class="intro">CARTYPE (base_tollfare/base_tollsection.car_type, prim_tollcharge.vehicle_type이 참조):</div>
@@ -510,8 +535,8 @@ erDiagram
         <tr><td class="pk">trip_id</td><td>varchar(60)</td><td>PK-1. {차량 고유 번호}_{YYYYMMDDHH24MISS}. 동일 운행 시 여러 번 과금될 수 있어 인덱스로 사용</td></tr>
         <tr><td class="pk">device_key</td><td>varchar(36)</td><td>PK-2. 모바일 앱 인증키(Client Key). 회원 테이블 조인용</td></tr>
         <tr><td class="pk">trip_seq</td><td>integer</td><td>PK-3. 과금부과 순번(1~N)</td></tr>
-        <tr><td>charge_type</td><td>smallint</td><td>0:NODE_STEP, 1:OPEN_ROAD, 2:CLOSED_ROAD, 3:SPEED, 4:PARKING (0-1절: 다른 코드체계와 값 다름 주의)</td></tr>
-        <tr><td>charge_unit</td><td>smallint</td><td>0:NODE(노드 단위 과금), 1:LINK(링크 단위 과금)</td></tr>
+        <tr><td>charge_type</td><td>smallint</td><td>0:NODE_STEP, 1:OPEN_ROAD, 2:CLOSED_ROAD, 3:SPEED, 4:PARKING, <b>5:EXEMPT(면제도로)</b> (0-1절: 다른 코드체계와 값 다름 주의)</td></tr>
+        <tr><td>charge_unit</td><td>smallint</td><td>0:NODE(노드 단위), 1:LINK(링크 단위), <b>2:POLYGON(면 단위)</b>. 유형별 실적재값 — 0·1→<code>0</code>, 2·3·5→<code>1</code>, 4→<code>2</code></td></tr>
         <tr><td>link_id</td><td>varchar(20)</td><td>링크 ID. charge_unit=LINK일 때만, NODE면 NULL</td></tr>
         <tr><td>from_id / to_id</td><td>varchar(20)</td><td>출발/도착 노드 또는 링크 시작/종료 노드 ID(charge_unit에 따라 의미 다름)</td></tr>
         <tr><td>from_lat/lon, to_lat/lon</td><td>numeric(10,6)</td><td>출발/도착 좌표</td></tr>

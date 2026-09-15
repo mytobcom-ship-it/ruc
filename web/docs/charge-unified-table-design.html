@@ -349,6 +349,21 @@ gateMatch   = MatchGate(matchedLinkId, curPos, gateCache);  // 개방형·폐쇄
     </div>
 
     <h3>9-3. 유형별 PRIM_CHARGEHAND 예제</h3>
+    <div class="warn">
+      <b>[중요 · 2026-09-15 정정]</b> 아래 예제는 <b>구현 이전의 설계안</b>이며, 실제 구현과 두 가지가 다릅니다.
+      설계 기록으로서 원문은 그대로 두고 각 행에 <b>※ 실제</b> 로 현재 값을 병기했습니다.
+      <b>현재 사실 기준은 <a href="columns.html">과금 6유형별 컬럼 값 비교</a> 와
+      <a href="charge-tables.html">과금 테이블 구조</a></b> 이며, 이 문서를 인용할 때는 반드시 그쪽을 확인하십시오.
+      <ol style="margin:8px 0 0 18px;">
+        <li><code>occur_dt</code> — 설계안은 유형마다 "게이트 통과 / 진출 / 이탈 / 정차 종료" 로 제각각이지만,
+            <b>실제로는 일반도로(charge_type=0)만 진출 시각이고 나머지 전 유형은 구역 <u>진입</u> 시각</b>입니다
+            (2026-08-14 사용자 지시로 확정된 규칙).</li>
+        <li><code>charge_unit</code> — 설계안은 전부 <code>0(NODE)</code> 이지만,
+            <b>실제는 0·1 → <code>0</code>(NODE), 2·3·5 → <code>1</code>(LINK), 4 → <code>2</code>(POLYGON)</b> 입니다.</li>
+      </ol>
+      또한 이 절에는 <b>면제도로(charge_type=5)</b> 가 없습니다 — 설계 당시에 없던 유형이라 누락된 것이며,
+      2026-08-30 정책 개정으로 정상 이탈·트립종료는 <code>Y/0</code>, TTL 강제마감만 <code>N/4</code> 입니다.
+    </div>
     <div class="card">
       <h4 style="margin-top:0;">① 개방형 — 게이트 통과 (charge_type=1)</h4>
       <table>
@@ -357,7 +372,7 @@ gateMatch   = MatchGate(matchedLinkId, curPos, gateCache);  // 개방형·폐쇄
         <tr><td>from_id / to_id</td><td><code>TG제2판교</code> / <code>TG제2판교</code> (점 이벤트 — from=to)</td></tr>
         <tr><td>from_lat/lon, to_lat/lon</td><td>게이트 좌표(동일)</td></tr>
         <tr><td>zone_id / zone_name</td><td><code>RL-Z00009</code> / 제2판교 개방식 구역</td></tr>
-        <tr><td>occur_dt</td><td>게이트 통과 시각</td></tr>
+        <tr><td>occur_dt</td><td>게이트 통과 시각 <b style="color:#e53935;">※ 실제: 구역 <u>진입</u> 시각</b></td></tr>
         <tr><td>charge_yn</td><td>Y</td></tr>
       </table>
     </div>
@@ -365,11 +380,11 @@ gateMatch   = MatchGate(matchedLinkId, curPos, gateCache);  // 개방형·폐쇄
       <h4 style="margin-top:0;">② 폐쇄형 — 진입~진출 (charge_type=2)</h4>
       <table>
         <tr><th>컬럼</th><th>값</th></tr>
-        <tr><td>trip_seq / charge_type / charge_unit</td><td>7 / <b>2</b> / 0(NODE)</td></tr>
+        <tr><td>trip_seq / charge_type / charge_unit</td><td>7 / <b>2</b> / 0(NODE) <b style="color:#e53935;">※ 실제: 1(LINK)</b></td></tr>
         <tr><td>from_id / to_id</td><td><code>TG00007</code>(진입) / <code>TG00008</code>(진출)</td></tr>
         <tr><td>from_lat/lon, to_lat/lon</td><td><code>dfGateEnterX/Y</code> / 진출 시점 좌표</td></tr>
         <tr><td>zone_id / zone_name</td><td><code>RL-Z00005</code>(진입 기준, 9-2절) / 제2판교 폐쇄식 구역</td></tr>
-        <tr><td>occur_dt</td><td>진출 시각</td></tr>
+        <tr><td>occur_dt</td><td>진출 시각 <b style="color:#e53935;">※ 실제: 구역 <u>진입</u>(입구 게이트 통과) 시각</b></td></tr>
         <tr><td>charge_yn</td><td>Y</td></tr>
       </table>
     </div>
@@ -377,13 +392,13 @@ gateMatch   = MatchGate(matchedLinkId, curPos, gateCache);  // 개방형·폐쇄
       <h4 style="margin-top:0;">③ 구간단속 — 제한속도 초과 (charge_type=3)</h4>
       <table>
         <tr><th>컬럼</th><th>값</th></tr>
-        <tr><td>trip_seq / charge_type / charge_unit</td><td>6 / <b>3</b> / 0(NODE)</td></tr>
+        <tr><td>trip_seq / charge_type / charge_unit</td><td>6 / <b>3</b> / 0(NODE) <b style="color:#e53935;">※ 실제: 1(LINK)</b></td></tr>
         <tr><td>from_id / to_id</td><td>회랑 진입/이탈 지점(링크ID, 선택)</td></tr>
         <tr><td>from_lat/lon, to_lat/lon</td><td><code>dfSpeedZoneEnterX/Y</code> / 이탈 좌표</td></tr>
         <tr><td>dist_m</td><td>1,200 (회랑 구간 실측거리)</td></tr>
         <tr><td>speed_kmh / speed_limit_kmh</td><td>112 (1,200m÷소요시간) / 100</td></tr>
         <tr><td>zone_id / zone_name</td><td>구간단속용 <code>road_id</code> / 단속구간명</td></tr>
-        <tr><td>occur_dt</td><td>회랑 이탈(평균속도 확정) 시각</td></tr>
+        <tr><td>occur_dt</td><td>회랑 이탈(평균속도 확정) 시각 <b style="color:#e53935;">※ 실제: 구역 <u>진입</u> 시각</b></td></tr>
         <tr><td>charge_yn</td><td>Y (제한 초과 확정 — 검증서버가 여기서 위반여부까지 판정)</td></tr>
       </table>
       <div class="note" style="margin-bottom:0;">
@@ -396,12 +411,12 @@ gateMatch   = MatchGate(matchedLinkId, curPos, gateCache);  // 개방형·폐쇄
       <h4 style="margin-top:0;">④ 주정차 — 금지구역 10분 초과 (charge_type=4)</h4>
       <table>
         <tr><th>컬럼</th><th>값</th></tr>
-        <tr><td>trip_seq / charge_type / charge_unit</td><td>9 / <b>4</b> / 0(NODE)</td></tr>
+        <tr><td>trip_seq / charge_type / charge_unit</td><td>9 / <b>4</b> / 0(NODE) <b style="color:#e53935;">※ 실제: 2(POLYGON)</b></td></tr>
         <tr><td>from_id / to_id</td><td>정차 위치(동일 지점이라 from=to)</td></tr>
         <tr><td>from_lat/lon, to_lat/lon</td><td><code>dfParkStartX/Y</code> (동일)</td></tr>
         <tr><td>stay_seconds</td><td>900 (15분 — 이동재개 시각 − <code>dtParkStartTime</code>)</td></tr>
         <tr><td>zone_id / zone_name</td><td>주정차금지 구역 <code>road_id</code> / 구역명</td></tr>
-        <tr><td>occur_dt</td><td>이동 재개(정차 종료) 시각</td></tr>
+        <tr><td>occur_dt</td><td>이동 재개(정차 종료) 시각 <b style="color:#e53935;">※ 실제: 구역 <u>진입</u>(정차 시작) 시각</b></td></tr>
         <tr><td>charge_yn</td><td>Y (유예 10분 초과 — 검증서버가 여기서 판정, 유예시간 값 자체는 11절 미해결)</td></tr>
       </table>
     </div>

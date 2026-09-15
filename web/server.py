@@ -12,6 +12,7 @@ import math
 import os
 import re
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
 
 import psycopg2
@@ -21,11 +22,15 @@ from flask import Flask, jsonify, request, send_from_directory
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.ini"
 REPO_ROOT = BASE_DIR.parent
-MM_CONFIG_PATH = REPO_ROOT / "MapMatchSvr" / "bin" / "config.ini"
-MM_PIDFILE = REPO_ROOT / "MapMatchSvr" / "bin" / "MapMatchSvr.pid"
+MM_BIN_DIR = REPO_ROOT / "MapMatchSvr" / "bin"
+MM_CONFIG_PATH = MM_BIN_DIR / "config.ini"
+MM_PIDFILE = MM_BIN_DIR / "MapMatchSvr.pid"
 SIM_CONFIG_PATH = REPO_ROOT / "Simulator" / "bin" / "config.ini"
 SIM_VEHICLES_MIN = 1
 SIM_VEHICLES_MAX = 10
+# 주변도로 조회 버퍼 상한(m) — 이 이상은 ruc.road_link 전수 스캔에 가까워져 응답이 사실상
+#   돌아오지 않는다. 기본값은 config.ini [web] road_buffer_m (2026-09-15 최정우 추가)
+BUFFER_MAX_M = 20000
 
 app = Flask(__name__, static_folder=str(BASE_DIR), static_url_path="")
 
@@ -89,6 +94,48 @@ def get_conn_remote():
         password=r["password"],
         options="-c default_transaction_read_only=on",
     )
+
+
+@contextmanager
+def conn_points():
+    """psycopg2 의 `with conn:` 은 **트랜잭션만** 관리하고 커넥션을 닫지 않는다. 정상 경로는
+    CPython 참조카운팅으로 회수되지만, 예외 경로에서는 트레이스백이 프레임(→conn)을 붙잡아
+    워커 스레드가 다음 예외를 만날 때까지 커넥션이 열린 채 남는다(실측: limit=-1 로 500 을
+    60회 유발하니 pg_stat_activity 15→23). 닫기까지 보장한다 (2026-09-15 최정우 추가)"""
+    conn = get_conn_points()
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
+
+@contextmanager
+def conn_remote():
+    """원격 DB 판(conn_points 와 동일 근거). [remote_database] 미설정이면 None 을 넘겨주고,
+    호출측이 404 로 처리한다 (2026-09-15 최정우 추가)"""
+    conn = get_conn_remote()
+    if conn is None:
+        yield None
+        return
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
+
+def int_arg(name, default, lo, hi):
+    """쿼리 파라미터를 정수로 읽어 [lo, hi] 로 제한한다. 숫자가 아니면 ValueError 를 올려
+    호출측이 400 으로 응답하게 한다.
+    (2026-09-15 최정우 추가 — 종전에는 int() 를 그대로 불러 `limit=abc` 가 500 이었고,
+     `limit=-1` 은 그대로 LIMIT -1 로 내려가 psycopg2 오류로 500 이었다. 실측 확인)"""
+    raw = request.args.get(name, default)
+    try:
+        val = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError("%s 는 정수여야 합니다 (받은 값: %r)" % (name, raw))
+    return max(lo, min(val, hi))
 
 
 @app.route("/app.js")
@@ -181,8 +228,11 @@ def _query_trips(conn, limit):
 
 @app.route("/api/trips")
 def api_trips():
-    limit = min(int(request.args.get("limit", 30)), 200)
-    with get_conn_points() as conn:
+    try:
+        limit = int_arg("limit", 30, 0, 200)		# 음수→0(빈 목록), 비숫자→400
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
+    with conn_points() as conn:
         rows = _query_trips(conn, limit)
     return jsonify(rows)
 
@@ -247,11 +297,13 @@ def api_remote_trips():
     """원격 ruc DB(실서비스 DB) 조회 전용 — get_conn_remote() 세션 자체가 읽기전용이라
     쓰기 라우트가 여기 섞일 수 없음 (2026-08-18 최정우 추가). base_carinfo 조인 포함
     (car_no/car_seq_no) — _query_trips_with_car() 참고"""
-    limit = min(int(request.args.get("limit", 30)), 200)
-    conn = get_conn_remote()
-    if conn is None:
-        return jsonify({"error": "remote_database 설정 없음 (config.ini [remote_database])"}), 404
-    with conn:
+    try:
+        limit = int_arg("limit", 30, 0, 200)
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
+    with conn_remote() as conn:
+        if conn is None:
+            return jsonify({"error": "remote_database 설정 없음 (config.ini [remote_database])"}), 404
         rows = _query_trips_with_car(conn, limit)
     return jsonify(rows)
 
@@ -267,66 +319,72 @@ def mapmatch_config_stale():
 
 
 def restart_mapmatch():
-    """MapMatchSvr 만 재시작(Simulator·web_viewer 는 유지) — test_svr.sh mm-restart 위임
-    (2026-07-21 최정우 추가)"""
-    result = subprocess.run(
-        ["./test_svr.sh", "mm-restart"],
-        cwd=str(REPO_ROOT),
-        capture_output=True,
-        text=True,
-        timeout=90,
-    )
+    """MapMatchSvr 만 재시작(web_viewer 는 유지).
+
+    [버그 수정, 2026-09-15 최정우] 종전에는 `./test_svr.sh mm-restart` 를 불렀는데 그
+    스크립트는 커밋 1cf4ba5 에서 추적 제외된 뒤 레포에 없다 — subprocess 가
+    FileNotFoundError 를 던지고 아무도 안 잡아 이 경로가 **항상 500** 이었다(config.ini 가
+    stale 일 때 "재테스트" 버튼이 타는 경로). MapMatchSvr/bin/run_svr.sh 로 교체한다:
+    그 스크립트 자체가 "기존 프로세스 종료 → 새로 기동"을 수행하므로 재시작과 동치이고,
+    PID 파일(MM_PIDFILE)도 갱신해줘서 mapmatch_config_stale() 판정과도 맞물린다."""
+    script = MM_BIN_DIR / "run_svr.sh"
+    if not script.exists():
+        return False, "기동 스크립트 없음: %s" % script
+    try:
+        result = subprocess.run(
+            [str(script)],
+            cwd=str(MM_BIN_DIR),
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+    except (OSError, subprocess.SubprocessError) as err:
+        return False, "기동 스크립트 실행 실패: %s" % err
     return result.returncode == 0, (result.stdout + result.stderr)
 
 
 @app.route("/api/system/start-engines", methods=["POST"])
 def api_start_engines():
-    """웹 페이지 "신규테스트" 버튼 — MapMatchSvr → Simulator 순서로 1초 확인 + 최대 3회
-    재시도 기동 (test_svr.sh start-mm-sim-retry 위임). 웹 자신은 이미 이 요청을 처리
-    중이므로 재기동 대상에서 제외 — 어느 단계에서 실패했는지 stdout 의 FAILED_STAGE= 를
-    파싱해 응답에 포함한다 (2026-07-21 최정우 추가)
+    """웹 페이지 "신규테스트" 버튼 — MapMatchSvr 재기동만 수행한다.
 
-    body(optional): {"vehicles": N} — 동시 운행 차량 대수 콤보박스 값. Simulator 는 설정을
-    기동 시 1회만 읽으므로(핫리로드 없음), 재시작 전에 config.ini 를 먼저 갱신해야 반영된다
-    (2026-07-22 최정우 추가)"""
+    [버그 수정 + 동작 축소, 2026-09-15 최정우, 사용자 결정]
+    종전에는 `./test_svr.sh start-mm-sim-retry` 로 MapMatchSvr → Simulator 를 순서대로
+    기동했는데, (a) test_svr.sh 는 커밋 1cf4ba5 에서 추적 제외된 뒤 레포에 없어
+    FileNotFoundError 가 잡히지 않고 **항상 500** 이었고, (b) Simulator 는 bin/ 에 바이너리와
+    로그만 남아 있고 src·config.ini·query.sql 이 전부 없어 **애초에 실행이 불가능**하다.
+    그래서 엔진 재기동만 수행하고, Simulator 는 "사용 불가"를 응답에 명시한다.
+    → GPS 를 새로 생성하지 않으므로 **새 트립은 생기지 않는다**. 화면의 진행률 표시는
+      기존 데이터 기준으로만 움직인다.
+
+    body(optional): {"vehicles": N} — Simulator 차량 대수. 위 이유로 지금은 반영 대상이
+    없지만(Simulator/bin/config.ini 부재 → OSError → 400), 값 검증 경로는 남겨둔다."""
     body = request.get_json(silent=True) or {}
     applied_vehicles = None
     if "vehicles" in body:
         try:
             applied_vehicles = write_sim_vehicles(body["vehicles"])
-        except (ValueError, OSError) as err:
+        # TypeError 추가 — {"vehicles": []} 같은 입력에서 int() 가 TypeError 를 던져
+        #   500 이 났다 (2026-09-15 최정우 수정)
+        except (TypeError, ValueError, OSError) as err:
             return jsonify({"ok": False, "error": "vehicles 설정 반영 실패: %s" % err}), 400
 
-    try:
-        result = subprocess.run(
-            ["./test_svr.sh", "start-mm-sim-retry"],
-            cwd=str(REPO_ROOT),
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-    except subprocess.TimeoutExpired:
-        return jsonify({"ok": False, "error": "기동 스크립트 타임아웃(120s)"}), 500
-
-    output = result.stdout + result.stderr
-    failed_stage = None
-    for line in output.splitlines():
-        if line.startswith("FAILED_STAGE="):
-            failed_stage = line.split("=", 1)[1].strip()
-    ok = (result.returncode == 0) and (failed_stage is None)
+    ok, log = restart_mapmatch()
     return jsonify({
         "ok": ok,
-        "failed_stage": failed_stage,
-        "log": output[-3000:],
+        "failed_stage": None if ok else "mapmatch",
+        "simulator": "unavailable",
+        "note": "Simulator 미지원(소스·설정 부재) — MapMatchSvr 재기동만 수행했습니다. "
+                "새 GPS 는 생성되지 않습니다.",
+        "log": log[-3000:],
         "vehicles": applied_vehicles,
-    })
+    }), (200 if ok else 500)
 
 
 @app.route("/api/trip/<path:trip_id>/delete", methods=["POST"])
 def api_trip_delete(trip_id):
     """선택된 Trip을 PRIM_RAWGPS 에서 완전히 삭제 — 되돌릴 수 없음. 웹 "삭제" 버튼 전용
     (2026-07-22 최정우 추가)"""
-    with get_conn_points() as conn:
+    with conn_points() as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM ruc.prim_rawgps WHERE trip_id = %s", (trip_id,))
             deleted = cur.rowcount
@@ -345,7 +403,7 @@ def api_trip_retest(trip_id):
             return jsonify({"error": "MapMatchSvr 재시작 실패", "log": log[-2000:]}), 500
         restarted = True
 
-    with get_conn_points() as conn:
+    with conn_points() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -427,6 +485,9 @@ def _query_trip_points(conn, trip_id):
 
 # base_roadlink.coords(jsonb [[lon,lat],...]) → PostGIS geometry.
 #   POLY 는 첫 점을 끝에 다시 붙여 닫힌 링으로 만든다(원본이 닫혀 있지 않음).
+# ※ 2026-09-15 현재 **미사용** — 과금이력 쿼리(zone CTE)에서 이 geom 컬럼을 제거하면서
+#   쓰이는 곳이 없어졌다(그 결과 PostGIS 없는 원격 DB 도 정식 경로를 탄다). 구역 형상이
+#   다시 필요해질 때를 위해 정의만 남겨둔다.
 _ZONE_GEOM_SQL = """
     CASE b.geom_type
       WHEN 'POLY' THEN ST_MakePolygon(ST_AddPoint(
@@ -440,20 +501,25 @@ _ZONE_GEOM_SQL = """
 
 
 def _query_trip_charges(conn, trip_id, line_buf_m):
-    """trip_id 의 과금 이력(prim_chargehand) + GPS 순번 범위 — PostGIS 있으면 정식 쿼리,
-    없으면(원격 실서비스 DB — extension 목록에 postgis 자체가 없어 설치 권한도 없음, 2026-08-24
-    확인) 형상 없이 계산하는 폴백 쿼리로 자동 전환한다. 원격 /api/remote/trip/.../charges 라우트가
-    이 함수를 그대로 재사용하면서 처음 드러남 — 로컬은 항상 PostGIS 경로만 탄다. (2026-08-24 최정우 추가)
+    """trip_id 의 과금 이력(prim_chargehand) + GPS 순번 범위.
+
+    [정리, 2026-09-15 최정우] 종전에는 PostGIS 유무에 따라 정식 쿼리 / 폴백 쿼리로 갈리는
+    이중 경로였다. 그 분기가 존재한 유일한 이유는 zone CTE 가 쓰지도 않는 geom 컬럼을
+    ST_MakePolygon 으로 만들고 있었기 때문인데, 그 미사용 컬럼을 제거하면서 쿼리에
+    PostGIS 함수가 하나도 남지 않게 됐다 → 폴백은 도달 불가가 됐다.
+    도달 불가인 채로 남겨두면 위험하다: 그 폴백에는 2026-08-26 의 s_m/e_m 좁히기가
+    백포트되지 않아 **정식 경로와 결과가 다른** 死코드였다(원격 M순번이 구버전으로
+    표시되던 원인). 두 경로가 말없이 갈라지는 구조를 없애려고 폴백 함수(97줄)와
+    try/except 분기를 통째로 제거하고 단일 경로로 만든다.
     """
-    try:
-        return _query_trip_charges_postgis(conn, trip_id, line_buf_m)
-    except psycopg2.errors.UndefinedFunction:
-        conn.rollback()
-        return _query_trip_charges_no_postgis(conn, trip_id)
+    return _query_trip_charges_postgis(conn, trip_id, line_buf_m)
 
 
 def _query_trip_charges_postgis(conn, trip_id, line_buf_m):
-    """trip_id 의 과금 이력(prim_chargehand) + GPS 순번 범위
+    """※ 함수명의 "postgis" 는 역사적 잔재다 — 2026-09-15 부로 이 쿼리에 PostGIS 함수는
+    하나도 없으며, PostGIS 가 없는 원격 DB 에서도 그대로 동작한다.
+
+    trip_id 의 과금 이력(prim_chargehand) + GPS 순번 범위
 
       G 순번 : prim_chargehand.start_gps_seq~end_gps_seq — 엔진(RawLogWorker)이 진입/구역 안에서
                실제로 마지막 확인된 tick 을 실시간으로 직접 기록한 값(2026-08-28 최정우 수정 —
@@ -472,8 +538,16 @@ def _query_trip_charges_postgis(conn, trip_id, line_buf_m):
     with conn.cursor() as cur:
         cur.execute(
             """
+            -- [버그 수정, 2026-09-15 최정우] 종전에는 여기서 _ZONE_GEOM_SQL 로 구역 형상을
+            --   geom 컬럼으로 만들었는데, **이후 쿼리에서 z.geom 을 한 번도 쓰지 않는다**
+            --   (G순번 역산을 start_gps_seq/end_gps_seq 컬럼으로 대체하면서 같이 지웠어야 할
+            --   잔재). 그런데 이 미사용 컬럼 하나 때문에 파싱 단계에서 ST_MakePolygon 미정의
+            --   오류가 나, PostGIS 가 없는 원격 실서비스 DB 에서는 폴백 쿼리로 넘어갔다 —
+            --   그 폴백에는 2026-08-26 의 s_m/e_m 좁히기(경계의 비소속 tick 배제)가 백포트되지
+            --   않아 원격 M순번이 구버전 동작으로 표시되고 있었다. 컬럼을 지우면 이 쿼리에
+            --   PostGIS 함수가 하나도 남지 않아 원격에서도 이 정식 경로를 그대로 탄다.
             WITH zone AS (
-                SELECT b.road_id, b.geom_type, b.link_ids, """ + _ZONE_GEOM_SQL + """ AS geom
+                SELECT b.road_id, b.geom_type, b.link_ids
                 FROM ruc.base_roadlink b WHERE b.use_yn = 'Y'
             ),
             gps AS (
@@ -582,105 +656,6 @@ def _query_trip_charges_postgis(conn, trip_id, line_buf_m):
         )
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, r)) for r in cur.fetchall()]
-
-
-def _query_trip_charges_no_postgis(conn, trip_id):
-    """PostGIS 없는 DB(원격 실서비스 — postgis extension 자체가 미설치)용 폴백.
-
-    G 순번은 postgis 버전과 동일하게 prim_chargehand.start_gps_seq~end_gps_seq 를 그대로 쓴다
-    (형상판정이 필요 없어 애초에 postgis 유무와 무관 — 2026-08-28 최정우 수정). M 순번(LINE 구역만,
-    매칭 링크가 zone.link_ids 에 속하는 구간)만 이 폴백 특유의 로직 — POLY(주정차)는 형상판정이
-    필요해 여기선 못 구해 항상 t_rng 폴백에 의존한다. (2026-08-24 최정우 추가)
-    """
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            WITH gps AS (
-                SELECT gps_seq, gps_lat, gps_lon, match_lat, match_lon, match_link_id, gps_dt
-                FROM ruc.prim_rawgps WHERE trip_id = %(tid)s
-            ),
-            zone AS (
-                SELECT b.road_id, b.geom_type, b.link_ids
-                FROM ruc.base_roadlink b WHERE b.use_yn = 'Y'
-            ),
-            -- LINE 구역만 대상 — 매칭 링크가 구역 link_ids 에 속하는 구간. G·M 둘 다 이 결과를 쓴다
-            --   (POLY 는 형상판정이 필요해 여기선 못 구하고 t_rng 에만 의존)
-            m_hit AS (
-                SELECT z.road_id, p.gps_seq
-                FROM gps p JOIN zone z
-                  ON z.link_ids IS NOT NULL
-                 AND p.match_link_id IN (SELECT jsonb_array_elements_text(z.link_ids))
-            ),
-            m_run AS (
-                SELECT road_id, gps_seq,
-                       gps_seq - ROW_NUMBER() OVER (PARTITION BY road_id ORDER BY gps_seq) AS grp
-                FROM m_hit
-            ),
-            m_rng AS (
-                SELECT road_id, MIN(gps_seq) AS s, MAX(gps_seq) AS e,
-                       ROW_NUMBER() OVER (PARTITION BY road_id ORDER BY MIN(gps_seq)) AS rn
-                FROM m_run GROUP BY road_id, grp
-            ),
-            ch AS (
-                SELECT c.*,
-                       ROW_NUMBER() OVER (PARTITION BY c.zone_id ORDER BY c.trip_seq) AS zone_rn
-                FROM ruc.prim_chargehand c WHERE c.trip_id = %(tid)s
-            ),
-            -- occur_dt 방향은 위 PostGIS 경로와 동일 규칙 — NODE_STEP(0)만 "진출" 시각이라
-            --   창이 [occur_dt-stay, occur_dt] 이고 나머지 5유형은 "진입"이라 [occur_dt, occur_dt+stay].
-            --   [버그 수정, 2026-09-15 최정우] EXEMPT(5)를 진출형으로 묶고 있던 것을 정정(실측 대조)
-            t_win AS (
-                SELECT ch.trip_seq,
-                       CASE WHEN ch.charge_type = 0
-                            THEN to_timestamp(ch.occur_dt, 'YYYYMMDDHH24MISS')
-                                 - (COALESCE(ch.stay_seconds, 0) || ' seconds')::interval
-                            ELSE to_timestamp(ch.occur_dt, 'YYYYMMDDHH24MISS')
-                       END AS dt_from,
-                       CASE WHEN ch.charge_type = 0
-                            THEN to_timestamp(ch.occur_dt, 'YYYYMMDDHH24MISS')
-                            ELSE to_timestamp(ch.occur_dt, 'YYYYMMDDHH24MISS')
-                                 + (COALESCE(ch.stay_seconds, 0) || ' seconds')::interval
-                       END AS dt_to
-                -- CLOSED_ROAD(2)·SPEED_ZONE(3)는 출구 게이트를 못 만나고 트립종료/TTL로 강제
-                --   마감되면(AppendExpired*Charge, exit_tollgate_id NULL) stay_seconds 가 "입구~강제
-                --   마감 시각"이라 실제 구역 이탈 이후 시간까지 포함해버린다 — 그 창을 그대로 믿으면
-                --   실제로는 구역을 떠난 뒤의 GPS 까지 범위에 끌려 들어온다(실측
-                --   000370_20260824103155 RL-Z00003 — 실제 매칭은 G42~53 인데 stay_seconds=90 이
-                --   트립종료 시각까지 포함해 G73 까지로 표출됨). 이 경우엔 t_rng 를 만들지 않고
-                --   기존 run 기반 g_rng/m_rng(실제 매칭 링크 소속 여부)로 폴백한다. 정상 종료(출구
-                --   게이트 확인, exit_tollgate_id 있음)는 그대로 t_rng 를 신뢰한다 (2026-08-24 최정우 추가)
-                FROM ch WHERE ch.occur_dt IS NOT NULL
-                  AND NOT (ch.charge_type IN (2, 3) AND ch.exit_tollgate_id IS NULL)
-            ),
-            t_rng AS (
-                SELECT w.trip_seq, MIN(p.gps_seq) AS s, MAX(p.gps_seq) AS e
-                FROM t_win w
-                JOIN gps p ON to_timestamp(p.gps_dt, 'YYYYMMDDHH24MISS') BETWEEN w.dt_from AND w.dt_to
-                GROUP BY w.trip_seq
-            )
-            SELECT ch.trip_seq, ch.charge_type, ch.zone_id, ch.zone_name,
-                   ch.tollgate_id, ch.entry_tollgate_id, ch.exit_tollgate_id,
-                   ch.from_id, ch.to_id,
-                   ch.dist_m, ch.speed_kmh, ch.speed_limit_kmh, ch.stay_seconds,
-                   -- [2026-09-15 최정우 추가] charge_status/non_charge_reason 노출 — 종전엔
-                   --   최종 투영에서 빠져 있어 "N 인데 왜 N 인지"를 로그 grep 외엔 볼 수 없었다.
-                   --   코드 0 적재 정책 변경으로 이제 모든 행에 값이 있어 노출 가치가 커졌다
-                   ch.occur_dt, ch.charge_yn, ch.charge_status, ch.non_charge_reason,
-                   NULLIF(ch.start_gps_seq, 0) AS g_from,
-                   NULLIF(ch.end_gps_seq, 0) AS g_to,
-                   COALESCE(t_rng.s, m_rng.s) AS m_from,
-                   COALESCE(t_rng.e, m_rng.e) AS m_to
-            FROM ch
-            LEFT JOIN t_rng ON t_rng.trip_seq = ch.trip_seq
-            LEFT JOIN m_rng ON m_rng.road_id = ch.zone_id AND m_rng.rn = ch.zone_rn
-            ORDER BY NULLIF(ch.start_gps_seq, 0) ASC NULLS LAST, ch.trip_seq
-            """,
-            {"tid": trip_id},
-        )
-        cols = [d[0] for d in cur.description]
-        return [dict(zip(cols, r)) for r in cur.fetchall()]
-
-
 def _query_zones(conn):
     """과금·비과금 구역(base_roadlink)과 그 게이트(base_tollgate) 전량
 
@@ -724,21 +699,21 @@ def _query_zones(conn):
 
 @app.route("/api/zones")
 def api_zones():
-    with get_conn_points() as conn:
+    with conn_points() as conn:
         return jsonify(_query_zones(conn))
 
 
 @app.route("/api/trip/<path:trip_id>/charges")
 def api_trip_charges(trip_id):
     buf = load_config()["zone_line_buf_m"]
-    with get_conn_points() as conn:
+    with conn_points() as conn:
         rows = _query_trip_charges(conn, trip_id, buf)
     return jsonify(rows)
 
 
 @app.route("/api/trip/<path:trip_id>/points")
 def api_trip_points(trip_id):
-    with get_conn_points() as conn:
+    with conn_points() as conn:
         rows = _query_trip_points(conn, trip_id)
     return jsonify(rows)
 
@@ -746,10 +721,9 @@ def api_trip_points(trip_id):
 @app.route("/api/remote/trip/<path:trip_id>/points")
 def api_remote_trip_points(trip_id):
     """원격 ruc DB 조회 전용 — 위 api_remote_trips() 와 동일한 읽기전용 세션 (2026-08-18 최정우 추가)"""
-    conn = get_conn_remote()
-    if conn is None:
-        return jsonify({"error": "remote_database 설정 없음 (config.ini [remote_database])"}), 404
-    with conn:
+    with conn_remote() as conn:
+        if conn is None:
+            return jsonify({"error": "remote_database 설정 없음 (config.ini [remote_database])"}), 404
         rows = _query_trip_points(conn, trip_id)
     return jsonify(rows)
 
@@ -759,11 +733,10 @@ def api_remote_trip_charges(trip_id):
     """원격 ruc DB 과금 이력 — 프런트(apiBase())는 이미 원격 모드에서 이 경로를 호출하고
     있었는데 라우트가 없어 404 였다(2026-08-24 최정우 추가 — 원격 선택 시 지도 아래
     과금 이력이 로컬 DB 내용으로 표시되던 버그 수정)"""
-    conn = get_conn_remote()
-    if conn is None:
-        return jsonify({"error": "remote_database 설정 없음 (config.ini [remote_database])"}), 404
     buf = load_config()["zone_line_buf_m"]
-    with conn:
+    with conn_remote() as conn:
+        if conn is None:
+            return jsonify({"error": "remote_database 설정 없음 (config.ini [remote_database])"}), 404
         rows = _query_trip_charges(conn, trip_id, buf)
     return jsonify(rows)
 
@@ -777,10 +750,9 @@ def api_remote_zones():
     renderZones() 는 로컬 구조(구역 배열, 각 구역에 z.gates 중첩)만 기대해서 원격 선택 시
     zones.forEach 가 조용히 실패해(catch 로 콘솔 경고만) 과금구역 레이어가 통째로 안 그려졌다.
     로컬과 완전히 같은 함수로 통일해 구조·버그수정 내용이 항상 같이 간다 (2026-08-24 최정우 수정)"""
-    conn = get_conn_remote()
-    if conn is None:
-        return jsonify({"error": "remote_database 설정 없음 (config.ini [remote_database])"}), 404
-    with conn:
+    with conn_remote() as conn:
+        if conn is None:
+            return jsonify({"error": "remote_database 설정 없음 (config.ini [remote_database])"}), 404
         return jsonify(_query_zones(conn))
 
 
@@ -792,7 +764,7 @@ def api_trips_points():
     trip_ids = [t for t in request.args.get("trip_ids", "").split(",") if t]
     if not trip_ids:
         return jsonify({"error": "trip_ids required"}), 400
-    with get_conn_points() as conn:
+    with conn_points() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
@@ -889,7 +861,7 @@ def _query_ruc_roads_near_points(conn, lons, lats, buffer_m):
 
 @app.route("/api/prim/info")
 def api_prim_info():
-    with get_conn_points() as conn:
+    with conn_points() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM ruc.road_link")
             cnt = int(cur.fetchone()[0])
@@ -901,8 +873,11 @@ def api_trip_prim_roads(trip_id):
     """트립 주변 도로망 조회 — ruc.road_link 기준 (2026-08-26 최정우 수정 — roadnet DB
     참조 제거, 사용자 지시: 웹뷰어는 ruc 스키마 테이블만 참조)"""
     cfg = load_config()
-    buffer_m = int(request.args.get("buffer", cfg["road_buffer_m"]))
-    with get_conn_points() as conn:
+    try:
+        buffer_m = int_arg("buffer", cfg["road_buffer_m"], 0, BUFFER_MAX_M)
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
+    with conn_points() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -924,11 +899,13 @@ def api_remote_trip_prim_roads(trip_id):
     원격 커넥션의 ruc.road_link 로 조회(2026-08-26 최정우 수정 — roadnet DB 참조 제거,
     기존엔 점만 원격이고 도로망은 로컬 roadnet DB를 섞어 썼음) (2026-08-19 최정우 추가)"""
     cfg = load_config()
-    buffer_m = int(request.args.get("buffer", cfg["road_buffer_m"]))
-    conn = get_conn_remote()
-    if conn is None:
-        return jsonify({"error": "remote_database 설정 없음 (config.ini [remote_database])"}), 404
-    with conn:
+    try:
+        buffer_m = int_arg("buffer", cfg["road_buffer_m"], 0, BUFFER_MAX_M)
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
+    with conn_remote() as conn:
+        if conn is None:
+            return jsonify({"error": "remote_database 설정 없음 (config.ini [remote_database])"}), 404
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -954,8 +931,11 @@ def api_trips_prim_roads():
     if not trip_ids:
         return jsonify({"error": "trip_ids required"}), 400
     cfg = load_config()
-    buffer_m = int(request.args.get("buffer", cfg["road_buffer_m"]))
-    with get_conn_points() as conn:
+    try:
+        buffer_m = int_arg("buffer", cfg["road_buffer_m"], 0, BUFFER_MAX_M)
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
+    with conn_points() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -981,7 +961,7 @@ def api_prim_roads_bbox():
     except (KeyError, ValueError):
         return jsonify({"error": "min_lon,min_lat,max_lon,max_lat required"}), 400
 
-    with get_conn_points() as conn:
+    with conn_points() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1010,10 +990,9 @@ def api_remote_prim_roads_bbox():
     except (KeyError, ValueError):
         return jsonify({"error": "min_lon,min_lat,max_lon,max_lat required"}), 400
 
-    conn = get_conn_remote()
-    if conn is None:
-        return jsonify({"error": "remote_database 설정 없음 (config.ini [remote_database])"}), 404
-    with conn:
+    with conn_remote() as conn:
+        if conn is None:
+            return jsonify({"error": "remote_database 설정 없음 (config.ini [remote_database])"}), 404
         with conn.cursor() as cur:
             cur.execute(
                 """

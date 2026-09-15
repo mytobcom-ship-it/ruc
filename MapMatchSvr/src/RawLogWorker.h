@@ -831,6 +831,13 @@ public:
 
 	void SetConfig(const RAWLOG_WORKER_CONFIG& stConfig);
 
+	// 진행 중이던 모든 과금 구간을 "비정상 종료"로 마감 — 3경로 공용:
+	//   (1) TTL 만료  (2) 트립종료 tick 이후 잔여 tick  (3) 종료신호 없는 트립 전환
+	//   호출 시점에 stSession.szTripId 가 아직 "마감할 트립" 이어야 한다 (2026-09-15 최정우 추가)
+	void FlushOpenRunsAsAbnormalEnd(int nThreadId, const string& strDeviceKey,
+		VEHICLE_TRIP_SESSION& stSession, time_t dtEndTime, uint32 dwEndGpsSeq, time_t dtNow,
+		vector<CHARGE_INSERT_ROW> *pvtOut,
+		vector<TRIP_END_UPDATE_ROW> *pvtAbnormalEndUpdates);
 	// #6: dtLastSeen 경과 세션 제거 (모니터 주기 호출). pcConn 은 TTL 만료 시점에 열려 있는 주정차
 	//   세션을 즉시 위반 INSERT 하는 데 씀(2026-08-13 최정우 추가)
 	int ExpireTtlSessions(int nThreadId, int nTtlSec, PGconn *pcConn);

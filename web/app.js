@@ -1054,10 +1054,16 @@
     }
   }
 
-  // "신규테스트" 버튼 — MapMatchSvr → Simulator 순서로 1초 확인 + 최대 3회 재시도 기동.
-  //   웹 자신은 이미 이 요청을 처리 중이므로 재기동 대상에서 제외. Simulator 는 기동될 때마다
-  //   새 trip_id 를 발급하므로, 결과적으로 새 테스트 주행이 시작된다 (2026-07-21 최정우 추가,
-  //   2026-07-22 최정우 수정 — 명칭을 실제 역할(신규 테스트)에 맞게 변경)
+  // "신규테스트" 버튼 — **현재는 MapMatchSvr 재기동만** 수행한다.
+  //   [동작 축소, 2026-09-15 최정우, 사용자 결정] 원래는 MapMatchSvr → Simulator 순서로 기동해
+  //   Simulator 가 새 trip_id 를 발급하면서 새 테스트 주행이 시작되는 구조였다. 그러나
+  //   (a) 위임 대상이던 test_svr.sh 가 레포에서 제거돼 이 버튼이 **항상 500** 이었고,
+  //   (b) Simulator 는 bin/ 에 바이너리·로그만 남아 있고 src·config.ini·query.sql 이 전부 없어
+  //       **애초에 실행이 불가능**하다.
+  //   그래서 서버측(/api/system/start-engines)이 MapMatchSvr 재기동만 하도록 바뀌었고 여기
+  //   안내 문구도 그에 맞췄다. **새 GPS 가 생성되지 않으므로 새 trip 도 생기지 않는다** —
+  //   화면은 기존 데이터만 다시 보여준다.
+  //   (원래 주석: 2026-07-21 최정우 추가, 2026-07-22 명칭을 실제 역할에 맞게 변경)
   function setupStartEnginesButton() {
     const btn = document.getElementById("btnStartEngines");
     if (!btn) return;
@@ -1075,7 +1081,10 @@
       }
       const vehicleCount = vehicleCountSelect ? parseInt(vehicleCountSelect.value, 10) : NaN;
       const requestBody = (vehicleCount > 0) ? { vehicles: vehicleCount } : {};
-      setStatus("신규테스트 요청 중… (MapMatchSvr → Simulator, 최대 3회 재시도)");
+      // [수정, 2026-09-15 최정우] 안내 문구를 실제 동작에 맞춘다. Simulator 는 소스·설정이
+        //   없어 실행 불가라 이 버튼은 MapMatchSvr 재기동만 수행한다(서버측 동작 축소,
+        //   사용자 결정). 새 GPS 가 생성되지 않으므로 새 trip 도 생기지 않는다.
+        setStatus("MapMatchSvr 재기동 요청 중… (Simulator 미지원 — 새 trip 은 생성되지 않습니다)");
       showProgressIndeterminate();
       try {
         const res = await fetch("/api/system/start-engines", {
@@ -1086,7 +1095,7 @@
         const data = await res.json();
         if (data.ok) {
           const appliedVehicles = data.vehicles || vehicleCount || 1;
-          setStatus("신규테스트 기동 완료(" + appliedVehicles + "대) — 새 trip 데이터 생성·매칭 대기 중…");
+          setStatus("MapMatchSvr 재기동 완료 — Simulator 미지원이라 새 trip 은 생성되지 않습니다(기존 데이터만 표시).");
           // "최신 Trip"이 이전에(예: Trip 콤보박스 직접 선택 등으로) 꺼진 채 남아있으면
           // 새로고침해도 브라우저가 체크박스 상태를 그대로 복원해 대기 로직이 아예 동작하지
           // 않는다 — "신규테스트"는 새 trip 을 만들고 지켜보려는 의도이므로 여기서는

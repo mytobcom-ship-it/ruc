@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TRIP_EVENT 이상 데이터 조사 요청</title>
+<style>
+  :root{
+    --bg:#f8fafc; --panel:#fff; --text:#1e293b; --muted:#64748b;
+    --border:#e2e8f0; --accent:#1e88e5; --code-bg:#f1f5f9; --bad:#e53935; --ok:#43a047;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#0f172a; --panel:#1e293b; --text:#e2e8f0; --muted:#94a3b8;
+           --border:#334155; --accent:#60a5fa; --code-bg:#0b1220; --bad:#ef5350; --ok:#66bb6a; }
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Malgun Gothic",sans-serif;
+       line-height:1.65;font-size:16px;padding:32px 28px 80px;max-width:1120px;margin:0 auto;}
+  h1{font-size:26px;margin:0 0 6px;}
+  h2{font-size:20px;margin:36px 0 10px;border-bottom:2px solid var(--accent);padding-bottom:6px;}
+  h3{font-size:16.5px;margin:22px 0 8px;}
+  .eyebrow{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+           color:var(--accent);margin:0 0 8px;}
+  .subtitle{color:var(--muted);font-size:14.5px;margin:0 0 22px;}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;
+        padding:14px;overflow-x:auto;margin:12px 0;}
+  .note{background:var(--code-bg);border-left:4px solid var(--accent);border-radius:4px;
+        padding:12px 16px;font-size:14.5px;margin:12px 0;}
+  .note b{color:var(--accent);}
+  .warn{background:#e5393512;border-left:4px solid var(--bad);border-radius:4px;
+        padding:12px 16px;font-size:14.5px;margin:12px 0;}
+  .warn b{color:var(--bad);}
+  .ask{background:#43a04712;border-left:4px solid var(--ok);border-radius:4px;
+       padding:12px 16px;font-size:14.5px;margin:12px 0;}
+  .ask b{color:var(--ok);}
+  code{background:var(--code-bg);padding:2px 6px;border-radius:4px;font-size:13.5px;}
+  pre{background:var(--code-bg);border:1px solid var(--border);border-radius:8px;
+      padding:12px 14px;font-size:13px;overflow-x:auto;margin:10px 0;}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;}
+  th,td{border:1px solid var(--border);padding:6px 9px;text-align:left;vertical-align:top;}
+  th{background:var(--code-bg);}
+  tr.bad td{background:#e5393514;font-weight:700;}
+  tr.src td{background:#1e88e514;}
+  .tag{display:inline-block;font-size:11.5px;font-weight:700;border-radius:10px;
+       padding:1px 9px;border:1px solid var(--bad);color:var(--bad);background:#e5393518;}
+  footer{color:var(--muted);font-size:13px;margin-top:40px;border-top:1px solid var(--border);padding-top:14px;}
+</style>
+</head>
+<body>
+
+<p class="eyebrow">PRIM_RAWGPS · TRIP_EVENT</p>
+<h1>TRIP_EVENT 이상 데이터 조사 요청</h1>
+<p class="subtitle">
+  위치검증서버(맵매칭·과금) 측에서 수신 데이터를 전수 점검하던 중, 수집 단계에서 생성된 것으로 보이는
+  <code>TRIP_EVENT</code> 이상 4건을 확인했습니다. 위치검증서버에서는 보정이 불가능한 영역이라 확인을 요청드립니다.
+  <br/>점검 대상: 로컬 검증 DB <code>ruc.prim_rawgps</code> 의 <b>실수집 데이터 36개 트립 / 8,344 틱</b> (2026-09-15 기준)
+</p>
+
+<h2>1. 점검 범위 — 합성 데이터 제외</h2>
+<div class="warn">
+  <b>집계에서 제외한 데이터가 있습니다.</b> 이 DB 에는 위치검증서버 측 알고리즘 시험용으로 만든
+  <b>합성 시드 데이터</b>가 섞여 있습니다 — 단말 <code>CAR000197</code>(차량번호 <code>000093</code>),
+  <b>22개 트립 / 473 틱</b>. 좌표 증분이 완전히 일정하고 속도가 톱니파 형태라 실제 수집 데이터가 아닙니다.
+  <b>수집서버에서 생성한 데이터가 아니므로 아래 집계에서 전부 제외</b>했습니다.
+  (전체는 58트립/8,817틱이며, 그중 실수집분이 <b>36트립/8,344틱</b>입니다.)
+</div>
+
+<h2>2. 먼저 — 정상 패턴 정의</h2>
+<p>
+  실수집 36개 트립 중 <b>32개(89%)</b>가 아래 규칙을 정확히 지키고 있어, 이것을 정상 규격으로 보았습니다.
+</p>
+<div class="note">
+  <b>운행 종료 틱(<code>TRIP_EVENT=2</code>)의 규격</b>
+  <ol style="margin:8px 0 0 18px;">
+    <li>트립 스트림의 <b>맨 마지막</b>에 1건만 존재한다.</li>
+    <li><b>직전 틱(<code>GPS_SEQ</code> −1)의 복사본</b>이다 — <code>GPS_DT</code>·<code>GPS_LAT</code>·<code>GPS_LON</code>·<code>SPEED_KMH</code>가 모두 같다.
+        <br/><span style="color:var(--muted);font-size:13.5px;">실수집 종료 틱 37건 중 <b>36건</b>이 이 규칙을 지키며,
+        유일한 예외가 아래 <b>유형 ②</b> 그 자체입니다.</span></li>
+    <li><code>DRIVE_STATUS</code>는 종료 표식으로 <code>2</code>가 찍힌다(합성분 포함 종료 틱 <b>59건 전부</b> 해당 — 직전 틱과 값이 달라도 정상이므로 이상 징후가 아니다).</li>
+  </ol>
+</div>
+<p>운행 시작 틱(<code>TRIP_EVENT=0</code>)은 <b>전수 정상</b>이었습니다(각 1건, 항상 첫 틱 — 합성분 포함 58트립 전부). 이상은 종료 쪽에만 있습니다.</p>
+
+<h2>3. 이상 현황 — 3개 유형, 4건</h2>
+<div class="card">
+  <table>
+    <tr><th>유형</th><th>내용</th><th>건수</th><th>대상 TRIP_ID</th></tr>
+    <tr><td><span class="tag">유형 ①</span></td><td>정차 중 조기 종료 — 종료 틱이 나온 뒤에도 운행이 계속됨</td><td>2</td>
+        <td><code>000370_20260824135458</code><br/><code>000370_20260824140015</code></td></tr>
+    <tr><td><span class="tag">유형 ②</span></td><td>시각 역행 종료 — 종료 틱의 시각이 직전 틱보다 과거</td><td>1</td>
+        <td><code>000376_20260819140856</code></td></tr>
+    <tr><td><span class="tag">유형 ③</span></td><td>유령 트립 — 직전 운행 마지막 틱과 동일한 시각·좌표로 새 트립이 1틱만 생성</td><td>1</td>
+        <td><code>000370_20260824170527</code></td></tr>
+  </table>
+</div>
+
+<h2>4. 유형 ① — 정차 중 조기 종료 (2건)</h2>
+<p>
+  차량이 <b>정지(<code>SPEED_KMH=0</code>)</b>한 상태에서 종료 틱이 발생했는데, 그 뒤로 운행 데이터가 계속 들어옵니다.
+  종료 틱 자체는 규격(직전 틱 복사)을 지키고 있어, <b>“종료 판정 시점”만 잘못된</b> 것으로 보입니다.
+</p>
+
+<h3>①-1. <code>000370_20260824135458</code> — 96틱 중 seq 4 에서 조기 종료</h3>
+<div class="card">
+  <table>
+    <tr><th>GPS_SEQ</th><th>GPS_DT</th><th>위도</th><th>경도</th><th>SPEED</th><th>TRIP_EVENT</th><th>비고</th></tr>
+    <tr class="src"><td>3</td><td>20260824135507</td><td>37.407423</td><td>127.090923</td><td>0</td><td>1</td><td>복사 원본</td></tr>
+    <tr class="bad"><td>4</td><td>20260824135507</td><td>37.407423</td><td>127.090923</td><td>0</td><td><b>2</b></td><td>← 조기 종료</td></tr>
+    <tr><td>5</td><td>20260824135510</td><td>37.407425</td><td>127.090929</td><td>0</td><td>1</td><td>운행 계속</td></tr>
+    <tr><td colspan="7" style="text-align:center;color:var(--muted);">… 90틱 계속 …</td></tr>
+    <tr class="src"><td>95</td><td>20260824135942</td><td>37.407751</td><td>127.090705</td><td>0</td><td>1</td><td>복사 원본</td></tr>
+    <tr><td>96</td><td>20260824135942</td><td>37.407751</td><td>127.090705</td><td>0</td><td><b>2</b></td><td>정상 종료</td></tr>
+  </table>
+</div>
+<p>이 건은 마지막에 정상 종료가 다시 오므로 운행 자체는 정상 마감됩니다.</p>
+
+<h3>①-2. <code>000370_20260824140015</code> — 41틱 중 seq 6 에서 조기 종료, <b>이후 정상 종료 없음</b></h3>
+<div class="card">
+  <table>
+    <tr><th>GPS_SEQ</th><th>GPS_DT</th><th>위도</th><th>경도</th><th>SPEED</th><th>TRIP_EVENT</th><th>비고</th></tr>
+    <tr class="src"><td>5</td><td>20260824140027</td><td>37.407729</td><td>127.090695</td><td>0</td><td>1</td><td>복사 원본</td></tr>
+    <tr class="bad"><td>6</td><td>20260824140027</td><td>37.407729</td><td>127.090695</td><td>0</td><td><b>2</b></td><td>← 조기 종료</td></tr>
+    <tr><td>7</td><td>20260824140030</td><td>37.407729</td><td>127.090695</td><td>0</td><td>1</td><td>운행 계속</td></tr>
+    <tr><td colspan="7" style="text-align:center;color:var(--muted);">… 33틱 계속(차량이 실제로 이동) …</td></tr>
+    <tr class="bad"><td>41</td><td>20260824140321</td><td>37.406599</td><td>127.089161</td><td>0</td><td>1</td><td>← <b>마지막 틱. 종료 틱 없음</b></td></tr>
+  </table>
+</div>
+<div class="warn">
+  <b>이 건이 4건 중 유일하게 실제 손실로 이어집니다.</b> 조기 종료(seq 6) 이후 35틱이 더 들어왔고 그중 13틱이
+  정상 매칭돼 <b>약 37m</b>의 주행이 확인되는데, 트립이 끝났다는 신호가 끝내 오지 않아 위치검증서버가 이 구간을
+  마감하지 못했습니다. 결과적으로 <b>이 트립의 과금 레코드가 0건</b>입니다.
+</div>
+
+<h2>5. 유형 ② — 시각 역행 종료 (1건)</h2>
+<p>
+  <code>000376_20260819140856</code>, 23틱. seq 19 의 종료 틱이 <b>직전 틱(seq 18)이 아니라 두 틱 전(seq 17)을
+  복사</b>했습니다. 그 결과 시각이 <b>3초 뒤로 역행</b>합니다. 유형 ①과 달리 차량은 <b>28km/h 로 주행 중</b>이었습니다.
+</p>
+<div class="card">
+  <table>
+    <tr><th>GPS_SEQ</th><th>GPS_DT</th><th>위도</th><th>경도</th><th>SPEED</th><th>TRIP_EVENT</th><th>비고</th></tr>
+    <tr class="src"><td>17</td><td>2026081914<b>0949</b></td><td>37.406325</td><td>127.087029</td><td>28</td><td>1</td><td>복사 원본(2틱 전)</td></tr>
+    <tr><td>18</td><td>2026081914<b>0952</b></td><td>37.406349</td><td>127.087295</td><td>28</td><td>1</td><td>—</td></tr>
+    <tr class="bad"><td>19</td><td>2026081914<b>0949</b></td><td>37.406325</td><td>127.087029</td><td>28</td><td><b>2</b></td><td>← <b>시각 역행</b>(seq18 보다 3초 과거)</td></tr>
+    <tr><td>20</td><td>20260819140955</td><td>37.406372</td><td>127.087583</td><td>29</td><td>1</td><td>운행 계속</td></tr>
+    <tr class="src"><td>22</td><td>20260819141001</td><td>37.406453</td><td>127.088216</td><td>35</td><td>1</td><td>복사 원본</td></tr>
+    <tr><td>23</td><td>20260819141001</td><td>37.406453</td><td>127.088216</td><td>35</td><td><b>2</b></td><td>정상 종료</td></tr>
+  </table>
+</div>
+<div class="note">
+  다른 4개 종료 틱은 모두 <b>직전 틱(간격 1)</b>을 복사했는데 이 건만 <b>간격 2</b>입니다. 종료 틱을 만드는 시점과
+  스트림에 끼워넣는 시점 사이에 틱이 하나 더 처리된 <b>경합(race)</b>으로 보입니다.
+</div>
+
+<h2>6. 유형 ③ — 유령 트립 (1건)</h2>
+<p>
+  <code>000370_20260824170527</code> 은 <b>1틱짜리 트립</b>이고 종료 틱이 없습니다. 그런데 그 1틱이
+  <b>직전 운행의 마지막 틱과 시각·좌표가 완전히 동일</b>합니다.
+</p>
+<div class="card">
+  <table>
+    <tr><th>TRIP_ID</th><th>GPS_SEQ</th><th>GPS_DT</th><th>위도</th><th>경도</th><th>TRIP_EVENT</th></tr>
+    <tr><td><code>000370_20260824170123</code></td><td>69</td><td>20260824170527</td><td>37.407547</td><td>127.090695</td><td>1</td></tr>
+    <tr><td><code>000370_20260824170123</code></td><td>70</td><td>20260824170527</td><td>37.407547</td><td>127.090695</td><td><b>2</b> (정상 종료)</td></tr>
+    <tr class="bad"><td><code>000370_20260824170527</code></td><td>1</td><td>20260824170527</td><td>37.407547</td><td>127.090695</td><td><b>0</b> (운행 시작)</td></tr>
+  </table>
+</div>
+<div class="note">
+  같은 순간에 <b>이전 운행의 종료와 새 운행의 시작이 동시에 발행</b>되고, 그 새 운행에는 이후 데이터가 전혀 오지
+  않았습니다. 실제로 존재하지 않은 운행으로 판단됩니다. <code>TRIP_ID</code> 의 시각부(<code>_170527</code>)도
+  그 시점에서 채번된 것으로 보입니다.
+</div>
+
+<h2>7. 위치검증서버 측 현재 대응과 한계</h2>
+<div class="card">
+  <table>
+    <tr><th>유형</th><th>엔진 대응</th><th>결과</th></tr>
+    <tr><td>① 조기 종료 (정상 종료가 뒤따르는 경우)</td>
+        <td><code>IsTrustedTripEnd()</code> 로 중복 종료를 판별해 한 번만 마감</td>
+        <td style="color:var(--ok);font-weight:700;">방어됨 — 과금 영향 없음</td></tr>
+    <tr><td>① 조기 종료 (정상 종료가 끝내 없는 경우)</td>
+        <td>종료 tick 이후에도 tick 이 들어오면 그 구간을 "비정상 종료"로 마감<br/>
+            <span style="color:var(--muted);font-size:13px;">2026-09-15 수정 — 종전에는 세션이
+            폐기되면서 그 구간이 기록 없이 사라졌다</span></td>
+        <td style="color:var(--ok);font-weight:700;">방어됨<br/>
+            <span style="color:var(--muted);font-weight:400;font-size:13px;">단, 이 트립은 END 이후
+            구간이 과금 임계 미달이라 실제 생성 행은 0건</span></td></tr>
+    <tr><td>② 시각 역행</td>
+        <td>중복 종료로 처리되어 첫 종료만 채택</td>
+        <td style="color:var(--ok);font-weight:700;">방어됨</td></tr>
+    <tr><td>③ 유령 트립</td>
+        <td>1틱뿐이라 과금 구간이 형성되지 않음</td>
+        <td style="color:var(--muted);">영향 없음(단, 통계상 트립 수가 부풀려짐)</td></tr>
+  </table>
+</div>
+<p>
+  <b>현재 4건 모두 과금 손실은 없습니다.</b> ①-2 는 2026-09-15 수정으로 마감 경로가 생겼고, 그 트립은 마침
+  END 이후 구간이 과금 임계에 미달해 생성되는 행도 0건입니다(당초 "37m 누락"으로 본 것은 매칭 tick 의 원시
+  주행거리였을 뿐 과금 대상이 아니었습니다 — 재검증 후 정정).
+</p>
+<div class="warn">
+  <b>그래도 수집 단계 해결이 필요한 이유</b>: 엔진 측 대응은 <b>증상 완화</b>입니다. 이번 트립은 END 이후 구간이
+  주정차 임계 미달이라 우연히 손실이 0이었을 뿐, <b>같은 일이 과금 대상 도로에서 일어나면 그대로 요금 차이로
+  이어집니다</b>. 또 운행 종료를 알 수 있는 유일한 근거가 <code>TRIP_EVENT=2</code> 이므로, 종료 신호 자체가
+  부정확하면 위치검증서버는 "언제까지가 한 운행인지"를 추정에 의존할 수밖에 없습니다.
+</p>
+
+<h2>8. 확인 요청 사항</h2>
+<div class="ask">
+  <ol style="margin:0 0 0 18px;">
+    <li><b>종료 판정 조건</b> — 정차(<code>SPEED_KMH=0</code>) 지속을 운행 종료로 보는 로직이 있는지, 있다면 임계값은
+        얼마인지. 유형 ① 2건 모두 정차 상태에서 발생했습니다.</li>
+    <li><b>조기 종료 후 재시작 처리</b> — 종료를 보낸 뒤 같은 트립의 데이터가 계속 발생하면 수집서버는 어떻게
+        처리하도록 설계돼 있는지. (①-2 처럼 <b>종료를 끝내 다시 보내지 않는</b> 동작이 의도된 것인지)</li>
+    <li><b>종료 틱 생성 시점의 경합</b> — 유형 ②처럼 종료 틱이 <b>직전 틱이 아닌 두 틱 전</b>을 복사해 시각이 역행하는
+        경우가 구조적으로 가능한지.</li>
+    <li><b>유령 트립</b> — 유형 ③처럼 종료와 동시에 새 <code>TRIP_ID</code> 가 채번되고 후속 데이터가 없는 경우가
+        정상 동작인지, 아니면 억제 대상인지.</li>
+  </ol>
+</div>
+
+<h2>9. 재현 쿼리</h2>
+<p>수집서버 측 DB에서도 동일하게 확인하실 수 있도록 점검 쿼리를 첨부합니다.</p>
+<pre>-- 트립별 START/END 정합성 분류
+WITH t AS (
+  SELECT trip_id, device_key, count(*) ticks,
+         min(gps_seq) first_seq, max(gps_seq) last_seq,
+         count(*) FILTER (WHERE trip_event=0) st_cnt,
+         min(gps_seq) FILTER (WHERE trip_event=0) st_seq,
+         count(*) FILTER (WHERE trip_event=2) en_cnt,
+         max(gps_seq) FILTER (WHERE trip_event=2) en_last
+  FROM ruc.prim_rawgps
+  WHERE device_key &lt;&gt; 'CAR000197'          -- 합성 시드 데이터 제외(1절 참고)
+  GROUP BY 1,2)
+SELECT CASE
+         WHEN st_cnt &lt;&gt; 1 OR st_seq &lt;&gt; first_seq THEN 'A. START 이상'
+         WHEN en_cnt = 0                          THEN 'B. END 없음'
+         WHEN en_cnt &gt; 1                          THEN 'C. END 복수'
+         WHEN en_last &lt;&gt; last_seq                 THEN 'D. END 이 마지막 틱 아님'
+         ELSE 'OK'
+       END AS 분류,
+       count(*) AS 트립수
+FROM t GROUP BY 1 ORDER BY 1;
+
+-- 종료 틱이 몇 틱 전을 복사했는지(정상=1, 2 이상이면 시각 역행 의심)
+WITH e AS (SELECT trip_id, gps_seq, gps_dt, gps_lat, gps_lon
+             FROM ruc.prim_rawgps
+            WHERE trip_event = 2 AND device_key &lt;&gt; 'CAR000197')
+SELECT e.trip_id, e.gps_seq AS end_seq,
+       e.gps_seq - (SELECT max(p.gps_seq) FROM ruc.prim_rawgps p
+                     WHERE p.trip_id = e.trip_id AND p.gps_seq &lt; e.gps_seq
+                       AND p.gps_dt = e.gps_dt
+                       AND p.gps_lat = e.gps_lat AND p.gps_lon = e.gps_lon) AS 복사간격
+FROM e ORDER BY 3 DESC NULLS FIRST, 1;
+
+-- 유령 트립(직전 운행 마지막 틱과 시각·좌표가 같은 1틱 트립)
+SELECT DISTINCT a.trip_id AS 유령트립, b.trip_id AS 직전운행, a.gps_dt, a.gps_lat, a.gps_lon
+--     ^ 직전 운행의 마지막 두 틱(본 틱 + 종료 틱)이 동일값이라 조인이 2행으로 늘어난다
+FROM ruc.prim_rawgps a
+JOIN ruc.prim_rawgps b
+  ON b.device_key = a.device_key AND b.trip_id &lt;&gt; a.trip_id
+ AND b.gps_dt = a.gps_dt AND b.gps_lat = a.gps_lat AND b.gps_lon = a.gps_lon
+WHERE a.trip_event = 0
+  AND a.device_key &lt;&gt; 'CAR000197'
+  AND (SELECT count(*) FROM ruc.prim_rawgps c WHERE c.trip_id = a.trip_id) = 1;</pre>
+
+<footer>
+  작성 2026-09-15 · 위치검증서버(MapMatchSvr) 담당 · 점검 대상 <code>ruc.prim_rawgps</code> 실수집 36트립 / 8,344틱(합성 22트립 제외)<br/>
+  관련 문서: <a href="errorcode.html">과금 판정 사유 코드</a> · <a href="columns.html">과금 6유형별 컬럼 비교</a>
+</footer>
+
+</body>
+</html>

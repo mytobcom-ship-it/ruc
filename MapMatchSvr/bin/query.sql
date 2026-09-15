@@ -38,6 +38,12 @@
 --         ADD COLUMN IF NOT EXISTS start_gps_seq bigint NOT NULL DEFAULT 0,
 --         ADD COLUMN IF NOT EXISTS end_gps_seq   bigint NOT NULL DEFAULT 0
 --
+--   [charge_insert] — 과금/비과금 사유 코드($31). 없으면 과금 bulk INSERT 가 전건 실패한다.
+--     2026-09-15 수정으로 이 컬럼은 항상 채워진다(정상 과금 = 0, 더 이상 NULL 이 아니다).
+--     ALTER TABLE ruc.prim_chargehand
+--         ADD COLUMN IF NOT EXISTS non_charge_reason smallint
+--     (2026-09-15 최정우 추가 — 2026-09-01 에 컬럼을 쓰기 시작했는데 이 목록에 빠져 있었다)
+--
 --   [rawgps_select] / [stale_recover] — PROCESSING(2) 예약 시각. 없으면 예약 UPDATE 자체가
 --     실패해 맵매칭이 전혀 진행되지 않는다.
 --     ALTER TABLE ruc.prim_rawgps
@@ -65,9 +71,13 @@
 -- 적용 확인
 --   SELECT column_name FROM information_schema.columns
 --    WHERE table_schema='ruc' AND ((table_name='prim_chargehand'
---          AND column_name IN ('start_gps_seq','end_gps_seq'))
+--          AND column_name IN ('start_gps_seq','end_gps_seq','non_charge_reason'))
 --       OR (table_name='prim_rawgps' AND column_name='match_rsv_dt'))
 --   SELECT MIN(from_min), MIN(from_min)*60 AS 임계초 FROM ruc.base_parking_fine
+--
+--   ※ 위 6가지(컬럼 4 · 인덱스 1 · 테이블 1)를 한 번에 점검하려면
+--     doc/deploy_2026-09-15.sql 의 0절을 실행할 것 — 빠진 항목을 모두 지목하고 중단한다.
+--     (2026-09-15 최정우 추가)
 --
 -- ※ 이 블록은 섹션([대괄호]) 밖이라 SQLAccessor 가 읽지 않는다 — 실행되지 않는 기록이므로
 --   위 DDL 은 psql 로 직접 실행해야 한다. 섹션 "안"에는 절대 -- 주석을 쓰지 말 것

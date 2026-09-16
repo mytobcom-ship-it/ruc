@@ -210,6 +210,14 @@ void CProcessManager::BuildMapMatchInput(const sRawLogInfo& stRawLogInfo,
 		// 같은 링크 노이즈 보정 기준점(직전 신뢰 매칭 좌표) 함께 전달 (2026-07-22 최정우 추가)
 		pstMapMatchInput->dfPrevMatchX = pstAltCtx->dfPrevMatchX;
 		pstMapMatchInput->dfPrevMatchY = pstAltCtx->dfPrevMatchY;
+		// [2026-09-16 최정우 — 판정 완료, 배선하지 않기로 확정] 아래 "미수정" 은 유지가 맞다.
+		//   임시로 배선해 전체 재매칭한 결과: 검사(MapMatch.cpp 재구성 경로 방향 타당성)가 6회
+		//   발동했고 **6회 전부 hops=[1]**, 즉 이 검사가 잡으려던 "여러 홉을 건너뛴 먼 우회 경로"는
+		//   한 건도 없었다. 실제로 걸린 건 교차로 회전·정차 후 출발처럼 **한 tick 안에서 heading 이
+		//   크게 바뀌는 정상 주행**뿐이다(실측: 000376_20260819140532 seq17 — 좌회전 진입 tick,
+		//   heading 250→34, 직후 seq18 이 2040425201 에 intersect_len=1m 로 확실히 매칭됨).
+		//   MATCH_STATUS 는 2건이 MATCHED→SKIP 으로 바뀌고(나머지 4건은 원래도 SKIP), 과금은 불변.
+		//   살리려면 "직전 신뢰 위치가 N tick 이내" 또는 "hops>=2" 가드가 선행돼야 한다.
 		// [참고, 2026-09-11 최정우 확인 — 미수정] dfPrevMatchX/Y 유효 여부 플래그 bHasPrevMatchPos
 		//   (2026-08-23 추가)가 여기서 전달이 빠져 있어 항상 기본값 false 로 넘어간다 — 이 플래그를
 		//   보는 소비측 중 MapMatch.cpp:432 의 "재구성 경로 방향 타당성 검사"(2026-09-04 추가)가

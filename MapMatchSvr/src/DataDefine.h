@@ -405,14 +405,29 @@ typedef struct sAltitudeScoreConfig
 #define NCR_SPEED_ENTRY_EQUALS_EXIT	32									// SPEED(구간단속) — 입구==출구 동일 게이트
 #define NCR_SPEED_EXIT_UNCONFIRMED		33									// SPEED(구간단속) — 출구게이트 미확인
 #define NCR_EXEMPT_TTL_FORCED_CLOSE	51									// EXEMPT(면제도로) — 종료 미확정 강제마감(N/4).
-																							//   61 과 동일하게 2026-09-15 부터 3경로 공용(위 주석 참고)
+																							//   61 과 동일하게 ①TTL 만료 ②종료신호 이후 잔여 tick
+																							//   ③정상 트립종료 시 미확정 구간에 쓴다(아래 61 주석 참고)
+#define NCR_EXEMPT_NO_TRIP_END			52									// EXEMPT(면제도로) — 종료신호(TRIP_EVENT=END) 없이 같은
+																							//   차량의 다음 운행이 시작돼 강제마감(N/4). 62 의 면제도로판
+																							//   (2026-09-16 최정우 추가)
 #define NCR_TTL_FORCED_CLOSE			61									// 공통(NODE_STEP/OPEN/CLOSED/SPEED/PARKING) — 종료 미확정
 																			//   강제마감(N/3), [trip_abend] SQL 사후전환 포함.
 																			//   [2026-09-15 적용범위 확대] 상수명은 TTL 이지만 실제로는
-																			//   FlushOpenRunsAsAbnormalEnd() 3경로 공용이다 —
+																			//   FlushOpenRunsAsAbnormalEnd() 등 공용이다 —
 																			//   ①TTL 만료·신호두절 ②종료신호 이후 잔여 tick
-																			//   ③종료신호 없는 트립 전환. "TTL 이 아닌데 왜 61?" 을
+																			//   ③정상 트립종료 시 미확정 구간. "TTL 이 아닌데 왜 61?" 을
 																			//   막으려면 이 주석을 같이 볼 것
+																			//   [2026-09-16 분리] 종전에 여기 포함돼 있던 "종료신호 없는
+																			//   트립 전환"은 62 로 떼어냈다 — 수집서버 종료신호 이상을
+																			//   정산·조사 측에서 식별할 수 있어야 한다는 요구
+#define NCR_NO_TRIP_END_FORCED_CLOSE	62									// 공통(NODE_STEP/OPEN/CLOSED/SPEED/PARKING) — 종료신호
+																			//   (TRIP_EVENT=END)를 못 받은 채 같은 차량(DEVICE_KEY)의
+																			//   다음 운행이 시작돼, 이전 운행의 열린 구간을 강제마감(N/3).
+																			//   세션 키가 DEVICE_KEY 라 TTL 은 이 경우를 못 잡는다 —
+																			//   다음 운행이 세션을 그 자리에서 재사용하기 때문.
+																			//   마감 주체는 ProcessRawLog() 의 트립전환 분기
+																			//   (ResetTripSessionForBegin 직전 호출이 핵심)
+																			//   (2026-09-16 최정우 추가)
 
 /**
  * @enum eCoordinateType

@@ -773,6 +773,17 @@ void CServer::Uninitialize()
 		//   의도적으로 누수시킨다 — 프로세스가 곧 종료되므로 누수가 크래시보다 안전하다.
 		bool bWorkersFullyStopped = m_pcThreadPool->WaitForAllStopped(3000);
 
+		// [보완, 2026-09-16 최정우 추가] 워커가 전부 멈춘 것이 확인된 **이 시점에만** 열려 있는
+		//   과금 구간을 마감한다. 세션(m_vtTripSessions)은 in-memory 라 여기서 안 비우면 프로세스와
+		//   함께 사라지고, 그 구간은 해당 트립을 통째로 재매칭하지 않는 한 복구할 수 없다
+		//   (CRawLogWorker::FlushAllSessionsOnShutdown 주석 참고).
+		//   순서가 중요하다 — 워커 정지 확인 **후**(세션 맵 레이스 방지), RawLogWorker·PostgrePool
+		//   delete **전**(둘 다 살아 있어야 마감·DB 반영이 가능)이라 이 자리뿐이다.
+		//   못 멈춘 워커가 있으면 건너뛴다: 그 워커가 아직 세션을 만지고 있을 수 있어, 마감을
+		//   시도하는 쪽이 use-after-free 보다 위험하다(종전대로 유실되지만 크래시는 없다).
+		if (bWorkersFullyStopped && (m_pcRawLogWorker != nullptr))
+			m_pcRawLogWorker->FlushAllSessionsOnShutdown();
+
 		delete m_pcThreadPool;
 		m_pcThreadPool = nullptr;
 

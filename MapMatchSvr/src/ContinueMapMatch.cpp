@@ -96,6 +96,18 @@ bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPU
 		return false;
 	}
 
+	// ※※ [주의, 2026-09-16 최정우 추가] 이 함수는 **참조로 받은 stSgmtMatchInput 을 그 자리에서
+	//   변환**한다(도(度) → 내부 좌표 스케일 ×360000) — 원래 값으로 되돌리지 않는다.
+	//   도로망(link.psf)은 CreateData 가 이미 스케일 정수로 저장하므로(BinaryMaker.cpp:928) 비교
+	//   대상과 단위를 맞추려면 GPS 입력 쪽을 올려야 하고, 그 변환이 여기다.
+	//   **그래서 호출측이 지켜야 할 두 가지:**
+	//     ① 호출 후 그 변수를 다시 읽지 말 것 — 도 단위로 믿고 쓰면 36만 배 값을 얻는다
+	//     ② 같은 변수를 다시 넘기지 말 것 — ×360000 이 두 번 걸려 약 1,300억 배가 된다
+	//   둘 다 컴파일 경고도 크래시도 없이 조용히 틀린다. 재호출이 필요하면 MapMatch.cpp 의
+	//   Begin 병행폴백처럼(stBeginSgmtMatchInput, MapMatch.cpp:271) **새 변수에 원본 도 좌표를
+	//   다시 채워** 넘길 것. 현재 호출부는 전부 이 규칙을 지키고 있어 무해하다.
+	//   참조 대신 값 전달로 바꾸는 근본 수정은 하위 호출 전부가 "이미 스케일된 상태"를 전제로
+	//   짜여 있어 핵심 매칭 함수 전체 재설계가 필요 — 보류 중인 별도 과제다.
 	stSgmtMatchInput.stPoint.dfX *= 360000.0;
 	stSgmtMatchInput.stPoint.dfY *= 360000.0;
 	// 같은 링크 노이즈 보정 기준점도 동일 내부 스케일로 변환 (2026-07-22 최정우 추가)

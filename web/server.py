@@ -441,6 +441,53 @@ def infer_match_reason(match_status, match_link_id, intersect_len, accuracy_m):
     return None
 
 
+# 정지 중 매칭좌표 표류 보정 — **표시 전용** (2026-09-16 최정우 추가)
+#   차가 멈춰 있어도 엔진의 SgmtMatch()는 매 tick 세그먼트 위 수선의 발을 새로 계산하므로,
+#   GPS 저주파 위치표류가 그대로 반영돼 매칭점만 한쪽으로 흘러간다(실측: 정지 tick 쌍 1,621개
+#   기준 총 209m, 트립·링크 단위 최대 22.6m).
+#   과금 거리(dist_m)는 엔진이 이미 bSameRawAndHeadingAsPrev 가드로 누적을 건너뛰어 영향이 없고,
+#   남은 건 웹뷰어에 보이는 좌표뿐이라 **표시 계층에서만** 보정한다.
+#   엔진에서 MATCH_LAT/LON 자체를 바꾸는 방법도 검토했으나(2026-09-16 사용자와 논의),
+#   ① 좌표와 짝을 이루는 intersect_len 은 원래 계산값이라 둘이 어긋나고
+#   ② 과거 두 번(78건·2건 MATCH_STATUS 회귀) 좌표 파이프라인 수정이 실패한 전례가 있어
+#   DB 값은 "엔진이 실제로 계산한 값" 그대로 두기로 했다.
+#   보정 조건: 연속된 gps_seq · 같은 match_link_id · 양쪽 tick 모두 speed_kmh < 1 · MATCHED(1).
+#   구간 첫 tick 의 좌표로 고정하며, 원본은 match_lat_raw/match_lon_raw 로 함께 내려준다.
+_STATIONARY_SPEED_KMH = 1.0
+
+
+def _anchor_stationary_points(rows):
+    """정지 구간의 표시용 매칭좌표를 구간 첫 좌표로 고정한다(rows 를 제자리 수정)."""
+    anchor_lat = anchor_lon = None
+    prev = None
+    for cur in rows:
+        speed = cur.get("speed_kmh")
+        stationary = (
+            speed is not None and speed < _STATIONARY_SPEED_KMH
+            and cur.get("match_status") == 1
+            and cur.get("match_lat") is not None
+        )
+        continues = (
+            stationary and prev is not None
+            and prev.get("speed_kmh") is not None and prev["speed_kmh"] < _STATIONARY_SPEED_KMH
+            and prev.get("match_status") == 1
+            and cur.get("match_link_id") == prev.get("match_link_id")
+            and cur.get("gps_seq") == prev.get("gps_seq") + 1
+        )
+        if not continues:
+            # 구간 시작(또는 정지 아님) — 이 tick 의 좌표가 다음 구간의 앵커가 된다
+            anchor_lat = cur.get("match_lat") if stationary else None
+            anchor_lon = cur.get("match_lon") if stationary else None
+        elif anchor_lat is not None:
+            cur["match_lat_raw"] = cur["match_lat"]
+            cur["match_lon_raw"] = cur["match_lon"]
+            cur["match_lat"] = anchor_lat
+            cur["match_lon"] = anchor_lon
+            cur["stationary_anchored"] = True
+        prev = cur
+    return rows
+
+
 def _query_trip_points(conn, trip_id):
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         # ruc DB(2026-08-11 전환) 는 road_link 가 geom 없이 jsonb coords 라 도로선
@@ -449,7 +496,7 @@ def _query_trip_points(conn, trip_id):
         cur.execute(
             """
             SELECT g.gps_seq, g.gps_dt, g.trip_event, g.drive_status, g.match_status,
-                   g.gps_lat, g.gps_lon, g.intersect_len, g.accuracy_m,
+                   g.gps_lat, g.gps_lon, g.intersect_len, g.accuracy_m, g.speed_kmh,
                    g.match_link_id,
                    l.road_name AS match_link_name,
                    g.match_lat, g.match_lon
@@ -475,12 +522,13 @@ def _query_trip_points(conn, trip_id):
                 "gps_lon": float(r["gps_lon"]) if r["gps_lon"] is not None else None,
                 "match_lat": float(r["match_lat"]) if r["match_lat"] is not None else None,
                 "match_lon": float(r["match_lon"]) if r["match_lon"] is not None else None,
+                "speed_kmh": float(r["speed_kmh"]) if r["speed_kmh"] is not None else None,
                 "intersect_len": intersect_len,
                 "match_link_id": r["match_link_id"],
                 "match_link_name": r["match_link_name"],
                 "match_reason": infer_match_reason(match_status, r["match_link_id"], intersect_len, accuracy_m),
             })
-        return rows
+        return _anchor_stationary_points(rows)
 
 
 # base_roadlink.coords(jsonb [[lon,lat],...]) → PostGIS geometry.
@@ -769,7 +817,7 @@ def api_trips_points():
             cur.execute(
                 """
                 SELECT g.trip_id, g.gps_seq, g.gps_dt, g.trip_event, g.drive_status, g.match_status,
-                       g.gps_lat, g.gps_lon, g.intersect_len, g.accuracy_m,
+                       g.gps_lat, g.gps_lon, g.intersect_len, g.accuracy_m, g.speed_kmh,
                        g.match_link_id,
                        l.road_name AS match_link_name,
                        g.match_lat, g.match_lon
@@ -795,11 +843,15 @@ def api_trips_points():
                     "gps_lon": float(r["gps_lon"]) if r["gps_lon"] is not None else None,
                     "match_lat": float(r["match_lat"]) if r["match_lat"] is not None else None,
                     "match_lon": float(r["match_lon"]) if r["match_lon"] is not None else None,
+                    "speed_kmh": float(r["speed_kmh"]) if r["speed_kmh"] is not None else None,
                     "intersect_len": intersect_len,
                     "match_link_id": r["match_link_id"],
                     "match_link_name": r["match_link_name"],
                     "match_reason": infer_match_reason(match_status, r["match_link_id"], intersect_len, accuracy_m),
                 })
+    # 트립별로 gps_seq 순서가 보장된 상태(ORDER BY)라 그대로 보정한다
+    for _tid in result:
+        _anchor_stationary_points(result[_tid])
     return jsonify(result)
 
 

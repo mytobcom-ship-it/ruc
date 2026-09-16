@@ -77,6 +77,15 @@ typedef struct sZoneRunSession
 																		//   확정한다(UpdateOpenGateCrossed). 없으면 이미 게이트를
 																		//   지난 뒤 시작한 run(case C)이 첫 틱만으로 곧바로
 																		//   "통과함"으로 오판된다 (2026-08-25 최정우 추가)
+	// 진입 링크 확정 보류 — 게이트형 구역(폐쇄식·개방식·구간단속) 진출이 확정되는 tick 은 매칭점이
+	//   진출게이트로 클램프될 뿐 **아직 그 구역 링크에 매칭**돼 있다. 진출게이트가 링크 끝 노드에
+	//   놓인 구역에서는 그 tick 에 run 을 열면 FROM_ID 가 구역 링크 자신이 되어, 폐쇄식 구간에서
+	//   일반도로가 시작한 것처럼 보인다(실측 000972_20260916100000: TG00007/TG00008 이 링크
+	//   2040423801 의 첫점·끝점이라 링크 전체가 폐쇄식인데 FROM_ID=2040423801). 그 시점엔 다음 링크를
+	//   아직 모르므로, 여기에 "진출한 구역 링크"를 담아두고 다음 tick 에 실제 링크가 나오면 그 사이
+	//   누락 링크를 복구해 첫 링크를 FROM_ID 로 확정한다. 0 이면 보류 없음
+	//   (2026-09-16 최정우 추가, 사용자 지적)
+	uint64							qwPendingEntryFromLinkID;
 	uint64							qwEntryLinkID;						// 진입 시점 매칭 링크ID — 일반도로(NODE_STEP)의 신규 스코프
 																		//   (미등록 도로 pseudo-zone, szRoadID=="") 전용. FROM_ID를
 																		//   road_id 대신 링크ID로 채워야 해서 추가(qwLastLinkID가 이미
@@ -94,7 +103,7 @@ typedef struct sZoneRunSession
 		dtExitCandidateTime(0), nExitTicks(0),
 		dfFirstOutX(0.0), dfFirstOutY(0.0), dtFirstOut(0),
 		bStartedByTrip(false), bGateCrossed(false),
-		bSeenBeforeGate(false), qwEntryLinkID(0), qwFirstOutLinkID(0)
+		bSeenBeforeGate(false), qwPendingEntryFromLinkID(0), qwEntryLinkID(0), qwFirstOutLinkID(0)
 	{
 		szRoadID[0] = '\0';
 	}
@@ -382,6 +391,11 @@ typedef struct sVehicleTripSession
 	//   만나도 없어지지 않고 나중에 신뢰 가능한 tick이 올 때까지 남아있게 한다.
 	bool							bHasMergeCarry;
 	ZONE_RUN_SESSION				stMergeCarry;
+	// 이월값이 설정된 tick 의 순번 — 아래 "타 과금유형 tick 무효화"가 방금 이번 tick 에 담긴
+	//   이월값까지 곧바로 확정해버리지 않도록 구분하는 용도다(bHasGateExitCarry 쪽
+	//   dwGateExitGpsSeq 와 같은 역할). 설정 지점이 무효화 지점보다 앞뒤로 흩어져 있어
+	//   순서만으로는 같은 tick 설정분을 가려낼 수 없다 (2026-09-16 최정우 추가)
+	uint32							dwMergeCarrySeq;
 	// 접촉 중 이탈 디바운스(node_exitcnt)로 조기 마감된 run — 위 접촉 확정 판정이 나올 때까지
 	//   즉시 등록하지 않고 보류한다. 확정 접촉이면 그대로 등록, 미확정이면 폐기하고 진입정보·
 	//   누적거리를 접촉 구간의 이월값에 합쳐 다음 run으로 이어붙인다(위와 동일 근거,
@@ -837,10 +851,19 @@ public:
 	void FlushOpenRunsAsAbnormalEnd(int nThreadId, const string& strDeviceKey,
 		VEHICLE_TRIP_SESSION& stSession, time_t dtEndTime, uint32 dwEndGpsSeq, time_t dtNow,
 		vector<CHARGE_INSERT_ROW> *pvtOut,
-		vector<TRIP_END_UPDATE_ROW> *pvtAbnormalEndUpdates);
+		vector<TRIP_END_UPDATE_ROW> *pvtAbnormalEndUpdates,
+		bool bNoTripEnd = false);
+	//   bNoTripEnd: true = 종료신호(TRIP_EVENT=END) 없이 다음 운행이 시작돼 마감하는 경로 —
+	//     non_charge_reason 을 62(면제도로는 52)로 남긴다. false = TTL·잔여tick·트립종료
+	//     (61/51). 판정(charge_yn/status)은 어느 쪽이든 동일하다 (2026-09-16 최정우 추가)
 	// #6: dtLastSeen 경과 세션 제거 (모니터 주기 호출). pcConn 은 TTL 만료 시점에 열려 있는 주정차
 	//   세션을 즉시 위반 INSERT 하는 데 씀(2026-08-13 최정우 추가)
-	int ExpireTtlSessions(int nThreadId, int nTtlSec, PGconn *pcConn);
+	int ExpireTtlSessions(int nThreadId, int nTtlSec, PGconn *pcConn, bool bForceAll = false);
+	// 서버 종료 시 모든 워커 슬롯의 열린 과금 구간을 마감한다 — 세션은 in-memory 라 재기동 시
+	//   그대로 사라지므로(ExpireTtlSessions 주석의 "별도 한계"), 종료 직전에 마감해 기록으로
+	//   남긴다. **워커가 전부 멈춘 뒤에만 호출할 것**(락 없이 세션 맵에 접근한다)
+	//   (2026-09-16 최정우 추가)
+	int FlushAllSessionsOnShutdown();
 	// #7/#8: 예약(batch) PROCESSING→PENDING release
 	bool ReleaseReservedBatch(PGconn *pcConn, const RAW_LOG_BATCH& vtBatch, int nThreadId);
 
@@ -941,7 +964,11 @@ private:
 	time_t InterpolateGateCrossingTime(double dfPrevX, double dfPrevY, time_t dtPrev,
 		double dfCurX, double dfCurY, time_t dtCur, double dfGateX, double dfGateY);
 	void AppendExpiredParkingCharge(int nThreadId, const string& strDeviceKey,
-		const VEHICLE_TRIP_SESSION& stSession, vector<CHARGE_INSERT_ROW> *pvtOut);
+		const VEHICLE_TRIP_SESSION& stSession, vector<CHARGE_INSERT_ROW> *pvtOut,
+		bool bNoTripEnd = false);
+	//   bNoTripEnd: true = 종료신호(TRIP_EVENT=END) 없이 다음 운행이 시작돼 마감하는 경로 —
+	//     non_charge_reason 을 62(면제도로는 52)로 남긴다. false = TTL·잔여tick·트립종료
+	//     (61/51). 판정(charge_yn/status)은 어느 쪽이든 동일하다 (2026-09-16 최정우 추가)
 	// park_ttl — 세션(디바이스)은 살아있는데 주정차 세션만 마지막 신뢰 확인 후 오래 방치된 경우
 	//   좌표 확인 없이 강제 마감 — park_* 필드만 리셋하고 세션 자체는 유지 (2026-08-19 최정우 추가)
 	void AppendStaleParkingCharge(int nThreadId, const string& strDeviceKey,
@@ -978,7 +1005,11 @@ private:
 		const string& strDeviceKey, int nChargeSeq, time_t dtEnd, uint32 dwEndGpsSeq,
 		const char *pszChargeYn, const char *pszChargeStatus, CHARGE_INSERT_ROW *pstRow);
 	void AppendExpiredExemptZoneCharge(int nThreadId, const string& strDeviceKey,
-		const VEHICLE_TRIP_SESSION& stSession, vector<CHARGE_INSERT_ROW> *pvtOut);
+		const VEHICLE_TRIP_SESSION& stSession, vector<CHARGE_INSERT_ROW> *pvtOut,
+		bool bNoTripEnd = false);
+	//   bNoTripEnd: true = 종료신호(TRIP_EVENT=END) 없이 다음 운행이 시작돼 마감하는 경로 —
+	//     non_charge_reason 을 62(면제도로는 52)로 남긴다. false = TTL·잔여tick·트립종료
+	//     (61/51). 판정(charge_yn/status)은 어느 쪽이든 동일하다 (2026-09-16 최정우 추가)
 	// 일반도로(ROAD_KIND=0, NODE_STEP) 진입/이탈 판정 — 비과금도로와 동일 구조(게이트 없이 매칭
 	//   링크→구역 역인덱스)지만 실제 과금 대상이라 이탈·트립종료 시 항상 Y/0 으로 1건 기록
 	//   (사용자 지시, 2026-08-14 추가)
@@ -1022,7 +1053,11 @@ private:
 	//   항상 false 로 호출.
 	void AppendExpiredNodeStepCharge(int nThreadId, const string& strDeviceKey,
 		const VEHICLE_TRIP_SESSION& stSession, time_t dtEnd, uint32 dwEndGpsSeq,
-		bool bStationaryTripEnd, vector<CHARGE_INSERT_ROW> *pvtOut);
+		bool bStationaryTripEnd, vector<CHARGE_INSERT_ROW> *pvtOut,
+		bool bNoTripEnd = false);
+	//   bNoTripEnd: true = 종료신호(TRIP_EVENT=END) 없이 다음 운행이 시작돼 마감하는 경로 —
+	//     non_charge_reason 을 62(면제도로는 52)로 남긴다. false = TTL·잔여tick·트립종료
+	//     (61/51). 판정(charge_yn/status)은 어느 쪽이든 동일하다 (2026-09-16 최정우 추가)
 	// 트립종료(TRIP_EVENT=END) 처리 중 "이번 틱이 신뢰 못할 매칭(bUntrustedMatch)이거나 매칭 자체를
 	//   못 한" 조기 반환 경로들 전용 — CommitPendingRow() 가 이번 틱이 아니라 훨씬 이전에 보류돼있던
 	//   행을 커밋하면서 그 행 자신의(트립종료 아닌) TRIP_EVENT 기준으로 bTrustedTripEnd 를 다시 판정해
@@ -1089,7 +1124,11 @@ private:
 	//   [trip_abend] UPDATE(query.sql)가 뒤이어 TRIP_END_DT IS NULL 인 이 행을 찾아 N/3(AUDIT)로
 	//   정정한다(다른 유형과 동일한 2단계 처리, AppendExpiredNodeStepCharge 참고) (2026-08-25 최정우 추가)
 	void AppendExpiredOpenGateCharge(int nThreadId, const string& strDeviceKey,
-		const VEHICLE_TRIP_SESSION& stSession, vector<CHARGE_INSERT_ROW> *pvtOut);
+		const VEHICLE_TRIP_SESSION& stSession, vector<CHARGE_INSERT_ROW> *pvtOut,
+		bool bNoTripEnd = false);
+	//   bNoTripEnd: true = 종료신호(TRIP_EVENT=END) 없이 다음 운행이 시작돼 마감하는 경로 —
+	//     non_charge_reason 을 62(면제도로는 52)로 남긴다. false = TTL·잔여tick·트립종료
+	//     (61/51). 판정(charge_yn/status)은 어느 쪽이든 동일하다 (2026-09-16 최정우 추가)
 	// [버그 수정, 2026-09-11 최정우] 트립 정상종료(TRIP_EVENT=2) 시 마지막 tick 자체의 맵매칭이
 	//   실패하면 ProcessOpenGateCharge()가 안 불려 개방형 run 이 과금 레코드 없이 사라지던 버그 —
 	//   CLOSED/SPEED 의 무조건 flush(ProcessRawLog bTrustedTripEnd 블록)와 동일 안전망. run 별
@@ -1106,7 +1145,11 @@ private:
 	//   처리 시각(dtLastSeen, wall-clock), 트립 정상종료 경로는 그 tick의 GPS 시각(dtGPS) — 호출
 	//   측이 상황에 맞는 값을 넘겨줌(2026-08-20 최정우 수정 — 트립 정상종료 시에도 호출되도록 확장)
 	void AppendExpiredClosedRoadCharge(int nThreadId, const string& strDeviceKey,
-		const VEHICLE_TRIP_SESSION& stSession, time_t dtEndTime, vector<CHARGE_INSERT_ROW> *pvtOut);
+		const VEHICLE_TRIP_SESSION& stSession, time_t dtEndTime, vector<CHARGE_INSERT_ROW> *pvtOut,
+		bool bNoTripEnd = false);
+	//   bNoTripEnd: true = 종료신호(TRIP_EVENT=END) 없이 다음 운행이 시작돼 마감하는 경로 —
+	//     non_charge_reason 을 62(면제도로는 52)로 남긴다. false = TTL·잔여tick·트립종료
+	//     (61/51). 판정(charge_yn/status)은 어느 쪽이든 동일하다 (2026-09-16 최정우 추가)
 	// 구역 이탈 경계 보정(구간단속·폐쇄형 공용) — 면제도로가 쓰던 것과 동일 원리.
 	//   거리 누적을 "구역 안 tick 만"으로 바꾼 뒤 생긴 경계 구간 누락을 메운다
 	//   (2026-09-15 최정우 추가, 상세 근거는 .cpp 함수 주석 참고)

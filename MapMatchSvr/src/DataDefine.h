@@ -27,11 +27,14 @@
  *   003=고가/004=지하로 정의돼 있었으나 실측(network.moct_link 전국 155만건, 분포
  *   001:1,405건·002:2,459건·003:35,813건·004:6,461건)과 doc/지능형교통체계ITS+표준+
  *   노드링크+구축+및+운영지침.PDF 24쪽 대조 결과 공식값과 반대로 정의돼 있었음이 확인돼
- *   정정함. IsElevatedRoad(){1,3} 세트 체크라 이 스왑과 무관하게 결과 동일하지만,
- *   IsUndergroundRoad()는 값 4 단독 체크라 정정 후 대상이 터널→지하차도로 바뀜(의도된
- *   동작 변경 — RoadTypeDirectionPenalty()의 "고도 상승+지하형" 감점 로직이 원래
- *   지하차도(움푹 파였다 다시 올라오는 구조)를 겨냥한 설계였는데 정정 전엔 터널에
- *   잘못 적용되고 있었음). 상세: doc/표준노드링크_시설물_도로_코드_분석.html
+ *   정정함. IsElevatedRoad(){ELEVATED,BRIDGE} 세트 체크라 이 스왑과 무관하게 결과 동일하지만,
+ *   IsUndergroundRoad()는 ROAD_TYPE_UNDERGROUND 단독 체크라 정정 후 대상이 터널→지하차도로
+ *   바뀜(정정 전 이 심볼의 값이 4=실데이터의 터널이었기 때문. 정정 후 값은 2=지하차도. 의도된
+ *   동작 변경 — RoadTypeDirectionPenalty()의 "고도 상승+지하형" 감점 로직이 원래 지하차도
+ *   (움푹 파였다 다시 올라오는 구조)를 겨냥한 설계였는데 정정 전엔 터널에 잘못 적용되고 있었음).
+ *   [2026-09-17 최정우 정정] 종전 문구 "값 4 단독 체크" 는 **정정 전** 기준이라 지금 코드를 읽는
+ *   사람이 현행도 4를 본다고 오해하기 쉬워 심볼 기준으로 고쳐 적음. 상세:
+ *   doc/표준노드링크_시설물_도로_코드_분석.html
 */
 enum eLinkRoadType : uint8
 {
@@ -386,7 +389,13 @@ typedef struct sAltitudeScoreConfig
 																			//   두었으나, 코드표에 0 이 정의돼 있는데 DB 에만 안 넣어
 																			//   일관성이 없었다. query.sql [charge_insert] 가 빈 문자열을
 																			//   0 으로 변환하므로 C++ 쪽은 빈 값으로 두면 된다.
-																			//   결과적으로 이 컬럼에 NULL 은 존재하지 않는다
+																			//   결과적으로 이 엔진을 거친 INSERT 에는 NULL 이 존재하지 않는다
+																			//   [2026-09-17 최정우 보완 — 실서버 배포 시 확인할 것] 위 문장은 **[charge_insert]
+																			//   를 타는 경로에 한해서만** 참이다. DB 컬럼에는 DEFAULT 도 NOT NULL 도 없어서
+																			//   (실측 2026-09-17), 수작업 보정·연계 앱·데이터 이관처럼 그 SQL 을 안 타는 INSERT 가
+																			//   컬럼을 생략하면 NULL 이 된다(실측 63행 중 60행 NULL, 그중 CHARGE_YN='N' 인데
+																			//   사유 없는 행 18건). 배포 시 **doc/deploy_2026-09-17.sql** 로 DEFAULT 0 을 걸 것 —
+																			//   안내는 query.sql 최상단 '실서버 배포 시 반드시 함께 적용할 DB 변경' 섹션에도 있다
 #define NCR_NODE_STEP_GAP_ANCHOR_LOST	1									// NODE_STEP SKIP구간 브릿지(케이스3) 시 직전 확정위치 소실
 																			//   (세션갭 30초 초과 리셋 등)로 dist_m 은 실측 누적값,
 																			//   speed_kmh/stay_seconds 는 산출 근거 없어 0으로 기록
@@ -410,7 +419,7 @@ typedef struct sAltitudeScoreConfig
 #define NCR_EXEMPT_NO_TRIP_END			52									// EXEMPT(면제도로) — 종료신호(TRIP_EVENT=END) 없이 같은
 																							//   차량의 다음 운행이 시작돼 강제마감(N/4). 62 의 면제도로판
 																							//   (2026-09-16 최정우 추가)
-#define NCR_TTL_FORCED_CLOSE			61									// 공통(NODE_STEP/OPEN/CLOSED/SPEED/PARKING) — 종료 미확정
+#define NCR_TTL_FORCED_CLOSE			61									// 공통(NODE_STEP/OPEN/CLOSED/PARKING) — 종료 미확정
 																			//   강제마감(N/3), [trip_abend] SQL 사후전환 포함.
 																			//   [2026-09-15 적용범위 확대] 상수명은 TTL 이지만 실제로는
 																			//   FlushOpenRunsAsAbnormalEnd() 등 공용이다 —
@@ -420,7 +429,7 @@ typedef struct sAltitudeScoreConfig
 																			//   [2026-09-16 분리] 종전에 여기 포함돼 있던 "종료신호 없는
 																			//   트립 전환"은 62 로 떼어냈다 — 수집서버 종료신호 이상을
 																			//   정산·조사 측에서 식별할 수 있어야 한다는 요구
-#define NCR_NO_TRIP_END_FORCED_CLOSE	62									// 공통(NODE_STEP/OPEN/CLOSED/SPEED/PARKING) — 종료신호
+#define NCR_NO_TRIP_END_FORCED_CLOSE	62									// 공통(NODE_STEP/OPEN/CLOSED/PARKING) — 종료신호
 																			//   (TRIP_EVENT=END)를 못 받은 채 같은 차량(DEVICE_KEY)의
 																			//   다음 운행이 시작돼, 이전 운행의 열린 구간을 강제마감(N/3).
 																			//   세션 키가 DEVICE_KEY 라 TTL 은 이 경우를 못 잡는다 —
@@ -428,6 +437,10 @@ typedef struct sAltitudeScoreConfig
 																			//   마감 주체는 ProcessRawLog() 의 트립전환 분기
 																			//   (ResetTripSessionForBegin 직전 호출이 핵심)
 																			//   (2026-09-16 최정우 추가)
+	//   [2026-09-17 최정우 정정] 61/62 의 적용 유형 목록에서 **SPEED 를 제외**했다 —
+	//   AppendExpiredSpeedZoneCharge() 는 2026-09-06 정책 변경 이후 SPEED 행을 만들지 않고
+	//   일반도로 미러(Y/0, non_charge_reason=0) 1건만 적재하므로 61/62 가 붙을 행이 없다.
+	//   구간단속 고유 사유는 31~33(정상 진출 경로에서만 사용)이다.
 
 /**
  * @enum eCoordinateType

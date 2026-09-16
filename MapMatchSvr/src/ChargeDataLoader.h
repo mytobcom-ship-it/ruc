@@ -79,7 +79,8 @@ typedef unordered_map<uint64, vector<GATE_INFO>>	mapGateInfo;
 typedef struct sZoneInfo
 {
 	char							szRoadID[20+1];							// 구역 ID (base_roadlink.road_id)
-	char							szRoadKind[2+1];						// 유형 0~5(일반/개방/폐쇄/구간단속/주정차/비과금도로) (2026-08-13 최정우 수정 — 5 추가)
+	char							szRoadKind[2+1];						// 유형 0~5(일반/개방/폐쇄/구간단속/주정차/면제도로) (2026-08-13 최정우 수정 — 5 추가,
+																				//   2026-09-17 최정우 — 옛 이름 "비과금도로"를 현행 "면제도로"로 통일)
 	char							szRoadNm[100+1];						// 구역명 — 개방형 zone_name 으로 사용
 	char							szGeomType[4+1];						// LINE/POLY
 	double							dfSpeedLimitKmh;						// 제한속도(구간단속용, 해당없음=0)

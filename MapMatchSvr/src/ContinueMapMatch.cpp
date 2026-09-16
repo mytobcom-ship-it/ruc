@@ -656,7 +656,7 @@ void CContinueMapMatch::TryNearbyRoadNameCandidate(SGMT_MATCH_INPUT& stSgmtMatch
 	vtNearGridIDList.push_back(dwGridID);
 	// [버그 수정, 2026-09-15 최정우 — 소스 재검토] GetNearGridID() 에 **도 단위** 좌표를 넘긴다.
 	//   종전에는 stSgmtMatchInput 을 그대로 넘겼는데, StartMapMatch() 가 진입부에서 stPoint 를
-	//   이미 내부 스케일(×360000)로 바꿔둔 상태다(바로 위 625줄이 /360000 지역변수를 따로 만드는
+	//   이미 내부 스케일(×360000)로 바꿔둔 상태다(바로 위 dfRawX/dfRawY 가 /360000 지역변수를 따로 만드는
 	//   이유가 그것). GetNearGridID→GridBorderDistance 는 doc 주석대로 도 단위를 전제로
 	//   HaversineMetersDeg 를 쓰므로, 스케일 값이 들어가면 경계거리가 미터가 아닌 수천 km 로
 	//   나온다(실측: 판교 기준 66.8~267.2m 가 나와야 할 자리에 4,703~11,866km). 그 값이
@@ -803,12 +803,12 @@ bool CContinueMapMatch::GetLinkDepthInfo(set<uint64> *psetSearchHistoryLinkList,
 			stDepthLinkInfoData.dwStartSgmtOffset = pstLinkInfo->dwSgmtOffset;
 			stDepthLinkInfoData.dwEndSgmtOffset = stDepthLinkInfoData.dwStartSgmtOffset + pstLinkInfo->wSgmtCount;
 
-			// 이 링크(qwOutLinkID)는 qwErasedLinkID(확장 중인 직전 링크, 704줄에서 erase 전에
+			// 이 링크(qwOutLinkID)는 qwErasedLinkID(확장 중인 직전 링크, erase 직전에
 			//   미리 저장해둔 값)를 거쳐 도달함 — 경로 역추적용 기록. (2026-08-20 최정우 추가)
-			// [버그 수정, 2026-09-10 최정우] 원래 이 자리는 it->qwLinkID 를 썼는데 틀렸다 — 707줄
+			// [버그 수정, 2026-09-10 최정우] 원래 이 자리는 it->qwLinkID 를 썼는데 틀렸다 — 위
 			//   erase(it++) 가 이미 it 를 "다음" 원소(리스트에 1개뿐이면 end())로 전진시킨 뒤라,
 			//   여기서 it->qwLinkID 는 "확장 중인 직전 링크"가 아니라 무관한 값(심한 경우 list::end()
-			//   역참조, 정의되지 않은 동작)이다. 바로 아래 BridgeNearbyLinkStarts() 호출(773줄)에는
+			//   역참조, 정의되지 않은 동작)이다. 아래 BridgeNearbyLinkStarts() 호출부에는
 			//   이 문제를 피하려고 이미 qwErasedLinkID 를 쓰고 있었는데 정작 여기는 빠뜨렸던 것 —
 			//   최소 재현(list 1개 원소 + erase(it++) 후 역참조)으로 값이 실제로 어긋남을 실측 확인.
 			//   부모 링크가 틀리면 ReconstructPath() 가 만드는 경유 경로 자체가 오염되어 게이트/구역

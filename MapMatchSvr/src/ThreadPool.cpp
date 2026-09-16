@@ -116,7 +116,7 @@ CThreadPool::~CThreadPool()
 {
 	list<ThreadPoolContext>::iterator it;
 
-	// [버그 수정, 2026-09-10 최정우] 생성자(108줄)가 m_bDetatch(기본값 true, 실 운영 설정 그대로)
+	// [버그 수정, 2026-09-10 최정우] start() 가 m_bDetatch(기본값 true, 실 운영 설정 그대로)
 	// 이면 각 워커를 즉시 detach() 시키는데, 여기서는 그 여부를 안 가리고 매번 join() 을 불렀다 —
 	// detach 된 스레드를 join() 하는 건 POSIX 정의되지 않은 동작이다. 실측: pthread_join() 이
 	// EINVAL 을 반환함을 확인(이 glibc 에서는 크래시로는 안 이어졌으나, libc 버전·스레드ID 재사용

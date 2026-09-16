@@ -1,6 +1,80 @@
 ﻿-- MapMatchSvr query.sql (PostgreSQL / libpq: $1, $2, ...)
 -- 근거: doc/RUC_위치검증서버_테이블설계서_v1.3.docx §2.1, §3.1
 --
+--<<<DBCHG-20260917-BEGIN>>>------------------------------------------------------
+--  [일회성 안내 · 실서버 적용 후 삭제] 2026-09-17 배포 동반 DB 변경
+--
+--  ※ 실서버에 아래 DB 변경을 적용한 뒤에는 이 블록(위 BEGIN 줄부터 아래 END 줄까지)
+--    전체를 삭제해도 된다. 일회성 작업 안내이고, 변경 이력은
+--    doc/deploy_2026-09-17.sql 과 git 이력에 영구 보관된다.
+--
+--  무엇을 왜 바꾸나
+--    ruc.prim_chargehand.non_charge_reason 에 **DEFAULT 0 을 설정**한다(컬럼 추가·타입
+--    변경·데이터 변경은 없다). 코드표상 0=정상 과금인데 DB 에는 DEFAULT 도 NOT NULL 도
+--    없어서, 값을 보장하는 주체가 아래 [charge_insert] 의 `ELSE 0` 하나뿐이었다. 그 SQL 을
+--    타지 않는 INSERT(수작업 보정·연계 앱·데이터 이관)가 컬럼을 생략하면 NULL 이 된다.
+--    실측(2026-09-17 로컬 63행): non_charge_reason IS NULL 60행, 그중 CHARGE_YN='N' 인데
+--    사유가 없는 행 18건(심사 큐에 올랐는데 사유 추적 불가).
+--    [charge_insert] 는 $31 을 항상 명시하므로 **엔진 동작은 조금도 바뀌지 않는다.**
+--
+--  적용 방법 — 둘 중 아무거나 (결과 동일)
+--    (A) 스크립트 파일이 있으면
+--        PGPASSWORD=... psql -h <실서버> -U <user> -d ruc -v ON_ERROR_STOP=1 \
+--            -f doc/deploy_2026-09-17.sql
+--    (B) 파일이 없거나 전달이 안 됐으면 — 아래 SQL 을 psql 에 그대로 붙여 넣는다
+--  ── SQL 시작 ────────────────────────────────────────────────────────────────
+--  BEGIN;
+--
+--  -- (1) 사전 점검 — 컬럼이 없으면 중단(deploy_2026-09-15.sql 가 먼저 적용돼야 한다)
+--  DO $chk$
+--  BEGIN
+--      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+--                      WHERE table_schema='ruc' AND table_name='prim_chargehand'
+--                        AND column_name='non_charge_reason') THEN
+--          RAISE EXCEPTION '[중단] ruc.prim_chargehand.non_charge_reason 컬럼이 없음';
+--      END IF;
+--  END $chk$;
+--
+--  -- (2) 기본값 0 설정 — 재실행해도 안전(멱등). 기존 행 값은 건드리지 않는다
+--  ALTER TABLE ruc.prim_chargehand
+--      ALTER COLUMN non_charge_reason SET DEFAULT 0;
+--
+--  -- (3) 컬럼 코멘트 — 코드 대역 체계를 DB 에서도 알 수 있게
+--  COMMENT ON COLUMN ruc.prim_chargehand.non_charge_reason IS
+--      '과금 제외 사유 코드 — 0=정상 과금. 도로유형별 10단위 대역: '
+--      '1~10 일반도로 / 11~20 개방식 / 21~30 폐쇄식 / 31~40 구간단속 / '
+--      '41~50 주정차 / 51~60 면제도로 / 61~70 공통(강제마감). '
+--      '판정(charge_yn/charge_status)에는 영향을 주지 않는 부가 설명 컬럼이다. '
+--      '값 정의는 MapMatchSvr/src/DataDefine.h 의 NCR_* 상수가 정본.';
+--
+--  COMMIT;
+--  ── SQL 끝 ──────────────────────────────────────────────────────────────────
+--
+--  적용됐는지 확인 (기대값: 기본값=0)
+--    SELECT column_name, data_type, is_nullable, COALESCE(column_default,'(없음)')
+--      FROM information_schema.columns
+--     WHERE table_schema='ruc' AND table_name='prim_chargehand'
+--       AND column_name='non_charge_reason';
+--
+--  되돌리려면
+--    ALTER TABLE ruc.prim_chargehand ALTER COLUMN non_charge_reason DROP DEFAULT;
+--
+--  NOT NULL 승격은 **전체 재매칭 뒤에** 따로 한다 — 기존 NULL 행이 남아 있으면 실패하고,
+--  그 행들(특히 CHARGE_YN='N' 인데 사유가 없는 건)은 사후에 사유를 판정할 수 없어 일괄
+--  백필하면 틀린 근거를 심게 된다. 재매칭하면 엔진이 정확한 사유를 다시 붙여 준다.
+--    SELECT COUNT(*) FROM ruc.prim_chargehand WHERE non_charge_reason IS NULL;  -- 0 이어야 함
+--    ALTER TABLE ruc.prim_chargehand ALTER COLUMN non_charge_reason SET NOT NULL;
+--
+--  ── 이 블록을 지우는 법 (적용 완료 후) ──────────────────────────────────────
+--    · 에디터에서 위 BEGIN 마커 줄부터 아래 END 마커 줄까지 선택해 삭제
+--    · 또는 명령 한 줄(저장소 루트에서):
+--        sed -i '/DBCHG-2026[0]917-BEGIN/,/DBCHG-2026[0]917-END/d' MapMatchSvr/bin/query.sql
+--      (대괄호는 정규식 문자 클래스다 — 이 안내 줄이 마커에 스스로 매치돼 삭제 범위가
+--       일찍 끊기는 것을 막으려고 일부러 쪼개 적었다. 실행하면 마커에 정상 매치된다)
+--    · 지워도 엔진 동작에는 아무 영향이 없다(전부 주석이다). 이력은
+--      doc/deploy_2026-09-17.sql 과 git 이력에 남는다.
+--<<<DBCHG-20260917-END>>>--------------------------------------------------------
+--
 -- TRIP_EVENT   : 0=START, 1=NONE, 2=END
 -- DRIVE_STATUS : 0=ON_ROAD, 1=IDLE, 2=PARKED, 3=TUNNELING, 4=OFF_ROAD(비과금 구역)
 -- MATCH_STATUS : 0=PENDING, 1=MATCHED, 2=PROCESSING, 3=SKIP, 4=ERROR
@@ -13,9 +87,12 @@
 --                           1회 실행, 결과를 인메모리 캐시 (2026-08-12 최정우 추가)
 --   4) zone_select         : BASE_ROADLINK 전량 조회 — CChargeDataLoader::LoadZones() 가 gate_select 와
 --                           동일 주기로 실행, 결과를 인메모리 캐시(road_id 키) (2026-08-12 최정우 추가)
---   5) charge_insert      : 개방형·폐쇄형·구간단속·주정차 4유형 공용 bulk INSERT —
---                           CRawLogWorker::BulkInsertCharges() 가 배치 종료 시(rawgps_update 성공 후) 실행
---                           (2026-08-13 최정우 수정 — 주정차 구현으로 4유형 전부 완료)
+--   5) charge_insert      : 6개 CHARGE_TYPE(0 일반도로·1 개방식·2 폐쇄식·3 구간단속·4 주정차·
+--                           5 면제도로) 공용 bulk INSERT — CRawLogWorker::BulkInsertCharges() 가
+--                           배치 종료 시(rawgps_update 성공 후) 실행
+--                           (2026-08-13 최정우 수정 — 주정차 구현으로 게이트형 4유형 완료,
+--                            2026-09-17 최정우 정정 — 그 뒤 추가된 일반도로(0)·면제도로(5)까지
+--                            반영해 "4유형" 표기를 현행 6유형으로 고침)
 --
 -- DRIVE_STATUS=4 : 맵매칭·결과 저장은 0/2/3 과 동일, 과금 판별·CHARGE_TARGET 적재만 생략 (2026-07-10 최정우 수정)
 --
@@ -302,7 +379,8 @@ SELECT MIN(FROM_MIN) FROM RUC.BASE_PARKING_FINE;
 
 -- ── 5. 과금 판정 결과 bulk INSERT ─────────────────────────────────────
 -- [charge_insert] PRIM_CHARGEHAND — CRawLogWorker::BulkInsertCharges() 가 실행 (2026-08-12 최정우 추가)
--- 개방형·폐쇄형·구간단속·주정차 4유형 공용 — 폐쇄형은 DIST_M/ENTRY_TOLLGATE_ID/EXIT_TOLLGATE_ID 도 채움,
+-- 6개 CHARGE_TYPE(0~5) 공용 — 폐쇄형은 DIST_M/ENTRY_TOLLGATE_ID/EXIT_TOLLGATE_ID 도 채움,
+--   (2026-09-17 최정우 정정 — 종전 "4유형 공용" 표기는 일반도로·면제도로 추가 전 서술)
 -- 주정차는 DIST_M(누적거리)/SPEED_KMH(평균속도) 채우고 CHARGE_YN='Y'/CHARGE_STATUS='0' 고정 (2026-08-13 최정우 수정)
 -- 2026-08-20 최정우 수정 — FROM_ID/TO_ID/FROM_LAT/FROM_LON/TO_LAT/TO_LON 6개 컬럼 NOT NULL 해제
 -- (사용자 지시 — 폐쇄형/구간단속 미완료(AUDIT) 건은 출구 쪽 아는 값이 없는데 억지로 ''/0 을 넣던
@@ -319,7 +397,12 @@ SELECT MIN(FROM_MIN) FROM RUC.BASE_PARKING_FINE;
 --       "혼동해서 통일하지 말 것" 주석 참고). 조회측이 구간 시간범위를 구할 때 일반도로는
 --       (OCCUR_DT-STAY_SECONDS ~ OCCUR_DT), 그 외는 (OCCUR_DT ~ OCCUR_DT+STAY_SECONDS) 다.
 --       (2026-09-15 최정우 추가 — DB 컬럼 코멘트에도 동일 내용 반영)
---   $21=ENTRY_TOLLGATE_ID[](폐쇄형 전용, 개방형은 빈값) $22=EXIT_TOLLGATE_ID[](폐쇄형 전용) $23=REG_DT[] $24=UPD_DT[](REG_DT와 항상 동일)
+--   $21=ENTRY_TOLLGATE_ID[](폐쇄형 전용, 개방형은 빈값) $22=EXIT_TOLLGATE_ID[](폐쇄형 전용) $23=REG_DT[] $24=UPD_DT[]
+--   [2026-09-17 최정우 정정] 종전 "$24=UPD_DT[](REG_DT와 항상 동일)" 는 사실이 아니다 —
+--   게이트형(개방·폐쇄·구간단속)·주정차는 REG_DT 와 같은 값이지만, 일반도로·면제도로
+--   (BuildNodeStepRow/BuildNodeStepRowFromLinkRange/BuildExemptRow)는 OCCUR_DT(진출 시각)를
+--   넣는다. 트립 정상종료 시 [trip_end] 가 다시 GPS 종료시각으로 덮는다. 이 컬럼은 어떤
+--   조건절에도 쓰이지 않아 과금 판정에는 영향이 없다(판정을 가르는 것은 TRIP_END_DT 다)
 --   $25=CHARGE_YN[](빈값=DB기본 Y, 이상 시 "N" — 폐쇄형·구간단속 게이트 이상, 개방형 트립시작 run
 --     게이트 미통과, TTL flush 등)
 --   $26=CHARGE_STATUS[](빈값=DB기본 0. 이상 시 "3"=AUDIT(심사대상)이 기본이고, 면제도로(CHARGE_TYPE=5)
@@ -403,8 +486,20 @@ ON CONFLICT (trip_id, device_key, trip_seq) DO NOTHING;
 [trip_end]
 UPDATE RUC.PRIM_CHARGEHAND AS T
 SET
-	TRIP_END_DT = V.TRIP_END_DT,
-	UPD_DT = V.UPD_DT
+	-- [보강, 2026-09-17 최정우, 사용자 지시] 빈 문자열 방어.
+	--   TRIP_END_DT 는 NULLIF 로 NULL 이 되게 한다 — 이 컬럼은 nullable 이고, 무엇보다
+	--   [trip_abend] 의 판정 조건이 `TRIP_END_DT IS NULL` 이다. 빈 문자열('')은 NULL 이
+	--   아니므로 그대로 저장되면 그 행이 [trip_abend] 대상에서 **영구히 빠져**,
+	--   확정 못 한 채 끝난 트립이 N/3(심사대상)으로 강등되지 않고 Y/0(정상 과금)으로 남는다.
+	--   UPD_DT 는 NOT NULL 이라 NULL 을 못 넣으므로 값을 메워야 한다. 이때 **TRIP_END_DT 를
+	--   먼저 쓴다** — 이 UPDATE 에 넘어오는 두 값은 C++ 쪽에서 모두 같은 GPS 시각
+	--   (FormatDateTime14(stRawLogInfo.dtGPS))으로 만들어지므로(RawLogWorker.cpp
+	--   ProcessRawLog 트립종료 블록), 같은 값으로 맞추는 것이 원래 의미에 부합한다.
+	--   둘 다 비어 있을 때만 최후 수단으로 현재 시각을 쓴다
+	--   (2026-09-17 최정우 보완, 사용자 지시).
+	TRIP_END_DT = NULLIF(V.TRIP_END_DT, ''),
+	UPD_DT = COALESCE(NULLIF(V.UPD_DT, ''), NULLIF(V.TRIP_END_DT, ''),
+	                  TO_CHAR(NOW(), 'YYYYMMDDHH24MISS'))
 FROM (
 	SELECT DISTINCT ON (TRIP_ID) TRIP_ID, TRIP_END_DT, UPD_DT
 	FROM UNNEST($1::TEXT[], $2::TEXT[], $3::TEXT[]) AS U(TRIP_ID, TRIP_END_DT, UPD_DT)
@@ -415,7 +510,8 @@ WHERE T.TRIP_ID = V.TRIP_ID
 
 -- ── 7. 세션 TTL 만료(비정상 종료) 시 미확정 레코드 마감(5유형 공용) ─────────
 -- [trip_abend] CRawLogWorker::UpdateAbnormalTripEnd() 가 ExpireTtlSessions() 안에서
--- 실행(2026-08-13 최정우 추가, 2026-08-13 수정 — CHARGE_TYPE 제한 제거해 4유형 전부로 확대).
+-- 실행(2026-08-13 최정우 추가, 2026-08-13 수정 — CHARGE_TYPE 제한 제거해 전 유형으로 확대).
+-- (2026-09-15 부터 ExpireTtlSessions() 외에 트립종료 잔여tick·트립전환·서버종료 경로에서도 실행됨)
 -- "그 trip_id로 마지막 GPS 이후 TTL 넘게 신호가 없었는데(=트립이 정상 종료됐는지 끝내 확인 못함)
 -- 이미 INSERT된 레코드가 아직 TRIP_END_DT 를 못 받은 상태"를 charge_type 무관하게 "확정 데이터
 -- 아님"으로 표시(사용자 지시, 2026-08-13). CHARGE_STATUS=3(AUDIT=심사대상) — 완전 배제(SKIP=4)가
@@ -423,11 +519,15 @@ WHERE T.TRIP_ID = V.TRIP_ID
 -- 2026-08-14 최정우 수정 — CHARGE_TYPE=5(면제도로)는 예외: 애초에 과금 대상이 아니라 재확인이
 -- 필요없다는 설계 의도로 CHARGE_STATUS=4(SKIP) 고정이 맞음(사용자 확인) — 이 UPDATE가 무조건
 -- 3으로 덮어쓰면 그 의도가 깨지므로, 면제도로만 4를 유지하도록 분기.
--- TRIP_END_DT IS NULL 조건으로 이미 [trip_end] 로 정상 마감된 레코드는 건드리지 않음. 주정차의
--- "지금 막 열려있는 세션"은 이 UPDATE 가 아니라 AppendExpiredParkingCharge() 가 별도로 처음부터
--- N/3 로 INSERT하므로(이미 TRIP_END_DT 채워진 채로 들어감) 이 UPDATE 와 안 겹침 — 주정차 중
--- "이전에 이미 정상 종료(Y/0)됐지만 그 트립 자체가 아직 안 끝난" 레코드만 이 UPDATE 대상이 됨
--- (다른 유형과 동일 취급).
+-- TRIP_END_DT IS NULL 조건으로 이미 [trip_end] 로 정상 마감된 레코드는 건드리지 않음.
+-- [2026-09-17 최정우 정정] 종전 주석은 "주정차의 지금 막 열려있는 세션은 AppendExpiredParkingCharge()
+-- 가 이미 TRIP_END_DT 채워진 채로 INSERT하므로 이 UPDATE 와 안 겹친다"고 했으나 **사실이 아니다** —
+-- BuildParkRow() 는 TRIP_END_DT 를 채우지 않는다(소스 확인). INSERT 시점에 채우는 곳은
+-- AppendExpiredClosedRoadCharge() 와 AppendExpiredSpeedZoneCharge() 의 NODE_STEP 미러 두 곳뿐이다.
+-- 따라서 주정차·면제·일반도로·개방형의 강제마감 행도 이 UPDATE 대상이 되며, 그게 의도된 동작이다
+-- (이 UPDATE 가 TRIP_END_DT 와 판정·사유를 함께 확정해 준다). 값이 이미 N/3+61 이라 결과는 같다.
+-- 주의: 트립전환 강제마감(non_charge_reason=62/52)은 이 UPDATE 가 아니라 [trip_end] 경로로 처리되어
+-- 61/51 로 덮이지 않는다 — run() 이 그 행들을 UpdateTripEndDt() 로 보내기 때문이다.
 -- NON_CHARGE_REASON — 2026-09-11 최정우 추가. CHARGE_STATUS 와 동일 근거로 면제도로(5)만 51
 -- (NCR_EXEMPT_TTL_FORCED_CLOSE), 나머지는 61(NCR_TTL_FORCED_CLOSE) 로 무조건 덮어쓴다 — 이 UPDATE가
 -- 손대는 행은 전부 "트립이 끝났는지 끝내 확인 못한 TTL 강제종료" 사유 하나뿐이라(C++ 쪽에서 미리
@@ -437,11 +537,19 @@ WHERE T.TRIP_ID = V.TRIP_ID
 [trip_abend]
 UPDATE RUC.PRIM_CHARGEHAND AS T
 SET
-	TRIP_END_DT = V.TRIP_END_DT,
+	-- [보강, 2026-09-17 최정우, 사용자 지시] 빈 문자열 방어 — [trip_end] 와 동일 근거.
+	--   여기서 ''이 들어가면 그 행은 다음 [trip_abend] 의 `TRIP_END_DT IS NULL` 에 다시는
+	--   안 걸린다(이 UPDATE 자신의 WHERE 조건이기도 하다).
+	TRIP_END_DT = NULLIF(V.TRIP_END_DT, ''),
 	CHARGE_YN = 'N',
 	CHARGE_STATUS = CASE WHEN T.CHARGE_TYPE = 5 THEN 4 ELSE 3 END,
 	NON_CHARGE_REASON = CASE WHEN T.CHARGE_TYPE = 5 THEN 51 ELSE 61 END,
-	UPD_DT = V.UPD_DT
+	-- [2026-09-17 최정우] 여기는 [trip_end] 와 달리 TRIP_END_DT 를 폴백으로 쓰지 않는다 —
+	--   이 UPDATE 의 두 값은 성격이 다르기 때문이다(RawLogWorker.cpp
+	--   FlushOpenRunsAsAbnormalEnd): TRIP_END_DT 는 그 트립이 마지막으로 확인된 **GPS 시각**,
+	--   UPD_DT 는 이 마감을 실행한 **벽시계 시각**이다. 빈 값일 때 GPS 시각을 끌어다 쓰면
+	--   "언제 마감 처리했나"라는 원래 의미가 사라지므로, 현재 시각으로 메우는 것이 맞다.
+	UPD_DT = COALESCE(NULLIF(V.UPD_DT, ''), TO_CHAR(NOW(), 'YYYYMMDDHH24MISS'))
 FROM UNNEST(
 	$1::TEXT[], $2::TEXT[], $3::TEXT[]
 ) AS V(TRIP_ID, TRIP_END_DT, UPD_DT)

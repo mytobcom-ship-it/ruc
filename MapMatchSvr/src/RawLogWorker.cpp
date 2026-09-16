@@ -125,7 +125,10 @@ static PGconn* AcquirePoolConnection(CPostgrePool *pcPool, int nMaxAttempt, int 
 */
 CRawLogWorker::CRawLogWorker()
 {
-	memset(reinterpret_cast<void *>(&m_stConfig), 0, sizeof(m_stConfig));
+	// [버그 수정, 2026-09-17 최정우] 여기 있던 memset(&m_stConfig, 0, sizeof(m_stConfig)) 를
+	//   제거했다 — m_stConfig 에는 std::string 이 6개 있어 memset 이 내부 포인터를 파괴했고,
+	//   SetConfig() 의 대입에서 **빈 문자열을 받는 멤버**를 만나면 세그폴트했다(재현 확인).
+	//   초기화는 멤버 선언부의 `{}` 값 초기화가 대신한다 — 상세 근거는 RawLogWorker.h 참고.
 }
 
 /**
@@ -582,17 +585,20 @@ int CRawLogWorker::ExpireTtlSessions(int nThreadId, int nTtlSec, PGconn *pcConn,
 }
 
 /**
- * @brief TTL 만료 세션 중 아직 열려있는 주정차 세션을 위반 1건으로 마감 (2026-08-13 최정우 추가)
- * @param[in] nThreadId 로그용 워커 ID
- * @param[in] strDeviceKey 세션 맵 키(=DEVICE_KEY)
- * @param[in] stSession 만료 직전 세션(제거 전 스냅샷)
- * @param[out] pvtOut 위반 확정 시 CHARGE_INSERT_ROW 1건 추가
- * @remark stRawLogInfo(현재 GPS 틱)가 없는 컨텍스트라 ProcessParkingCharge() 종료 블록과 로직은
- *   같지만 필드 출처가 다름(트립종료시각 대신 dtLastSeen, occur_dt는 세션의 dtParkEntryTime 그대로).
- *   실제 TRIP_EVENT=2 를 받은 적이 없어 [trip_end] UPDATE 가 이 trip_id 를 앞으로도 채워줄 일이
- *   없으므로, trip_end_dt 는 여기서 직접 dtLastSeen(마지막 확인 시각)으로 채운다. 확정 데이터가
- *   아님을 표시하기 위해 charge_yn='N'/charge_status='4'(SKIP) 명시 — 정상 이탈/트립종료 경로의
- *   'Y'/'0' 과 다름(사용자 지시, 2026-08-13).
+ * @brief 주정차 구역 경계 통과 시각 보간 — 폴리곤 경계까지의 거리 비율로 실제 통과 시각을 추정
+ *   (사용자 지시, 2026-08-24 최정우 추가)
+ * @param[in] pstZone 대상 주정차 구역(폴리곤)
+ * @param[in] dfInX/dfInY/dtIn 폴리곤 **내부**로 판정된 점의 좌표·시각
+ * @param[in] dfOutX/dfOutY/dtOut 폴리곤 **외부**로 판정된 점의 좌표·시각
+ * @return 추정된 경계 통과 시각. 보간 근거가 없으면 dtIn 을 그대로 반환(무보정)
+ * @remark 등속 직선 이동을 가정하고, 두 점의 경계까지 거리 비율로 나눠 통과 시각을 추정한다.
+ *   dfInX/Y 가 실제로는 폴리곤 내부가 아니거나(버퍼만으로 판정됐거나) dfOutX/Y 가 이미 내부이면
+ *   근거가 없어 dtIn 을 그대로 돌려준다. dtOut 이 dtIn 보다 이전/이후 어느 쪽이든 무관 —
+ *   진입(현재=In, 직전틱=Out, dtOut<dtIn)과 이탈(마지막 재실=In, 첫 이탈틱=Out, dtOut>dtIn)
+ *   양쪽에 동일하게 쓴다.
+ *   게이트라는 "점"까지의 직선거리로 재는 폐쇄형/구간단속용은 InterpolateGateCrossingTime() 이다.
+ *   [2026-09-17 최정우 정정] 이 자리에 AppendExpiredParkingCharge() 설명이 잘못 붙어 있던 것을
+ *   그 함수 위로 옮기고, 이 함수 자신의 설명을 제자리에 기재했다(동작 변화 없음).
 */
 time_t CRawLogWorker::InterpolateZoneCrossingTime(PZONE_INFO pstZone,
 		double dfInX, double dfInY, time_t dtIn, double dfOutX, double dfOutY, time_t dtOut)
@@ -715,6 +721,31 @@ bool CRawLogWorker::BuildParkRow(const PARK_RUN_SESSION& stRun, const string& st
 	return (nMinSec <= 0) || (dfDwellSec >= static_cast<double>(nMinSec));
 }
 
+/**
+ * @brief 강제마감 시점에 아직 열려있는 주정차 세션을 위반 1건으로 마감 (2026-08-13 최정우 추가)
+ * @param[in] nThreadId 로그용 워커 ID
+ * @param[in] strDeviceKey 세션 맵 키(=DEVICE_KEY)
+ * @param[in] stSession 마감 직전 세션(제거 전 스냅샷)
+ * @param[out] pvtOut 위반 확정 시 CHARGE_INSERT_ROW 1건 추가(체류가 base_parking_fine 최소시간
+ *   미만이면 추가하지 않는다 — BuildParkRow() 반환값)
+ * @param[in] bNoTripEnd true=종료신호(TRIP_EVENT=END) 없이 다음 운행이 시작돼 마감하는 경로 —
+ *   non_charge_reason 62. false=TTL·잔여tick·트립종료(61) (2026-09-16 최정우 추가)
+ * @remark stRawLogInfo(현재 GPS 틱)가 없는 컨텍스트라 ProcessParkingCharge() 종료 블록과 로직은
+ *   같지만 필드 출처가 다름(트립종료시각 대신 dtLastSeen, occur_dt는 세션의 진입시각 그대로).
+ *   실제 TRIP_EVENT=2 를 받은 적이 없어 [trip_end] UPDATE 가 이 trip_id 를 앞으로도 채워줄 일이
+ *   없으므로, trip_end_dt 는 **같은 배치의 [trip_abend] UPDATE 가 채운다**(이 함수도 BuildParkRow()
+ *   도 TRIP_END_DT 를 직접 채우지 않는다 — 실제로 INSERT 시점에 채우는 건 폐쇄형 강제마감과
+ *   구간단속 NODE_STEP 미러 두 곳뿐이다. 2026-09-17 최정우 정정: 종전 주석은 "여기서 직접
+ *   dtLastSeen 으로 채운다"고 했으나 그런 코드가 없다).
+ *   확정 데이터가 아님을 표시하기 위해 charge_yn='N'/charge_status='3'(AUDIT) 명시 — 정상 이탈/
+ *   트립종료 경로의 'Y'/'0' 과 다르다.
+ *   [2026-09-17 최정우 정정] 종전 주석은 이 블록이 InterpolateZoneCrossingTime() 위에 잘못 붙어
+ *   있었고 charge_status 를 '4'(SKIP)로 적었으나, 실제 코드는 도입 시점부터 'N'/'3'(AUDIT)이다
+ *   (SKIP(4)를 쓰는 유형은 면제도로뿐). 주석만 사실에 맞춰 정정 — 동작 변화 없음.
+ *   [2026-09-15 적용범위 확대] 함수명은 "Expired" 지만 TTL 만료 전용이 아니다 —
+ *   FlushOpenRunsAsAbnormalEnd() 를 통해 트립종료 이후 잔여 tick·종료신호 없는 트립 전환·
+ *   서버 종료 경로에서도 호출된다.
+*/
 void CRawLogWorker::AppendExpiredParkingCharge(int nThreadId, const string& strDeviceKey,
 		const VEHICLE_TRIP_SESSION& stSession, vector<CHARGE_INSERT_ROW> *pvtOut, bool bNoTripEnd)
 {
@@ -816,21 +847,23 @@ void CRawLogWorker::AppendStaleParkingCharge(int nThreadId, const string& strDev
 }
 
 /**
- * @brief TTL 만료 세션 중 아직 열려있는 면제도로 세션을 N/4 로 마감 (2026-08-13 최초 추가,
- *   2026-08-14 세 차례 재설계 — "모든 미등록 링크" 방식 폐기하고 zone 기반 판정으로 복귀,
- *   charge_type/from_id/to_id도 한때 "0"+링크ID로 바꿨다가 사용자 재지시로 "5"+zone road_id로 원복)
- * @param[in] nThreadId 로그용 워커 ID
- * @param[in] strDeviceKey 세션 맵 키(=DEVICE_KEY)
- * @param[in] stSession 만료 직전 세션(제거 전 스냅샷)
- * @param[out] pvtOut 세션이 진행 중이었으면 CHARGE_INSERT_ROW 1건 추가
- * @remark 정상 이탈·트립종료는 ProcessExemptZoneCharge() 가 그 자리에서 Y/0 으로 기록하므로,
- *   이 함수는 그 신호(구역 이탈/트립종료)가 영영 안 오고 GPS 자체가 끊긴 경우(TTL 만료)만
- *   대신 마감해주는 보완 경로 — 여기서는 N/4 로 INSERT 한다. 다른 유형이 TTL flush 를 C++ 에서
- *   직접 N/3 으로 세팅하는 것과 동일한 구조이며, 면제도로만 AUDIT(3) 이 아니라 SKIP(4) 를 쓴다
- *   (과금 대상이 아니라 사람이 재확인할 필요가 없다는 설계 의도, [trip_abend] 의 CHARGE_TYPE=5
- *   분기와 값이 일치).
- *   (사용자 지시, 2026-08-30 최정우 수정 — BuildExemptRow 가 정상/TTL 구분 없이 항상 N/4 로
- *    고정하던 것을 호출측 지정으로 바꿈)
+ * @brief 면제도로(EXEMPT, CHARGE_TYPE=5) 과금 1행 조립 — 정상 이탈과 강제마감 공용
+ *   (2026-08-23 최정우 추가)
+ * @param[in] stRun 대상 run(진입점·누적거리·마지막 좌표를 담은 ZONE_RUN_SESSION)
+ * @param[in] strTripId / strDeviceKey / nChargeSeq 행 식별자
+ * @param[in] dtEnd 진출 시각 — 체류시간·평균속도의 분모 기준(경과 1초 하한)
+ * @param[in] dwEndGpsSeq dtEnd 와 같은 tick 의 GPS_SEQ — END_GPS_SEQ
+ * @param[in] pszChargeYn / pszChargeStatus 호출측 지정 — 정상 이탈은 Y/0, 강제마감은 N/4
+ * @param[out] pstRow 조립된 과금 행
+ * @remark charge_type="5"·from_id/to_id=zone road_id 는 2026-08-14 재설계를 세 차례 거쳐 확정된
+ *   최종 형태다("모든 미등록 링크" 방식 폐기 → zone 기반 복귀, 한때 "0"+링크ID 였다가 사용자
+ *   재지시로 원복). OCCUR_DT 는 **진입 시각**이다(2026-08-30 수정 — 이전에는 면제도로만 진출
+ *   시각이었다). 일반도로만 진출 시각을 쓴다.
+ *   charge_yn/status 를 호출측이 정하는 이유는 BuildParkRow()/BuildNodeStepRow() 와 같다 —
+ *   종전에는 이 함수가 정상/비정상 구분 없이 항상 N/4 로 고정해 정상 통행까지 "확정 데이터
+ *   아님"으로 남았다(사용자 지시, 2026-08-30 최정우 수정).
+ *   [2026-09-17 최정우 정정] 이 자리에 AppendExpiredExemptZoneCharge() 설명이 잘못 붙어 있던
+ *   것을 그 함수 위로 옮기고, 이 함수 자신의 설명을 제자리에 기재했다(동작 변화 없음).
 */
 void CRawLogWorker::BuildExemptRow(const ZONE_RUN_SESSION& stRun, const string& strTripId,
 		const string& strDeviceKey, int nChargeSeq, time_t dtEnd, uint32 dwEndGpsSeq,
@@ -912,6 +945,24 @@ void CRawLogWorker::BuildExemptRow(const ZONE_RUN_SESSION& stRun, const string& 
 	pstRow->strChargeStatus = pszChargeStatus;
 }
 
+/**
+ * @brief 강제마감 시점에 아직 열려있는 면제도로 세션을 N/4(SKIP)로 마감 (2026-08-13 최초 추가)
+ * @param[in] nThreadId 로그용 워커 ID
+ * @param[in] strDeviceKey 세션 맵 키(=DEVICE_KEY)
+ * @param[in] stSession 마감 직전 세션(제거 전 스냅샷)
+ * @param[out] pvtOut 진행 중이던 run 마다 CHARGE_INSERT_ROW 1건 추가
+ * @param[in] bNoTripEnd true=종료신호(TRIP_EVENT=END) 없이 다음 운행이 시작돼 마감 —
+ *   non_charge_reason 52. false=TTL·잔여tick·트립종료(51) (2026-09-16 최정우 추가)
+ * @remark 정상 이탈·트립종료는 ProcessExemptZoneCharge() 가 그 자리에서 Y/0 으로 기록하므로,
+ *   이 함수는 그 신호(구역 이탈/트립종료)가 영영 안 오고 GPS 자체가 끊긴 경우만 대신 마감해주는
+ *   보완 경로다 — 여기서는 N/4 로 INSERT 한다. 다른 유형이 강제마감을 N/3(AUDIT)으로 세팅하는
+ *   것과 같은 구조이며, 면제도로만 SKIP(4)를 쓴다(과금 대상이 아니라 사람이 재확인할 필요가
+ *   없다는 설계 의도 — [trip_abend] 의 CHARGE_TYPE=5 분기와 값이 일치).
+ *   [2026-09-15 적용범위 확대] 함수명은 "Expired" 지만 TTL 만료 전용이 아니다 —
+ *   FlushOpenRunsAsAbnormalEnd()/FlushOpenExemptRunsAtTripEnd() 를 통해 트립종료 이후 잔여 tick·
+ *   종료신호 없는 트립 전환·서버 종료 경로에서도 호출된다.
+ *   [2026-09-17 최정우 정정] 종전엔 이 설명 블록이 BuildExemptRow() 위에 붙어 있었다(동작 무관).
+*/
 void CRawLogWorker::AppendExpiredExemptZoneCharge(int nThreadId, const string& strDeviceKey,
 		const VEHICLE_TRIP_SESSION& stSession, vector<CHARGE_INSERT_ROW> *pvtOut, bool bNoTripEnd)
 {
@@ -958,6 +1009,10 @@ void CRawLogWorker::AppendExpiredExemptZoneCharge(int nThreadId, const string& s
  * @param[out] pstRow 조립된 과금 행
  *
  * @remark ── 일반도로 레코드 적재 규칙 (2026-09-06 최정우 정리, 사용자 지시 — 로직 수정 시 참고) ──
+ *   이 블록이 일반도로 규칙의 **정본**이다(doc/과금_맵매칭_로직_색인.md 는 색인일 뿐이다).
+ *   [2026-09-17 최정우 정리] 항목이 1·2·3·6·4·7·5 순서로 섞여 있던 것을 번호순으로 재배열했다 —
+ *   본문은 한 글자도 바꾸지 않았고 항목 간 상호참조("아래 6번의 억제" 등)도 번호 기준이라 그대로
+ *   유효하다. 동작 변화 없음.
  *
  * \t**1. 대상 범위** — 과금 구역 테이블(BASE_ROADLINK)에 **등록되지 않은 도로도 일반도로로 과금
  * \t한다.** 등록 구역이 아니라는 이유로 빠지지 않으며, 하나의 run 이 미등록↔등록구역A↔등록구역B 를
@@ -992,6 +1047,33 @@ void CRawLogWorker::AppendExpiredExemptZoneCharge(int nThreadId, const string& s
  * \t  (c) **주정차 폴리곤 접촉 구간 소급** — 아래 6번의 억제로 표출이 막힌 접촉 tick 을 버퍼에
  * \t      쌓아뒀다가, 이탈이 확정되는 순간 그 구간 전체를 새 run 의 진입점으로 되돌린다.
  *
+ * \t**4. 누락 링크 복구와 FROM_ID/TO_ID** — 직전 확정 링크와 이번 링크가 떨어져 있으면(또는 바로
+ * \t인접이어도) FindLinkPathBounded() 로 그 사이 링크를 복구하고, FindLinkPolygonCrossing() 으로
+ * \t주정차 폴리곤이 갈리는 지점을 찾아 **그 지점까지의 거리만** 누적한 뒤 그 링크를 TO_ID 에 기재한다.
+ * \t폴리곤 안쪽은 포함하지 않는다. END_GPS_SEQ/OCCUR_DT 는 교차점을 찾아낸 tick 이 아니라 **마지막
+ * \t확정 링크 tick** 을 쓴다 — 복구 링크와 교차점은 지오메트리로 보완한 값일 뿐 실측 경계는 그 tick
+ * \t이기 때문이다.
+ * \t  **FROM_ID 는 "거리 누적이 실제로 시작된 링크"** 다(사용자 지시, 2026-09-06). 누적은 경로의 두
+ * \t  번째 링크부터 시작하고 직전 확정 링크(경로 첫 링크) 위의 남은 거리는 세지 않으므로, 직전 확정
+ * \t  링크를 FROM_ID 로 적으면 거리 기여가 0인 링크가 출발 링크로 남아 그 링크를 통째로 지난 것처럼
+ * \t  오해된다. 실측 000376_20260819093337 seq106 — 매칭점이 2040424801(63.7m)의 끝 노드에서 0.46m
+ * \t  지점이라 실제 6m 는 전부 다음 링크 2040424803(9.0m, 이 링크 중간에서 폴리곤이 갈림) 위였는데
+ * \t  FROM_ID 가 2040424801 로 찍혔다. 올바른 표기는 **2040424803 → 2040424803** 이다.
+ * \t  FROM_LAT/LON 은 실제 관측된 마지막 매칭 좌표를 그대로 둔다 — 링크 시작 노드로 바꾸면 실측이
+ * \t  아닌 값이 되고, 둘의 차이는 애초에 세지 않는 잔여 구간(위 실측 0.46m)뿐이다.
+ * \t  **주정차 폴리곤이 없는 일반 진출~진입 gap 복구**(FindLinkPathBounded 만 쓰는 경로)도 복구 중간
+ * \t  링크마다 IsCase3EligibleRoadKind() 로 걸러, 다른 과금유형(개방식·폐쇄식·면제)에 등록된 링크를
+ * \t  만나면 그 직전에서 멈춘다 — 일반도로(0)·구간단속(3) 등록 또는 미등록 링크만 통과시킨다. 케이스3
+ * \t  (SKIP 구간 브릿지)에 이미 확정해 쓰던 것과 같은 기준이다(사용자 지시, 2026-09-14 최정우 수정 —
+ * \t  실측 000370_20260911141637 trip_seq=5: 개방식 RL-Z00004 등록 링크 2040424103 이 검사 없이
+ * \t  흡수돼 TO_ID/DIST_M 이 그 링크만큼 과다·오기재됨. 구간단속은 예외 — 위반 없이 통과한 구간단속
+ * \t  구역은 자체적으로 일반도로 미러(3a)를 만들어 결과적으로 일반도로 과금과 동등하므로 함께 흡수해도
+ * \t  이중계상이 아니다).
+ *
+ * \t**5. CHARGE_YN/STATUS** — 정상 마감은 Y/0, TTL 만료 등 확정 못한 채 끝난 건 N/3(AUDIT=심사대상).
+ * \t비과금도로의 N/4(SKIP)와 다르다 — 애초에 과금 대상이 아닌 비과금도로와 달리 일반도로는 확정만
+ * \t못한 것이라 사람이 재확인해야 한다. 값 자체는 호출측이 정해 인자로 넘긴다.
+ *
  * \t**6. 주정차 폴리곤 안에서는 일반도로를 표출하지 않는다** — 구역 등록/미등록 여부와 무관하다.
  * \t**판정은 매칭좌표(bMatchInParkingZoneNow) 단독 기준**이다(사용자 지시, 2026-09-06):
  * \t  | 원시 | 매칭 | 판정 |
@@ -1017,29 +1099,6 @@ void CRawLogWorker::AppendExpiredExemptZoneCharge(int nThreadId, const string& s
  * \t  접촉 구역 ID(szParkTouchZoneRoadId)도 매칭쪽을 1순위로 채운다 — 원시가 밖인 tick 은 원시쪽
  * \t  구역 ID 가 비어 있어 그대로 두면 인수인계 로직이 구역을 못 찾는다.
  *
- * \t**4. 누락 링크 복구와 FROM_ID/TO_ID** — 직전 확정 링크와 이번 링크가 떨어져 있으면(또는 바로
- * \t인접이어도) FindLinkPathBounded() 로 그 사이 링크를 복구하고, FindLinkPolygonCrossing() 으로
- * \t주정차 폴리곤이 갈리는 지점을 찾아 **그 지점까지의 거리만** 누적한 뒤 그 링크를 TO_ID 에 기재한다.
- * \t폴리곤 안쪽은 포함하지 않는다. END_GPS_SEQ/OCCUR_DT 는 교차점을 찾아낸 tick 이 아니라 **마지막
- * \t확정 링크 tick** 을 쓴다 — 복구 링크와 교차점은 지오메트리로 보완한 값일 뿐 실측 경계는 그 tick
- * \t이기 때문이다.
- * \t  **FROM_ID 는 "거리 누적이 실제로 시작된 링크"** 다(사용자 지시, 2026-09-06). 누적은 경로의 두
- * \t  번째 링크부터 시작하고 직전 확정 링크(경로 첫 링크) 위의 남은 거리는 세지 않으므로, 직전 확정
- * \t  링크를 FROM_ID 로 적으면 거리 기여가 0인 링크가 출발 링크로 남아 그 링크를 통째로 지난 것처럼
- * \t  오해된다. 실측 000376_20260819093337 seq106 — 매칭점이 2040424801(63.7m)의 끝 노드에서 0.46m
- * \t  지점이라 실제 6m 는 전부 다음 링크 2040424803(9.0m, 이 링크 중간에서 폴리곤이 갈림) 위였는데
- * \t  FROM_ID 가 2040424801 로 찍혔다. 올바른 표기는 **2040424803 → 2040424803** 이다.
- * \t  FROM_LAT/LON 은 실제 관측된 마지막 매칭 좌표를 그대로 둔다 — 링크 시작 노드로 바꾸면 실측이
- * \t  아닌 값이 되고, 둘의 차이는 애초에 세지 않는 잔여 구간(위 실측 0.46m)뿐이다.
- * \t  **주정차 폴리곤이 없는 일반 진출~진입 gap 복구**(FindLinkPathBounded 만 쓰는 경로)도 복구 중간
- * \t  링크마다 IsCase3EligibleRoadKind() 로 걸러, 다른 과금유형(개방식·폐쇄식·면제)에 등록된 링크를
- * \t  만나면 그 직전에서 멈춘다 — 일반도로(0)·구간단속(3) 등록 또는 미등록 링크만 통과시킨다. 케이스3
- * \t  (SKIP 구간 브릿지)에 이미 확정해 쓰던 것과 같은 기준이다(사용자 지시, 2026-09-14 최정우 수정 —
- * \t  실측 000370_20260911141637 trip_seq=5: 개방식 RL-Z00004 등록 링크 2040424103 이 검사 없이
- * \t  흡수돼 TO_ID/DIST_M 이 그 링크만큼 과다·오기재됨. 구간단속은 예외 — 위반 없이 통과한 구간단속
- * \t  구역은 자체적으로 일반도로 미러(3a)를 만들어 결과적으로 일반도로 과금과 동등하므로 함께 흡수해도
- * \t  이중계상이 아니다).
- *
  * \t**7. 주정차 폴리곤을 나가며 시작하는 run — 거리와 시간을 반드시 같은 기준점에서 잰다**
  * \t(2026-09-06 최정우 정리, 사용자 지시 — 실측 000376_20260819093337 seq52~62 로 전 구간 검증)
  * \t  진출은 진입(4번)과 대칭이다. 폴리곤 안 tick 은 6번으로 억제되므로, 나가는 순간부터 새 run 이
@@ -1059,10 +1118,6 @@ void CRawLogWorker::AppendExpiredExemptZoneCharge(int nThreadId, const string& s
  * \t  판정 기준(6번)을 바꿀 때는 **경계 스냅샷 기준도 같이 바꿔야 한다** — 2026-09-06 억제를
  * \t  원시->매칭 으로 바꾸면서 스냅샷만 원시로 남겨, seq51(원시 밖·매칭 안)이 억제 대상이면서
  * \t  동시에 "이탈 첫 tick"으로 기록돼 run 이 51 부터 열린 회귀가 있었다(올바른 값 52).
- *
- * \t**5. CHARGE_YN/STATUS** — 정상 마감은 Y/0, TTL 만료 등 확정 못한 채 끝난 건 N/3(AUDIT=심사대상).
- * \t비과금도로의 N/4(SKIP)와 다르다 — 애초에 과금 대상이 아닌 비과금도로와 달리 일반도로는 확정만
- * \t못한 것이라 사람이 재확인해야 한다. 값 자체는 호출측이 정해 인자로 넘긴다.
 */
 void CRawLogWorker::BuildNodeStepRow(const ZONE_RUN_SESSION& stRun, const string& strTripId,
 		const string& strDeviceKey, int nChargeSeq, time_t dtEnd, uint32 dwEndGpsSeq,
@@ -1712,19 +1767,6 @@ void CRawLogWorker::AppendTripEndOpenGateCharge(int nThreadId, const string& str
 }
 
 /**
- * @brief TTL 만료 세션 중 입구만 통과하고 출구를 못 찾은 폐쇄형 세션을 N/3(AUDIT)로 마감
- *   (2026-08-14 최정우 추가)
- * @param[in] nThreadId 로그용 워커 ID
- * @param[in] strDeviceKey 세션 맵 키(=DEVICE_KEY)
- * @param[in] stSession 만료 직전 세션(제거 전 스냅샷)
- * @param[out] pvtOut 세션이 입구 통과 상태였으면 CHARGE_INSERT_ROW 1건 추가
- * @remark 기존엔 이 함수 자체가 없어 "입구는 확인했지만 출구 신호가 영영 안 온" 세션이 TTL로
- *   조용히 사라지면 그 진입 사실 자체가 통째로 유실됐음(휴게소 장시간 정차 등). to_id/출구게이트는
- *   여전히 못 봤으니 지어내지 않고 비워두지만, dist_m/speed_kmh/to_lat·lon 은 2026-08-25부터
- *   dfClosedAccumDistM/dfClosedLastX·Y(ProcessClosedRoadCharge() 가 매 틱 갱신하는 실시간 누적거리·
- *   마지막 확인 위치)로 채운다 — 과거엔 이 세션 필드 자체가 없어 전부 비워뒀었음(최정우 수정).
-*/
-/**
  * @brief 구역 이탈 경계 보정 — 구역 안 마지막 확인 위치에서 그 링크의 종료 노드까지 거리를 더한다
  * @param[in] qwLastZoneLinkID 구역 안에서 마지막으로 확인된 링크 ID (0이면 아무것도 안 함)
  * @param[in,out] pdfLastZoneX 구역 안 마지막 확인 위치 경도 — 보정 성공 시 종료 노드로 이동
@@ -1771,6 +1813,27 @@ double CRawLogWorker::ApplyZoneExitTailDist(uint64 qwLastZoneLinkID,
 	return dfTail;
 }
 
+/**
+ * @brief 강제마감 시점에 입구만 통과하고 출구를 못 찾은 폐쇄형 세션을 N/3(AUDIT)로 마감
+ *   (2026-08-14 최정우 추가)
+ * @param[in] nThreadId 로그용 워커 ID
+ * @param[in] strDeviceKey 세션 맵 키(=DEVICE_KEY)
+ * @param[in] stSession 마감 직전 세션(제거 전 스냅샷)
+ * @param[in] dtEndTime 마감 기준 시각 — TTL 경로는 dtLastSeen(벽시계), 트립종료·트립전환 경로는
+ *   그 트립의 마지막 GPS 시각(FlushOpenRunsAsAbnormalEnd() 가 맞춰 넘긴다)
+ * @param[out] pvtOut 세션이 입구 통과 상태였으면 CHARGE_INSERT_ROW 1건 추가
+ * @param[in] bNoTripEnd true=종료신호 없이 다음 운행이 시작돼 마감(non_charge_reason 62),
+ *   false=TTL·잔여tick·트립종료(61) (2026-09-16 최정우 추가)
+ * @remark 기존엔 이 함수 자체가 없어 "입구는 확인했지만 출구 신호가 영영 안 온" 세션이 조용히
+ *   사라지면 그 진입 사실이 통째로 유실됐다(휴게소 장시간 정차 등). to_id/출구게이트는 여전히
+ *   못 봤으니 지어내지 않고 비워두지만, dist_m/speed_kmh/to_lat·lon 은 2026-08-25부터
+ *   dfClosedAccumDistM 과 dfClosedLastZoneX/Y(구역 **안** 마지막 확인 위치)로 채운다.
+ *   꼬리 보정(ApplyZoneExitTailDist)은 여기서 쓰면 안 된다 — 함수 본문 주석 참고.
+ *   [2026-09-15 적용범위 확대] 함수명은 "Expired" 지만 TTL 만료 전용이 아니다 — 트립종료·
+ *   트립전환·서버 종료 경로에서도 호출된다.
+ *   [2026-09-17 최정우 정정] 종전엔 이 설명 블록이 ApplyZoneExitTailDist() 위에 붙어 있었다
+ *   (동작 무관). to_lat/lon 출처도 실제 코드(dfClosedLastZoneX/Y, 2026-09-15 수정분)에 맞췄다.
+*/
 void CRawLogWorker::AppendExpiredClosedRoadCharge(int nThreadId, const string& strDeviceKey,
 		const VEHICLE_TRIP_SESSION& stSession, time_t dtEndTime, vector<CHARGE_INSERT_ROW> *pvtOut, bool bNoTripEnd)
 {
@@ -1789,13 +1852,13 @@ void CRawLogWorker::AppendExpiredClosedRoadCharge(int nThreadId, const string& s
 	//   오전에 여기에 ApplyZoneExitTailDist()(구역 안 마지막 위치 → 링크 종료노드까지 가산)를
 	//   넣었는데 **이 함수에는 적용하면 안 된다.** 꼬리 보정은 "차가 실제로 구역을 벗어났고,
 	//   벗어난 뒤 tick 들은 이미 구역 밖이라 누적에서 빠졌다"는 전제에서만 근거가 있다. 반면 이
-	//   함수는 위 4206 주석대로 **출구를 못 본 채 TTL 만료·트립종료로 끝난** 경우에만 호출되므로
+	//   함수는 이 함수 헤더 주석대로 **출구를 못 본 채 강제마감으로 끝난** 경우에만 호출되므로
 	//   (진입부 !bInClosedRoad 조기반환), 차가 링크 끝까지 갔다는 증거가 없다. 300m 링크 20m
 	//   지점에서 정차·종료하면 280m 가 그대로 과다청구된다.
-	//   근거 2건: (a) 기준 구현인 면제도로 ProcessExemptZoneCharge() 7659 는 `!bSameZone` 으로
+	//   근거 2건: (a) 기준 구현인 면제도로 ProcessExemptZoneCharge() 의 이탈 경계 보정은 `!bSameZone` 으로
 	//   명시 분기하며 "구역 안에서 끝난 경우는 그 지점이 곧 진출점이므로 보정하지 않는다
 	//   (사용자 지시, 2026-08-30)" 주석이 있고, AppendExpiredExemptZoneCharge() 는 아예 보정을
-	//   안 한다. (b) 아래 1787 주석의 "구역 안 마지막 확인 좌표 + 실측 누적거리(사용자 확인)".
+	//   안 한다. (b) 아래 TO_LAT/LON 주석의 "구역 안 마지막 확인 좌표 + 실측 누적거리(사용자 확인)".
 	//   → 보정 없이 세션 값을 그대로 쓴다. stSession 이 const& 라 지역 복사본으로 받는다.
 	const double dfClosedEndX = stSession.dfClosedLastZoneX;
 	const double dfClosedEndY = stSession.dfClosedLastZoneY;
@@ -1898,16 +1961,30 @@ void CRawLogWorker::AppendExpiredClosedRoadCharge(int nThreadId, const string& s
 }
 
 /**
- * @brief TTL 만료 세션 중 입구만 통과하고 출구를 못 찾은 구간단속 세션을 N/3(AUDIT)로 마감
- *   (2026-08-14 최정우 추가)
+ * @brief 강제마감 시점에 입구만 통과하고 출구를 못 찾은 구간단속 세션을 마감 —
+ *   **일반도로(NODE_STEP) 미러 1건만 Y/0 으로 적재**한다 (2026-08-14 최정우 추가,
+ *   2026-09-06 적재 정책 변경)
  * @param[in] nThreadId 로그용 워커 ID
  * @param[in] strDeviceKey 세션 맵 키(=DEVICE_KEY)
- * @param[in] stSession 만료 직전 세션(제거 전 스냅샷)
- * @param[out] pvtOut 세션이 입구 통과 상태였으면 CHARGE_INSERT_ROW 1건 추가
- * @remark to_id(출구게이트)는 여전히 못 봤으니 비워두지만, dist_m/speed_kmh/to_lat·lon 은
- *   2026-08-25부터 dfSpeedAccumDistM/dfSpeedLastX·Y(ProcessSpeedZoneCharge() 가 매 틱 갱신하는
- *   실시간 누적거리·마지막 확인 위치)로 채운다 — ProcessClosedRoadCharge() 동일 근거.
- *   from_lat/lon은 실측 관례상 구역 등록 좌표(ZONE_INFO.dfFirstLat/Lon) 그대로 유지.
+ * @param[in] stSession 마감 직전 세션(제거 전 스냅샷)
+ * @param[in] dtEndTime 마감 기준 시각(호출측이 상황에 맞는 값을 넘긴다)
+ * @param[out] pvtOut NODE_STEP 미러 1건 추가
+ * @param[in] dwEndGpsSeq 종료 tick 의 GPS_SEQ(0=미지정, 세션값 사용). 트립 종료 이벤트 tick 은
+ *   직전 tick 의 복사본이라 구역 갱신 경로를 안 타서 세션의 dwSpeedLastGpsSeq 가 그 앞에서
+ *   멈춘다 — 호출측이 실제 종료 seq 를 넘겨 구간 표기를 트립 끝에 맞춘다(2 tick 이내일 때만
+ *   확장, 본문 주석 참고)
+ * @remark **이 함수는 SPEED(CHARGE_TYPE=3) 행을 만들지 않는다.** 2026-09-06 에 "구간단속은
+ *   진입·진출 게이트 통과가 모두 확인되고 평균속도가 제한속도 이상일 때만 적재" 로 바뀌었는데,
+ *   강제마감은 정의상 진출 게이트를 못 지난 경우라 그 조건을 채울 수 없기 때문이다. 그 구간의
+ *   주행 자체는 실재하므로 일반도로 미러가 Y/0 으로 이어받는다.
+ *   (2026-09-17 최정우 — 그 결정 뒤 남아 있던 SPEED 행 조립 코드를 삭제. 본문 주석 참고)
+ *   to_lat/lon·dist_m 은 dfSpeedLastZoneX/Y·dfSpeedAccumDistM(구역 **안** 마지막 확인 위치와
+ *   실측 누적거리, 2026-09-15 수정분)을 쓴다. from_lat/lon 은 구역 등록 좌표(ZONE_INFO.
+ *   dfFirstLat/Lon) 그대로다. 꼬리 보정(ApplyZoneExitTailDist)은 쓰지 않는다 — 본문 주석 참고.
+ *   [2026-09-15 적용범위 확대] 함수명은 "Expired" 지만 TTL 만료 전용이 아니다 — 트립종료·
+ *   트립전환·서버 종료 경로에서도 호출된다. 다만 다른 Append* 와 달리 bNoTripEnd 파라미터가
+ *   없다 — 유일한 출력인 NODE_STEP 미러가 Y/0(non_charge_reason=0)이라 62/52 를 붙일 행이
+ *   없기 때문이다(2026-09-17 최정우 확인).
 */
 void CRawLogWorker::AppendExpiredSpeedZoneCharge(int nThreadId, const string& strDeviceKey,
 		const VEHICLE_TRIP_SESSION& stSession, time_t dtEndTime, vector<CHARGE_INSERT_ROW> *pvtOut,
@@ -1928,94 +2005,6 @@ void CRawLogWorker::AppendExpiredSpeedZoneCharge(int nThreadId, const string& st
 	const double dfSpeedEndY = stSession.dfSpeedLastZoneY;
 	const double dfSpeedEndDistM = stSession.dfSpeedAccumDistM;
 
-	CHARGE_INSERT_ROW stRow;
-	stRow.strTripId = stSession.szTripId;
-	stRow.strDeviceKey = strDeviceKey;
-
-	char szSeq[16];
-	snprintf(szSeq, sizeof(szSeq), "%d", stSession.nChargeSeq);
-	stRow.strChargeSeq = szSeq;
-
-	stRow.strChargeType = "3";								// SPEED
-	stRow.strChargeUnit = "1";								// LINK (실측 확인)
-	stRow.strLinkId = "";
-
-	stRow.strFromId = stSession.szSpeedEntryTollgateId;		// 입구 게이트ID (2026-08-20 최정우 수정)
-	stRow.strToId = "";										// 출구 미확인 — 지어내지 않음
-
-	char szFromLat[32], szFromLon[32];
-	if (pstZone != nullptr)
-	{
-		snprintf(szFromLat, sizeof(szFromLat), "%.06lf", pstZone->dfFirstLat);
-		snprintf(szFromLon, sizeof(szFromLon), "%.06lf", pstZone->dfFirstLon);
-		stRow.strFromLat = szFromLat;
-		stRow.strFromLon = szFromLon;
-	}
-	else
-	{
-		// 구역 캐시 유실 등으로 좌표를 못 구한 경우 — 아는 값이 없으므로 NULL(2026-08-20부터 허용)
-		stRow.strFromLat = "";
-		stRow.strFromLon = "";
-	}
-	char szToLat[32], szToLon[32];
-	// [버그 수정, 2026-09-15 최정우] 구역 **안** 마지막 위치 사용 — 위 CLOSED 동일 근거
-	snprintf(szToLat, sizeof(szToLat), "%.06lf", dfSpeedEndY);
-	snprintf(szToLon, sizeof(szToLon), "%.06lf", dfSpeedEndX);
-	stRow.strToLat = szToLat;
-	stRow.strToLon = szToLon;
-
-	stRow.strZoneId = stSession.szSpeedZoneRoadId;
-	stRow.strZoneName = (pstZone != nullptr) ? pstZone->szRoadNm : "";
-
-	char szDistM[16];
-	snprintf(szDistM, sizeof(szDistM), "%d", static_cast<int>(dfSpeedEndDistM + 0.5));
-	stRow.strDistM = szDistM;
-
-	double dfElapsedSec = difftime(dtEndTime, stSession.dtSpeedEntryTime);
-	if (dfElapsedSec > 0.0)
-	{
-		double dfAvgSpeedKmh = (dfSpeedEndDistM / dfElapsedSec) * 3.6;
-		char szSpeedKmh[16];
-		snprintf(szSpeedKmh, sizeof(szSpeedKmh), "%d", static_cast<int>(dfAvgSpeedKmh + 0.5));
-		stRow.strSpeedKmh = szSpeedKmh;
-	}
-	if (pstZone != nullptr)
-	{
-		char szSpeedLimit[16];					// (2026-09-15 최정우 수정) 8 → 16: 8 이면 7자리 초과 값이 잘려
-											//   엉뚱한 수가 되고 클램프 WARN 로그에도 원래 값이 안 남는다
-		snprintf(szSpeedLimit, sizeof(szSpeedLimit), "%d", static_cast<int>(pstZone->dfSpeedLimitKmh + 0.5));
-		stRow.strSpeedLimitKmh = szSpeedLimit;
-	}
-
-	char szStaySeconds[16];
-	snprintf(szStaySeconds, sizeof(szStaySeconds), "%d", static_cast<int>(dfElapsedSec + 0.5));
-	stRow.strStaySeconds = szStaySeconds;
-
-	char szStartGpsSeq[16], szEndGpsSeq[16];
-	snprintf(szStartGpsSeq, sizeof(szStartGpsSeq), "%u", stSession.dwSpeedEntryGpsSeq);
-	snprintf(szEndGpsSeq, sizeof(szEndGpsSeq), "%u", stSession.dwSpeedLastGpsSeq);
-	stRow.strStartGpsSeq = szStartGpsSeq;
-	stRow.strEndGpsSeq = szEndGpsSeq;
-
-	stRow.strOccurDt = FormatDateTime14(stSession.dtSpeedEntryTime);
-
-	const char *pszTripStartDt = ExtractTripStartDt(stSession.szTripId);
-	if (pszTripStartDt != nullptr)
-		stRow.strTripStartDt = pszTripStartDt;
-	else
-		stRow.strTripStartDt = stRow.strOccurDt;
-
-	stRow.strTollgateId = "";
-	stRow.strEntryTollgateId = stSession.szSpeedEntryTollgateId;	// 2026-08-20 최정우 수정
-	stRow.strExitTollgateId = "";								// 출구 미확인 — NULLIF(...,'')로 DB엔 NULL
-
-	stRow.strRegDt = FormatDateTime14(time(nullptr));
-	stRow.strUpdDt = stRow.strRegDt;
-
-	stRow.strTripEndDt = FormatDateTime14(dtEndTime);
-	stRow.strChargeYn = "N";
-	stRow.strChargeStatus = "3";							// AUDIT — 다른 TTL-flush 유형과 동일 관례
-
 	// 구간단속은 **진입·진출 게이트 통과가 모두 확인되고 평균속도가 제한속도 이상일 때만** 적재한다
 	//   (2026-09-06 최정우 수정, 사용자 지시). TTL 강제마감·비정상종료는 정의상 진출 게이트를 못
 	//   지난 것이므로 이 경로에서는 레코드를 만들지 않는다. 그 구간은 아래 NODE_STEP(일반도로)이
@@ -2023,6 +2012,10 @@ void CRawLogWorker::AppendExpiredSpeedZoneCharge(int nThreadId, const string& st
 	//   171m 가 구간단속 N/3 으로 적재됐다. 종전 정책(게이트 이상 시 AUDIT 로 남겨 사람이 확인)을
 	//   대체한다 — 구간단속은 게이트 통과가 성립 요건이라 미통과 건을 심사 큐에 올릴 근거가 없다.
 	//   NODE_STEP 등록은 종전대로 계속한다(아래 블록) — 주행 자체는 실재하므로 일반도로로 남는다.
+	//   [2026-09-17 최정우 정리] 이 결정 뒤에도 push 되지 않은 채 남아 있던 SPEED 행 조립 89줄을
+	//   삭제했다. 되살릴 일이 생기면 그 옛 코드가 아니라 **ProcessSpeedZoneCharge() 의 "출구 미확인"
+	//   분기**를 본뜰 것 — 옛 코드는 2026-09-10 FROM 보정과 2026-09-11 non_charge_reason 배선을
+	//   둘 다 못 받은 낡은 사본이었다(상세: doc/과금_맵매칭_로직_색인.md).
 	// [문구 정정, 2026-09-16 최정우] "(ttl expiry)" → "(forced close)" — 이 함수들은
 	//   2026-09-15 부터 TTL 뿐 아니라 잔여tick·트립종료·트립전환·서버종료에서도 불린다.
 	//   TTL 이 아닌 경로에서도 "ttl expiry" 로 찍혀 로그만 보고 원인을 오판하기 쉬웠다.
@@ -2045,17 +2038,18 @@ void CRawLogWorker::AppendExpiredSpeedZoneCharge(int nThreadId, const string& st
 		//   써야 한다 — 다른 모든 마감 경로(주정차·폐쇄형·일반도로·면제)의 공통 관례이고, 호출측
 		//   (ProcessRawLog/ExpireTtlSessions)이 "실제로 push 된 행 수"만큼만 nChargeSeq 를 올리기
 		//   때문이다. 원래는 이 함수가 구간단속 행(nChargeSeq)과 일반도로 미러(nChargeSeq+1) 2건을
-		//   넣었는데, 2026-09-06 에 구간단속 행이 dead code 가 되면서 push 는 1건인데 번호만 +1 로
+		//   넣었는데, 2026-09-06 에 구간단속 행 등록이 폐지되면서 push 는 1건인데 번호만 +1 로
 		//   남아 (a) nChargeSeq 번이 비고 (b) 호출측 +1 뒤 다음 레코드가 같은 번호를 재사용하는
 		//   충돌이 생겼다 — 실측 000376_20260826160622 에서 이 행과 뒤따르는 일반도로 마감행이
-		//   둘 다 charge_seq=3 이었다(사용자 지적).
+		//   둘 다 charge_seq=3 이었다(사용자 지적). 그때 남아 있던 구간단속 행 조립 코드는
+		//   2026-09-17 에 삭제했고, 이 함수가 넣는 행은 이제 이 미러 1건뿐이다.
 		CHARGE_INSERT_ROW stNodeStepRow;
 		char szNodeStepSeq[16];
 		snprintf(szNodeStepSeq, sizeof(szNodeStepSeq), "%d", stSession.nChargeSeq);
 		BuildNodeStepRowFromLinkRange(stSession.szTripId, strDeviceKey, stSession.nChargeSeq,
 			stSession.qwSpeedEntryLinkID, stSession.qwSpeedLastZoneLinkID,
 			(pstZone != nullptr) ? pstZone->dfFirstLat : 0.0, (pstZone != nullptr) ? pstZone->dfFirstLon : 0.0,
-			dfSpeedEndY, dfSpeedEndX,	// 구역 **안** 마지막 확인 위치(보정 없음 — 위 1681 주석)
+			dfSpeedEndY, dfSpeedEndX,	// 구역 **안** 마지막 확인 위치(보정 없음 — 위 ApplyZoneExitTailDist 미적용 주석)
 			dfSpeedEndDistM, stSession.dtSpeedEntryTime, dtEndTime,
 			stSession.dwSpeedEntryGpsSeq,
 			// 종료 seq — 구역 안 마지막 확인 tick 과 트립 마지막 확정 tick 중 큰 쪽. 트립 종료
@@ -2076,10 +2070,10 @@ void CRawLogWorker::AppendExpiredSpeedZoneCharge(int nThreadId, const string& st
 		stNodeStepRow.strTripEndDt = FormatDateTime14(dtEndTime);
 		pvtOut->push_back(stNodeStepRow);
 
-				// [문구 정정, 2026-09-16 최정우] "(ttl expiry)" → "(forced close)" — 이 함수들은
-			//   2026-09-15 부터 TTL 뿐 아니라 잔여tick·트립종료·트립전환·서버종료에서도 불린다.
-			//   TTL 이 아닌 경로에서도 "ttl expiry" 로 찍혀 로그만 보고 원인을 오판하기 쉬웠다.
-			//   같은 맥락으로 "seq=" 라벨도 "charge_seq=" 로 바꿨다 — 찍히는 값이 GPS 순번이
+		// [문구 정정, 2026-09-16 최정우] "(ttl expiry)" → "(forced close)" — 이 함수들은
+		//   2026-09-15 부터 TTL 뿐 아니라 잔여tick·트립종료·트립전환·서버종료에서도 불린다.
+		//   TTL 이 아닌 경로에서도 "ttl expiry" 로 찍혀 로그만 보고 원인을 오판하기 쉬웠다.
+		//   같은 맥락으로 "seq=" 라벨도 "charge_seq=" 로 바꿨다 — 찍히는 값이 GPS 순번이
 		//   아니라 nChargeSeq(과금 순번)인데 GPS seq 로 오해할 수 있었다.
 		LOGFMTI("[#%02d] node step recorded (forced close, from speed zone)!device=[%s] trip_id=[%s] charge_seq=[%s] "
 			"road=[%s] non_charge_reason=[%d:%s]",
@@ -3189,7 +3183,12 @@ bool CRawLogWorker::FindLinkPathBounded(uint64 qwFromLink, uint64 qwToLink, int 
  * \t 링크가 곧을수록 오차가 0 에 수렴하므로 종전에도 대부분은 맞았다 — 굽은 링크에서만 틀린다.
  *
  * @remark 되돌리는 법 — 호출부의 이 함수 호출을 HaversineMeters(링크 시작노드, 게이트) 로
- * \t 되돌리면 2026-09-07 이전 판정으로 복귀한다(게이트 판정 6곳 전부 같은 방식으로 바꿨다).
+ * \t 되돌리면 2026-09-07 이전 판정으로 복귀한다.
+ * \t 호출부는 **8곳**이다(2026-09-17 최정우 전수 확인, 종전 주석의 "6곳"은 오기):
+ * \t   · UpdateOpenGateCrossed()                1곳 — 개방식 M게이트 통과 래치
+ * \t   · ProcessOpenGateCharge() 트립시작 run   1곳 — case B/C 구분(±3m)
+ * \t   · ProcessClosedRoadCharge()              3곳 — 진출 판정 / 같은 링크 출구 / 진입 게이트
+ * \t   · ProcessSpeedZoneCharge()               3곳 — 진출 판정 / 같은 링크 출구 / 진입 게이트
 */
 double CRawLogWorker::GatePosOnLink(uint64 qwLinkID, double dfLon, double dfLat)
 {
@@ -4709,12 +4708,9 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 
 	// config radius_skip — ACCURACY_M 초과 시 SKIP. 세션 앵커 미갱신 (2026-07-10 최정우 수정)
 	// 검색반경 아님. 0=비활성 (2026-07-08 최정우)
-#if 0
-	 if (m_stConfig.nRadiusSkipM > 0
-	 	&& stRawLogInfo.nAccuracyM >= 0
-	 	&& stRawLogInfo.nAccuracyM > m_stConfig.nRadiusSkipM)
-#endif
-	if ((m_stConfig.nRadiusSkip > 0) && 
+	// [2026-09-17 최정우 정리] 여기 있던 #if 0 블록(존재하지 않는 멤버 nRadiusSkipM 을 참조하던
+	//   구 코드)을 제거했다 — 컴파일에 포함되지 않아 동작 변화 없음. 현행 필드명은 nRadiusSkip.
+	if ((m_stConfig.nRadiusSkip > 0) &&
 		(stRawLogInfo.nAccuracyM >= 0) && 
 		(stRawLogInfo.nAccuracyM > m_stConfig.nRadiusSkip))
 	{
@@ -4793,9 +4789,9 @@ bool CRawLogWorker::ProcessRawLog(int nThreadId, const sRawLogInfo& stRawLogInfo
 		}
 		// vtSkipRunRawLogInfo 와 1:1 대응 인덱스 — 소급 MATCHED 승격 시 이 행을 직접 찾아 고쳐씀
 		//   (2026-09-04 최정우 추가)
-		// [버그 수정, 2026-09-10 최정우] 위 vtSkipRunRawLogInfo push 조건(3863줄)엔
+		// [버그 수정, 2026-09-10 최정우] 위 vtSkipRunRawLogInfo push 조건엔
 		//   !bRawInParkForSkipBuf 가 있는데 여기는 없어서, 주정차 폴리곤 안 tick이 섞인 SKIP
-		//   런에서 두 벡터 크기가 어긋났다 — 소비부(3492줄 부근)의 size-일치 가드가 그 어긋남
+		//   런에서 두 벡터 크기가 어긋났다 — 소비부(CommitPendingRow() 의 accuracy-skip directional bridge)의 size-일치 가드가 그 어긋남
 		//   자체로 인한 오염은 막아주지만, 대신 그 SKIP 런 전체의 소급 MATCHED 승격 기능이
 		//   조용히(로그도 없이) 무력화됐다(최소 재현으로 확인). 두 조건을 동일하게 맞춘다.
 		if (!bRawInParkForSkipBuf && bAccSkipAppended
@@ -6409,7 +6405,9 @@ void CRawLogWorker::ProcessClosedRoadCharge(int nThreadId, const sRawLogInfo& st
 						nSpeedLimitForRow = pstPrevLink->nMaxSpeed;
 				}
 				char szSpeedLimit[16];					// (2026-09-15 최정우 수정) 8 → 16: 8 이면 7자리 초과 값이 잘려
-											//   엉뚱한 수가 되고 클램프 WARN 로그에도 원래 값이 안 남는다
+											//   엉뚱한 수가 된다(제한속도는 실무상 3자리지만 기준정보 오류 시
+											//   큰 값이 들어올 수 있다). [2026-09-17 정정] 종전 주석의 "클램프
+											//   WARN 로그" 는 이 함수들에 존재하지 않는 내용이라 삭제
 				snprintf(szSpeedLimit, sizeof(szSpeedLimit), "%d", static_cast<int>(nSpeedLimitForRow));
 				stRow.strSpeedLimitKmh = szSpeedLimit;
 			}
@@ -7120,7 +7118,9 @@ void CRawLogWorker::ProcessSpeedZoneCharge(int nThreadId, const sRawLogInfo& stR
 			if (pstZone != nullptr)
 			{
 				char szSpeedLimit[16];					// (2026-09-15 최정우 수정) 8 → 16: 8 이면 7자리 초과 값이 잘려
-											//   엉뚱한 수가 되고 클램프 WARN 로그에도 원래 값이 안 남는다
+											//   엉뚱한 수가 된다(제한속도는 실무상 3자리지만 기준정보 오류 시
+											//   큰 값이 들어올 수 있다). [2026-09-17 정정] 종전 주석의 "클램프
+											//   WARN 로그" 는 이 함수들에 존재하지 않는 내용이라 삭제
 				snprintf(szSpeedLimit, sizeof(szSpeedLimit), "%d", static_cast<int>(pstZone->dfSpeedLimitKmh + 0.5));
 				stRow.strSpeedLimitKmh = szSpeedLimit;
 			}
@@ -7360,7 +7360,9 @@ void CRawLogWorker::ProcessSpeedZoneCharge(int nThreadId, const sRawLogInfo& stR
 			if (pstTrackingZone != nullptr)
 			{
 				char szSpeedLimit[16];					// (2026-09-15 최정우 수정) 8 → 16: 8 이면 7자리 초과 값이 잘려
-											//   엉뚱한 수가 되고 클램프 WARN 로그에도 원래 값이 안 남는다
+											//   엉뚱한 수가 된다(제한속도는 실무상 3자리지만 기준정보 오류 시
+											//   큰 값이 들어올 수 있다). [2026-09-17 정정] 종전 주석의 "클램프
+											//   WARN 로그" 는 이 함수들에 존재하지 않는 내용이라 삭제
 				snprintf(szSpeedLimit, sizeof(szSpeedLimit), "%d", static_cast<int>(pstTrackingZone->dfSpeedLimitKmh + 0.5));
 				stRow.strSpeedLimitKmh = szSpeedLimit;
 			}
@@ -7741,7 +7743,9 @@ void CRawLogWorker::CheckClosedRoadExitByRawGps(int nThreadId, const sRawLogInfo
 	}
 
 	char szSpeedLimit[16];					// (2026-09-15 최정우 수정) 8 → 16: 8 이면 7자리 초과 값이 잘려
-											//   엉뚱한 수가 되고 클램프 WARN 로그에도 원래 값이 안 남는다
+											//   엉뚱한 수가 된다(제한속도는 실무상 3자리지만 기준정보 오류 시
+											//   큰 값이 들어올 수 있다). [2026-09-17 정정] 종전 주석의 "클램프
+											//   WARN 로그" 는 이 함수들에 존재하지 않는 내용이라 삭제
 	snprintf(szSpeedLimit, sizeof(szSpeedLimit), "%d", static_cast<int>(pstZone->dfSpeedLimitKmh + 0.5));
 	stRow.strSpeedLimitKmh = szSpeedLimit;
 
@@ -7907,7 +7911,7 @@ void CRawLogWorker::CheckSpeedZoneExitByRawGps(int nThreadId, const sRawLogInfo&
 	// [버그 수정, 2026-09-11 최정우] 진입~진출이 같은 초(또는 시각 역행)면 dfElapsedSec<=0 이 되어
 	//   평균속도 계산이 통째로 건너뛰어지고 strSpeedKmh 가 빈 값(→query.sql CASE 문으로 0 저장)으로
 	//   남아 실제로는 빠르게 지나간 구간이 speed_kmh=0 으로 잘못 기록됐다. 다른 형제 함수들
-	//   (ProcessSpeedZoneCharge 등, RawLogWorker.cpp:639/1129/6075)과 동일하게 최소 1초로 클램프.
+	//   (BuildExemptRow()/BuildNodeStepRowFromLinkRange()/ProcessSpeedZoneCharge() 등)과 동일하게 최소 1초로 클램프.
 	if (dfElapsedSec < 1.0)
 		dfElapsedSec = 1.0;
 	{
@@ -7918,7 +7922,9 @@ void CRawLogWorker::CheckSpeedZoneExitByRawGps(int nThreadId, const sRawLogInfo&
 	}
 
 	char szSpeedLimit[16];					// (2026-09-15 최정우 수정) 8 → 16: 8 이면 7자리 초과 값이 잘려
-											//   엉뚱한 수가 되고 클램프 WARN 로그에도 원래 값이 안 남는다
+											//   엉뚱한 수가 된다(제한속도는 실무상 3자리지만 기준정보 오류 시
+											//   큰 값이 들어올 수 있다). [2026-09-17 정정] 종전 주석의 "클램프
+											//   WARN 로그" 는 이 함수들에 존재하지 않는 내용이라 삭제
 	snprintf(szSpeedLimit, sizeof(szSpeedLimit), "%d", static_cast<int>(pstZoneForRow->dfSpeedLimitKmh + 0.5));
 	stRow.strSpeedLimitKmh = szSpeedLimit;
 
@@ -7992,7 +7998,7 @@ void CRawLogWorker::CheckSpeedZoneExitByRawGps(int nThreadId, const sRawLogInfo&
 	}
 	// [버그 수정, 2026-09-10 최정우] NODE_STEP 일반도로 확장(케이스1) 미러 레코드 — 위반 여부와
 	// 무관하게 제한속도만 알면 항상 만든다(ProcessSpeedZoneCharge() 동일 로직 그대로 재사용,
-	// 5976줄 이하 참고). 이 SKIP 틱 경로는 이 미러 자체가 통째로 빠져 있어, 여기로 마감되는
+	// 그 함수의 stHeldSpeedMirrorRun 세팅 블록 참고). 이 SKIP 틱 경로는 이 미러 자체가 통째로 빠져 있어, 여기로 마감되는
 	// 구간단속 통행은 NODE_STEP 일반도로 과금도 같이 누락되고 있었다.
 	if (bSpeedLimitKnown)
 	{
@@ -8033,9 +8039,13 @@ void CRawLogWorker::CheckSpeedZoneExitByRawGps(int nThreadId, const sRawLogInfo&
  *   링크ID였다가 재지시로 원복). zone_id/zone_name도 동일하게 실제 매칭된 구역의 road_id/road_nm.
  *   from/to_lat·lon은 진입/진출 시점의 매칭 위치. stay_seconds는 진출-진입 체류시간(초), 평균속도는
  *   speed_kmh로 분리 기록.
- *   이탈(다른 구역/미등록 링크로 이동) 또는 트립 종료 시 항상 `charge_yn='N'`/`charge_status='4'`
- *   (SKIP)로 1건 기록. 진행 중 GPS가 끊겨 세션이 TTL로 강제 마감되는 경우는
- *   AppendExpiredExemptZoneCharge() 가 별도 INSERT 처리.
+ *   이탈(다른 구역/미등록 링크로 이동) 또는 트립 종료 시 `charge_yn='Y'`/`charge_status='0'`
+ *   (정상)으로 1건 기록한다 — 다른 과금 유형의 정상 통행과 동일하며, 과금 제외는 charge_yn 이
+ *   아니라 charge_type=5 로 구분된다. 이상 건만 N/4(SKIP): 강제마감은
+ *   AppendExpiredExemptZoneCharge(), 트립 미종료는 [trip_abend] 가 처리한다.
+ *   [2026-09-17 최정우 정정] 종전 주석은 "이탈·트립종료 시 **항상** N/4(SKIP)" 라고 적혀 있었는데,
+ *   이는 2026-08-30 에 "정상 이탈은 Y/0, 이상 건만 N/4" 로 바꾸기 전의 서술이다(실제 코드는
+ *   그때부터 BuildExemptRow() 에 "Y","0" 을 넘긴다). 주석만 현행에 맞춤 — 동작 변화 없음.
 */
 
 void CRawLogWorker::ProcessExemptZoneCharge(int nThreadId, const sRawLogInfo& stRawLogInfo,
@@ -8110,7 +8120,7 @@ void CRawLogWorker::ProcessExemptZoneCharge(int nThreadId, const sRawLogInfo& st
 				stRun.dfLastY = stMatchLinkInfo.dfMatchY;
 			}
 			// [버그 수정, 2026-09-15 최정우] ProcessNodeStepCharge() 와 동일 수정 — 근거·역행의심
-			//   취급 차이는 그쪽 주석 참고. 여기서는 dtLastInZoneTime 이 이탈 시각 보간(7679)의
+			//   취급 차이는 그쪽 주석 참고. 여기서는 dtLastInZoneTime 이 아래 이탈 경계 보정(InterpolateGateCrossingTime)의
 			//   "안쪽" 기준시각으로도 쓰이는데, 정지 중 시각을 얼려두면 보간 구간 자체가 왜곡된다.
 			if (!stMatchLinkInfo.bReverseSuspect)
 				stRun.qwLastLinkID = stMatchLinkInfo.qwLinkID;
@@ -8193,7 +8203,8 @@ void CRawLogWorker::ProcessExemptZoneCharge(int nThreadId, const sRawLogInfo& st
 		pstSession->nChargeSeq += 1;
 
 		// 면제구역 진출 지점을 이월해 둔다 — 다음 일반도로 run 이 이 지점부터 시작하도록.
-		//   폐쇄식·개방식은 진출게이트가 그 역할을 하지만(bHasGateExitCarry, 6455/5766/7790)
+		//   폐쇄식·개방식은 진출게이트가 그 역할을 하지만(bHasGateExitCarry — ProcessClosedRoadCharge()/
+		//   ProcessOpenGateCharge()/CheckClosedRoadExitByRawGps() 의 이월 세팅부)
 		//   면제구역은 게이트가 없어 이 장치가 없었고, 그래서 "면제 진출점 ~ 일반도로 첫 매칭점"
 		//   구간이 어느 레코드에도 안 들어갔다 — 실측 000983_20250903153213: 면제 RL-Z00018
 		//   진출점(37.407089,127.085892)과 바로 뒤 일반도로 시작점(37.407050,127.085256) 사이
@@ -8450,7 +8461,7 @@ void CRawLogWorker::ProcessNodeStepCharge(int nThreadId, const sRawLogInfo& stRa
 	//   선언을 여기로 앞당김(2026-09-03 최정우 수정 — 원래 ①·② 사이에 있었음)
 	// [버그 수정, 2026-09-10 최정우] 원래 이 함수의 지역변수였는데, 2026-09-07에 추가된
 	//   "!bTrustedMatch면 새 run을 안 연다" 가드(미등록 도로 개시 분기)가 이 지역변수의 유일한
-	//   소비 지점(구 8097줄)보다 먼저 return 해버려, 신뢰 못하는 tick을 만나면 이미 쌓아둔
+	//   소비 지점(② 새 run 개시부)보다 먼저 return 해버려, 신뢰 못하는 tick을 만나면 이미 쌓아둔
 	//   이월값이 그대로 소멸했다(함수가 매 tick 새로 호출되므로 다음 tick엔 false로 초기화된
 	//   새 지역변수만 존재) — 최소 재현으로 87.3m 규모 이월값 유실을 확인. 게이트 이월
 	//   (pstSession->bHasGateExitCarry, 바로 아래)과 똑같이 세션 필드로 승격해, 신뢰 못하는
@@ -11329,6 +11340,30 @@ bool CRawLogWorker::BulkReleaseRawLogs(PGconn *pcConn, const vector<RAW_LOG_UPDA
  * \t   return !m_stConfig.pcChargeDataLoader->IsLinkChargeRegistered(qwLinkID);
  * \t 한 줄로 바꾸면 2026-09-06 이전 판정으로 정확히 복귀한다.
 */
+/**
+ * @brief 이 매칭 링크를 일반도로(CHARGE_TYPE=0) run 으로 계상해도 되는지 판정
+ *   (2026-09-07 최정우 추가, 사용자 지시)
+ * @param[in] qwLinkID 판정 대상 링크
+ * @param[in] pstSession 현재 세션 — 게이트형 run 진행 여부(③)를 보기 위해 필요. nullptr 이면
+ *   보수적으로 false
+ * @return true=일반도로로 계상 가능
+ * @remark BuildNodeStepRow() 헤더 주석 "1. 대상 범위" 의 판정 본체다. 세 갈래로 갈린다:
+ * \t  ① 어느 과금 구역에도 등록되지 않은 링크 — 일반도로(미등록 pseudo-zone)
+ * \t  ② 일반도로(0)·면제(5) 구역에 등록된 링크 — 각 유형이 자기 run 으로 처리하므로 여기서는
+ * \t     계상하지 않는다(면제를 흡수하면 면제 구간이 과금된다)
+ * \t  ③ 게이트형(1 개방식·2 폐쇄식·3 구간단속)**에만** 등록된 링크(IsLinkGateZoneOnly) —
+ * \t     그 구역 run 이 열려 있는 동안은 그 유형의 몫이고, **닫혀 있는 동안은 일반도로**다.
+ * \t     게이트형은 "게이트를 통과한 구간"만 그 유형으로 과금되므로, 게이트 미통과나 이미 진출한
+ * \t     뒤에도 같은 링크에 매칭되는 tick 이 그 유형에 계상되지 않기 때문이다. 종전에는 "등록
+ * \t     링크"라는 이유만으로 미등록 대상에서도 빠져 어떤 run 에도 못 들어간 채 사라졌다 —
+ * \t     실측 000376_20260819140532 seq48·49(구간단속 RL-Z00003 의 유일 링크 2040424301, seq47
+ * \t     뒤 진출게이트 TG00013 통과로 run 이 닫혔는데도 계속 그 링크에 매칭)가 누락되어 일반도로가
+ * \t     23~47 / 51~53 으로 쪼개졌다. 수정 후 23~53 한 레코드다.
+ * @remark 되돌리는 법 — ③ 분기를 지우고 `IsLinkChargeRegistered(qwLinkID)` 만으로 판정하면
+ * \t 2026-09-07 이전(등록 링크면 무조건 제외) 동작으로 복귀한다.
+ * \t (2026-09-17 최정우 — 헤더 선언부가 "상세는 구현부 주석 참고" 라고 가리키는데 정작 구현부에
+ * \t  설명이 없어 보완. 동작 변화 없음)
+*/
 bool CRawLogWorker::IsLinkNodeStepEligible(const uint64 qwLinkID, const VEHICLE_TRIP_SESSION *pstSession)
 {
 	if (!m_stConfig.pcChargeDataLoader->IsLinkChargeRegistered(qwLinkID))
@@ -11421,6 +11456,26 @@ void CRawLogWorker::DropNodeStepRowsWithoutMatch(vector<CHARGE_INSERT_ROW> *pvtC
 		pvtCharges->swap(vtKept);
 }
 
+/**
+ * @brief 배치 INSERT 직전, 같은 트립에서 연속으로 이어지는 일반도로(CHARGE_TYPE=0) 행을 하나로
+ *   합치고 거리·체류시간·평균속도를 다시 계산한다 (2026-09-06 최정우 추가, 사용자 지시)
+ * @param[in,out] pvtCharges 이 배치의 과금 행 목록 — 흡수된 행은 제거된다
+ * @remark 일반도로는 "연속 주행 구간 하나 = 레코드 하나"가 원칙이다. run 이 구역 진입 tick 소비·
+ *   디바운스·보류 등으로 쪼개져도 여기서 다시 붙인다. 규칙은 넷이다:
+ * \t  · **순서** — 트립별 START_GPS_SEQ 오름차순으로 훑는다(적재 순서가 아니다). 적재 순서로
+ * \t    돌면 구간이 겹친 채 둘 다 남아 이중 계상된다(본문 2026-09-15 주석 참고).
+ * \t  · **이어짐 판정** — 같은 tick 공유, 바로 다음 tick, 또는 한 tick 만 비는 경우까지(구역
+ * \t    진입 tick 이 그 구역 세션에 소비된 상황). 두 tick 이상 비면 합치지 않는다.
+ * \t  · **합치지 않는 예외** — ① 앞 행의 bNoMergeAfter(사이에 실제 다른 과금유형 등록 링크가
+ * \t    껴 진짜로 끊긴 "섬") ② 병합 결과가 다른 과금유형 행을 **진부분집합으로** 감싸는 경우
+ * \t    (구간단속 미러가 병합을 타고 앞 구간까지 끌어당기던 문제, 2026-09-16).
+ * \t  · **판정 승계** — charge_yn/status/non_charge_reason 은 완전 일치를 요구하지 않는다.
+ * \t    둘 중 하나라도 비정상이면 전체를 비정상으로 통일한다("정확도 우선").
+ *   DropNodeStepRowsWithoutMatch() 를 **먼저** 돌린 뒤에 호출해야 한다 — 순서가 바뀌면 매칭
+ *   tick 이 없는 구간이 정상 구간에 이미 흡수돼 걸러낼 수 없다(run() 호출부 주석 참고).
+ *   (2026-09-17 최정우 — 헤더 선언부가 "상세 규칙은 구현부 주석 참고" 라고 가리키는데 정작
+ *    구현부에 설명이 없어 보완. 동작 변화 없음)
+*/
 void CRawLogWorker::MergeAdjacentNodeStepRows(vector<CHARGE_INSERT_ROW> *pvtCharges)
 {
 	if ((pvtCharges == nullptr) || (pvtCharges->size() < 2))
@@ -11661,6 +11716,46 @@ bool CRawLogWorker::BulkInsertCharges(PGconn *pcConn, const vector<CHARGE_INSERT
 			}
 		}
 
+		// [보강, 2026-09-17 최정우, 사용자 지시] 시각 컬럼 빈 값 방어 — OCCUR_DT/TRIP_START_DT/
+		//   REG_DT/UPD_DT 는 DB 에서 **varchar NOT NULL** 이다. varchar 라 빈 문자열이 타입 오류를
+		//   내지 않고, NOT NULL 도 ''(NULL 아님)을 막지 못하며, 컬럼 DEFAULT 는 [charge_insert] 가
+		//   값을 명시하므로 발동하지 않는다 — 즉 **빈 값이 아무 경고 없이 그대로 적재된다**.
+		//   빌 수 있는 경로: FormatDateTime14() 는 시각이 0 이하면 빈 문자열을 반환하는데,
+		//   UPD_DT 를 OCCUR_DT 에서 복사하는 일반도로·면제도로 계열(BuildNodeStepRow/
+		//   BuildNodeStepRowFromLinkRange/BuildExemptRow)이 여기에 노출된다. REG_DT 계열은
+		//   time(nullptr) 이라 구조적으로 빌 수 없지만 방어는 같이 건다.
+		//   보정 순서는 "덜 임의적인 값 우선" — OCCUR_DT 는 REG_DT(그 행이 만들어진 시각)로,
+		//   TRIP_START_DT 는 보정된 OCCUR_DT 로, UPD_DT 는 보정된 REG_DT 로 메운다.
+		//   SQL 에 COALESCE 를 넣지 않고 여기서 처리하는 이유는 **흔적을 남기기 위해서**다 —
+		//   SQL 로 덮으면 조용히 메워져 원인을 추적할 수 없다. 기존 STAY_SECONDS/SPEED_KMH
+		//   음수 보정과 동일한 자리·동일한 방식(WARN + trip_id/charge_seq)이다.
+		//   TRIP_END_DT 는 nullable 이라 대상이 아니다 — 빈 값은 [charge_insert] 의
+		//   NULLIF(...,'') 가 NULL 로 바꿔 주는 것이 정답이다(그쪽이 [trip_abend] 의
+		//   `TRIP_END_DT IS NULL` 판정 조건과 맞물린다).
+		//   실측: 현재 적재분에 빈 값 0건 — 발생 이력 없는 예방 조치다.
+		string strRegFixed = stRow.strRegDt;
+		string strOccurFixed = stRow.strOccurDt;
+		string strTripStartFixed = stRow.strTripStartDt;
+		string strUpdFixed = stRow.strUpdDt;
+		if (strRegFixed.empty() || strOccurFixed.empty()
+			|| strTripStartFixed.empty() || strUpdFixed.empty())
+		{
+			LOGFMTW("empty datetime column filled!device=[%s] trip_id=[%s] seq=[%s] charge_type=[%s] "
+				"occur_dt=[%s] trip_start_dt=[%s] reg_dt=[%s] upd_dt=[%s]",
+				stRow.strDeviceKey.c_str(), stRow.strTripId.c_str(), stRow.strChargeSeq.c_str(),
+				stRow.strChargeType.c_str(), strOccurFixed.c_str(), strTripStartFixed.c_str(),
+				strRegFixed.c_str(), strUpdFixed.c_str());
+
+			if (strRegFixed.empty())
+				strRegFixed = FormatDateTime14(time(nullptr));
+			if (strOccurFixed.empty())
+				strOccurFixed = strRegFixed;
+			if (strTripStartFixed.empty())
+				strTripStartFixed = strOccurFixed;
+			if (strUpdFixed.empty())
+				strUpdFixed = strRegFixed;
+		}
+
 		vtTripId.push_back(stRow.strTripId);
 		vtDeviceKey.push_back(stRow.strDeviceKey);
 		vtChargeSeq.push_back(stRow.strChargeSeq);
@@ -11678,13 +11773,13 @@ bool CRawLogWorker::BulkInsertCharges(PGconn *pcConn, const vector<CHARGE_INSERT
 		vtDistM.push_back(stRow.strDistM);
 		vtSpeedKmh.push_back(strSpeedFixed);				// 원본 아닌 보정값 (2026-09-15 최정우 수정)
 		vtSpeedLimitKmh.push_back(strSpeedLimitFixed);		// 원본 아닌 보정값 (2026-09-15 최정우 수정)
-		vtOccurDt.push_back(stRow.strOccurDt);
-		vtTripStartDt.push_back(stRow.strTripStartDt);
+		vtOccurDt.push_back(strOccurFixed);					// 원본 아닌 보정값 (2026-09-17 최정우 추가)
+		vtTripStartDt.push_back(strTripStartFixed);
 		vtTollgateId.push_back(stRow.strTollgateId);
 		vtEntryTollgateId.push_back(stRow.strEntryTollgateId);
 		vtExitTollgateId.push_back(stRow.strExitTollgateId);
-		vtRegDt.push_back(stRow.strRegDt);
-		vtUpdDt.push_back(stRow.strUpdDt);
+		vtRegDt.push_back(strRegFixed);						// 원본 아닌 보정값 (2026-09-17 최정우 추가)
+		vtUpdDt.push_back(strUpdFixed);
 		vtChargeYn.push_back(stRow.strChargeYn);
 		vtChargeStatus.push_back(stRow.strChargeStatus);
 		vtStaySeconds.push_back(strStayFixed);			// 원본 아닌 보정값 (2026-09-15 최정우 수정)

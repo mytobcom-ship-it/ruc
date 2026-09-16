@@ -27,8 +27,9 @@
  *   003=고가/004=지하로 정의돼 있었으나 실측(network.moct_link 전국 155만건, 분포
  *   001:1,405건·002:2,459건·003:35,813건·004:6,461건)과 doc/지능형교통체계ITS+표준+
  *   노드링크+구축+및+운영지침.PDF 24쪽 대조 결과 공식값과 반대로 정의돼 있었음이 확인돼
- *   정정함. IsElevatedRoad(){1,3} 세트 체크라 이 스왑과 무관하게 결과 동일하지만,
- *   IsUndergroundRoad()는 값 4 단독 체크라 정정 후 대상이 터널→지하차도로 바뀜(의도된
+ *   정정함. IsElevatedRoad(){ELEVATED,BRIDGE} 세트 체크라 이 스왑과 무관하게 결과 동일하지만,
+ *   IsUndergroundRoad()는 ROAD_TYPE_UNDERGROUND(정정 전 4=터널, 정정 후 2=지하차도) 단독
+ *   체크라 정정 후 대상이 터널→지하차도로 바뀜(의도된
  *   동작 변경). 상세: doc/표준노드링크_시설물_도로_코드_분석.html
 */
 enum eLinkRoadType : uint8

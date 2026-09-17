@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>과금 판정 로직 플로우차트</title>
+<script src="https://unpkg.com/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  :root{
+    --bg:#f7f8fa; --panel:#ffffff; --text:#16202c; --muted:#5b6b7c; --faint:#8b9aab;
+    --border:#e3e8ee; --border-soft:#eef1f5; --accent:#1e6fd9; --code-bg:#f0f3f7;
+    --ok:#1b8a5a; --warn:#c77700; --bad:#c62828; --shadow:0 1px 2px rgba(16,32,48,.05),0 5px 14px rgba(16,32,48,.035);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0e141b; --panel:#161f29; --text:#e4eaf0; --muted:#9aacbd; --faint:#71849a;
+      --border:#26323f; --border-soft:#1e2833; --accent:#5ea2f5; --code-bg:#0b1119;
+      --ok:#4cc38a; --warn:#e9a13b; --bad:#f0736a; --shadow:0 1px 2px rgba(0,0,0,.4);
+    }
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Malgun Gothic","Apple SD Gothic Neo",sans-serif;
+    font-size:14px; line-height:1.62; -webkit-font-smoothing:antialiased;
+  }
+  code,.mono{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  code{background:var(--code-bg); padding:.08em .32em; border-radius:4px; font-size:.87em;}
+
+  #layout{display:flex; min-height:100vh;}
+  nav{
+    width:230px; flex:none; background:var(--panel); border-right:1px solid var(--border);
+    padding:20px 12px 50px; position:sticky; top:0; height:100vh; overflow-y:auto;
+  }
+  nav .brand{font-size:11px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; color:var(--accent); padding:0 9px; margin-bottom:12px;}
+  nav a{display:block; font-size:13px; color:var(--text); text-decoration:none; padding:5px 9px; border-radius:5px; line-height:1.35;}
+  nav a:hover{background:var(--code-bg);}
+  nav .grp{margin-top:14px; margin-bottom:3px; font-size:10.5px; color:var(--faint); font-weight:700; letter-spacing:.05em; padding:0 9px; text-transform:uppercase;}
+
+  main{flex:1; padding:30px 38px 90px; max-width:1060px; min-width:0;}
+  header.page-head{margin-bottom:30px;}
+  .eyebrow{font-size:10.5px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--accent); margin:0 0 7px;}
+  h1{font-size:25px; font-weight:700; letter-spacing:-.01em; margin:0 0 9px;}
+  .lede{color:var(--muted); font-size:14px; max-width:76ch; margin:0;}
+
+  section{margin-bottom:44px; scroll-margin-top:14px;}
+  section h2{font-size:19px; margin:0 0 5px; padding-bottom:7px; border-bottom:2px solid var(--accent);}
+  section h2 .ctype{font-size:13px; color:var(--faint); font-weight:600; font-family:"IBM Plex Mono",ui-monospace,monospace;}
+  section h3{font-size:14.5px; margin:22px 0 6px;}
+  p{margin:9px 0;}
+  .src{
+    font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--muted);
+    background:var(--code-bg); border-left:3px solid var(--border); padding:6px 10px; border-radius:0 5px 5px 0;
+    margin:9px 0 12px; word-break:break-all; line-height:1.5;
+  }
+  .card{
+    background:var(--panel); border:1px solid var(--border); border-radius:10px; box-shadow:var(--shadow);
+    padding:14px 12px; margin:12px 0; overflow-x:auto;
+  }
+  pre.mermaid{margin:0; text-align:center;}
+  pre.mermaid svg{max-width:100%; height:auto;}
+
+  table{width:100%; border-collapse:collapse; font-size:12.8px; margin:12px 0;}
+  thead th{
+    text-align:left; font-size:10.5px; letter-spacing:.05em; text-transform:uppercase; color:var(--faint);
+    font-weight:700; padding:7px 9px; border-bottom:1px solid var(--border);
+  }
+  tbody td{padding:7px 9px; border-bottom:1px solid var(--border-soft); vertical-align:top;}
+  tbody tr:last-child td{border-bottom:none;}
+  .tbl-wrap{background:var(--panel); border:1px solid var(--border); border-radius:10px; box-shadow:var(--shadow); overflow-x:auto;}
+  .tbl-wrap table{margin:0;}
+  .yn-y{color:var(--ok); font-weight:700;}
+  .yn-n{color:var(--bad); font-weight:700;}
+
+  .note{
+    background:var(--panel); border:1px solid var(--border); border-left:3px solid var(--accent);
+    border-radius:0 8px 8px 0; padding:10px 13px; margin:12px 0; font-size:13px; color:var(--muted);
+  }
+  .note b{color:var(--text);}
+  .note.warn{border-left-color:var(--warn);}
+  .note.bad{border-left-color:var(--bad);}
+
+  ul{margin:8px 0; padding-left:19px;}
+  li{margin:4px 0;}
+  footer{margin-top:50px; padding-top:16px; border-top:1px solid var(--border); font-size:12.5px; color:var(--faint);}
+
+  @media (max-width:900px){
+    #layout{flex-direction:column;}
+    nav{width:100%; height:auto; position:static; border-right:none; border-bottom:1px solid var(--border); padding-bottom:14px;}
+    main{padding:22px 16px 70px;}
+  }
+</style>
+</head>
+<body>
+<div id="layout">
+<nav>
+  <div class="brand">MapMatchSvr</div>
+  <a href="#overview">개요 · 전체 파이프라인</a>
+  <div class="grp">공통 로직</div>
+  <a href="#batch">1. 배치 처리</a>
+  <a href="#tick">2. GPS 1건 처리</a>
+  <a href="#match">3. 맵매칭 엔진</a>
+  <a href="#trust">4. 매칭 신뢰도 판정</a>
+  <a href="#commit">5. 1틱 지연커밋 · 과금 호출</a>
+  <div class="grp">유형별 과금 판정</div>
+  <a href="#t0">6. 일반도로 (0)</a>
+  <a href="#t1">7. 개방형 (1)</a>
+  <a href="#t2">8. 폐쇄형 (2)</a>
+  <a href="#t3">9. 구간단속 (3)</a>
+  <a href="#t4">10. 주정차 (4)</a>
+  <a href="#t5">11. 면제도로 (5)</a>
+  <div class="grp">마감 · 적재</div>
+  <a href="#flush">12. 강제마감 경로</a>
+  <a href="#insert">13. INSERT 직전 후처리</a>
+  <a href="#summary">14. 판정 요약표</a>
+</nav>
+
+<main>
+<header class="page-head">
+  <p class="eyebrow">PRIM_RAWGPS → PRIM_CHARGEHAND</p>
+  <h1>과금 판정 로직 플로우차트</h1>
+  <p class="lede">
+    GPS 한 건이 맵매칭을 거쳐 <code>PRIM_CHARGEHAND</code> 한 행이 되기까지의 판정 흐름.
+    1~5는 여섯 유형이 공유하는 공통 로직, 6~11은 일반도로부터 면제도로까지 유형별 구역 진입·이탈 판정이다.
+    그림은 뼈대만 그렸고, 세부 조건은 각 그림 아래 표와 설명에 있다.
+  </p>
+</header>
+
+<section id="overview">
+  <h2>개요 · 전체 파이프라인</h2>
+  <div class="src">Server.cpp · RawLogFetcher.cpp · ThreadPool.cpp · RawLogWorker.cpp</div>
+  <div class="card">
+<pre class="mermaid">
+flowchart LR
+    A[("prim_rawgps")] --> B["예약 조회 + 워커 배분"]
+    B --> C["tick 처리&lt;br/&gt;맵매칭 · 과금 판정"]
+    C --> D{{"UPDATE + INSERT&lt;br/&gt;한 트랜잭션"}}
+    D -->|성공| E[("prim_chargehand")]
+    D -->|실패| F["PENDING 반납&lt;br/&gt;다음 폴에서 재처리"]
+
+    classDef db fill:#1e6fd9,color:#fff,stroke:#0d47a1;
+    classDef bad fill:#c62828,color:#fff,stroke:#8e1c1c;
+    class A,E db;
+    class F bad;
+</pre>
+  </div>
+  <div class="note">
+    <b>과금 유형 코드</b> — <code>0</code> 일반도로 · <code>1</code> 개방형 · <code>2</code> 폐쇄형 ·
+    <code>3</code> 구간단속 · <code>4</code> 주정차 · <code>5</code> 면제도로.
+    사유 코드는 유형마다 10 단위 대역 — <a href="errorcode.html">errorcode.html</a> 참고.
+  </div>
+</section>
+
+<section id="batch">
+  <h2>1. 배치 처리</h2>
+  <div class="src">RawLogWorker.cpp :: run()</div>
+  <div class="card">
+<pre class="mermaid">
+flowchart TD
+    S(["배치 시작"]) --> C["세션 복사"]
+    C --> L["tick 루프 (§2)"]
+    L --> R["남은 구간 마감 · 보류행 확정"]
+    R --> P["INSERT 직전 후처리 (§13)"]
+    P --> T{"UPDATE + INSERT"}
+    T -->|성공| OK["COMMIT · 세션 커밋"]
+    T -->|실패| NG["ROLLBACK · PENDING 반납&lt;br/&gt;세션 폐기"]
+    OK --> E["TTL 만료 세션 정리 (§12)"]
+    NG --> E
+
+    classDef ok fill:#1b8a5a,color:#fff,stroke:#116644;
+    classDef bad fill:#c62828,color:#fff,stroke:#8e1c1c;
+    class OK ok;
+    class NG bad;
+</pre>
+  </div>
+  <ul>
+    <li>한 배치 = 같은 DEVICE_KEY 의 tick 묶음. 세션은 <b>DB 반영 성공 시에만</b> 커밋된다.</li>
+    <li>맵매칭 UPDATE 와 과금 INSERT 는 한 트랜잭션 — 예전엔 UPDATE 만 커밋되고 과금이 조용히 사라지는 사고가 있었다.</li>
+    <li>종료 tick 뒤에 tick 이 더 있었으면, 세션을 버리기 전에 열린 구간을 강제마감한다(§12).</li>
+  </ul>
+</section>
+
+<section id="tick">
+  <h2>2. GPS 1건 처리</h2>
+  <div class="src">RawLogWorker.cpp :: ProcessRawLog() · ValidateRawLog() · ShouldSkipGpsInput() · NeedsBeginReset()</div>
+  <div class="card">
+<pre class="mermaid">
+flowchart TD
+    S(["GPS 1건"]) --> V{"기본 검증"}
+    V -->|실패| SK["SKIP 기록"]
+    V -->|통과| B{"운행 시작?"}
+    B -->|예| R["이전 운행 마감 · 세션 초기화"]
+    B -->|아니오| G
+    R --> G{"입력 관문 통과?"}
+    G -->|아니오| PS["주정차만 판정 → SKIP"]
+    G -->|예| M["맵매칭 (§3)"]
+    M --> T{"신뢰 가능?"}
+    T -->|예| H["1틱 보류 (§5)"]
+    T -->|아니오| SK
+
+    classDef bad fill:#c62828,color:#fff,stroke:#8e1c1c;
+    classDef ok fill:#1b8a5a,color:#fff,stroke:#116644;
+    class SK,PS bad;
+    class H ok;
+</pre>
+  </div>
+  <h3>입력 관문</h3>
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th style="width:26%">관문</th><th>걸리면</th></tr></thead>
+    <tbody>
+      <tr><td>GPS 순번 역전</td><td>이 행만 SKIP, 세션은 유지</td></tr>
+      <tr><td>좌표 NULL · RAW_VLD 무효</td><td>주정차만 판정 후 SKIP</td></tr>
+      <tr><td>정확도 &gt; <code>radius_skip</code></td><td>주정차 판정 + 최근접 좌표만 기록, SKIP 버퍼에 적재</td></tr>
+      <tr><td>이동거리 환산속도 이상</td><td>SKIP (<code>speed_factor</code> · <code>speed_margin</code> 기준)</td></tr>
+      <tr><td>직전 매칭과 시간 간격 과다</td><td>연속 매칭 맥락 리셋 후 초기 매칭으로 진행</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="note">
+    정확도 SKIP 구간은 버려지지 않는다 — 다음 확정 링크가 나오면 그 방향으로 재매칭해 소급 MATCHED 로
+    되살리고 그 사이 거리를 일반도로로 복원한다. 단 <b>과금은 소급하지 않는다</b>.
+  </div>
+</section>
+
+<section id="match">
+  <h2>3. 맵매칭 엔진</h2>
+  <div class="src">ProcessManager.cpp :: AttemptMatch() · ContinueMapMatch.cpp · BeginMapMatch.cpp · MapMatch.cpp</div>
+  <div class="card">
+<pre class="mermaid">
+flowchart TD
+    S(["매칭 요청"]) --> A["입력 보정 · 검색반경 산출"]
+    A --> C{"직전 확정 링크로&lt;br/&gt;연속 매칭 성공?"}
+    C -->|예| P["경유 링크 경로 재구성"]
+    C -->|아니오| B{"초기 매칭 성공?"}
+    B -->|예| P
+    B -->|아니오| W{"반경 확대 재시도"}
+    W -->|성공| P
+    W -->|실패| NG(["매칭 실패"])
+    P --> K["경로 타당성 검사&lt;br/&gt;길이 · 절대속도 · 제한속도 · 방향"]
+    K --> OK(["매칭 성공"])
+
+    classDef ok fill:#1b8a5a,color:#fff,stroke:#116644;
+    classDef bad fill:#c62828,color:#fff,stroke:#8e1c1c;
+    class OK ok;
+    class NG bad;
+</pre>
+  </div>
+  <div class="note">
+    <b>경유 링크 경로가 과금에 직접 영향을 준다.</b> GPS 간격이 3초로 벌어지면 짧은 게이트 링크가 두 tick
+    사이에 통째로 끼어 사라진다. 그래서 모든 유형은 최종 링크 하나가 아니라 <b>이번 tick 이 지나온 경로 링크 전부</b>로
+    구역·게이트를 판정한다.
+  </div>
+</section>
+
+<section id="trust">
+  <h2>4. 매칭 신뢰도 판정</h2>
+  <div class="src">RawLogWorker.cpp :: ProcessRawLog() 신뢰도 블록 · IsFallbackJumpImplausible() · IsMatchOutsideRawZonePolygon()</div>
+  <div class="card">
+<pre class="mermaid">
+flowchart LR
+    M(["매칭 성공"]) --> Q{"불신 사유&lt;br/&gt;하나라도 해당?"}
+    Q -->|아니오| OK["확정 · 과금 판정 진행"]
+    Q -->|예| NG["SKIP · 과금 제외&lt;br/&gt;(주정차는 예외로 계속 판정)"]
+
+    classDef ok fill:#1b8a5a,color:#fff,stroke:#116644;
+    classDef bad fill:#c62828,color:#fff,stroke:#8e1c1c;
+    class OK ok;
+    class NG bad;
+</pre>
+  </div>
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th style="width:24%">불신 사유</th><th>판정 기준</th></tr></thead>
+    <tbody>
+      <tr><td>역주행 의심</td><td><code>reverse_confirm</code> 회 연속 확인 전까지는 확정하지 않음</td></tr>
+      <tr><td>경계 클램프 저신뢰</td><td>매칭점이 링크 경계로 밀렸고 원좌표와의 거리도 큼</td></tr>
+      <tr><td>양방향 모호</td><td>상·하행 후보 점수가 갈리지 않음</td></tr>
+      <tr><td>폴백 점프 과다</td><td>초기 매칭 폴백인데 매칭점 이동이 실제 GPS 이동으로 설명되지 않음</td></tr>
+      <tr><td>경로 절대속도 초과</td><td>재구성 경로 길이 ÷ 경과시간이 물리적으로 불가능</td></tr>
+      <tr><td>경로 제한속도 초과</td><td>링크별 제한속도 기준 최소 소요시간 합 &gt; 실제 경과시간</td></tr>
+      <tr><td>경로 방향 불일치</td><td>경로 전체 진행방향이 현재 heading 과 크게 어긋남</td></tr>
+      <tr><td>구역 폴리곤 이탈</td><td>raw 는 주정차 폴리곤 안인데 매칭 좌표만 밖인 저속 구간</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="note warn">
+    RUC 는 요금과 직결되므로 <b>확신 없는 링크를 맞다고 쓰는 것보다 비우는 쪽</b>을 택한다.
+  </div>
+</section>
+
+<section id="commit">
+  <h2>5. 1틱 지연커밋 · 과금 호출</h2>
+  <div class="src">RawLogWorker.cpp :: CommitPendingRow()</div>
+  <div class="card">
+<pre class="mermaid">
+flowchart TD
+    S(["보류행 확정"]) --> F["다음 링크를 알고 하는 보정&lt;br/&gt;반대편 링크 · 경로 단절 · 지선 이탈"]
+    F --> M{"최종 MATCHED?"}
+    M -->|아니오| X["폐쇄형 · 구간단속만&lt;br/&gt;raw GPS 진출 보완"]
+    M -->|예| C["과금 판정 순차 실행&lt;br/&gt;개방형 → 폐쇄형 → 구간단속 → 면제 → 일반도로"]
+    C --> B["SKIP 구간 소급 브릿지"]
+    B --> W["UPDATE 기록 · 확정 링크 갱신"]
+    X --> W
+
+    classDef ok fill:#1b8a5a,color:#fff,stroke:#116644;
+    class C ok;
+</pre>
+  </div>
+  <ul>
+    <li>정상 매칭 tick 은 곧바로 쓰지 않고 <b>한 tick 보류</b> — 다음 확정 링크를 알면 오매칭을 되짚어 고칠 수 있다.</li>
+    <li>호출 순서에 의미가 있다. 게이트형이 먼저 진출을 확정하며 <b>진출 이월</b>을 걸면, 뒤에 도는 일반도로가 그 거리를 흡수한다.</li>
+    <li>주정차만 이 순서 밖에서(맵매칭 직후) 별도로 돈다.</li>
+  </ul>
+</section>
+
+<section id="t0">
+  <h2>6. 일반도로 <span class="ctype">charge_type = 0</span></h2>
+  <div class="src">RawLogWorker.cpp :: ProcessNodeStepCharge() · BuildNodeStepRow() · IsLinkNodeStepEligible()</div>
+  <div class="card">
+<pre class="mermaid">
+flowchart TD
+    S(["신뢰 매칭 tick"]) --> P{"주정차 폴리곤 안?"}
+    P -->|예| PC["판정 중단 · 거리 이월"]
+    P -->|아니오| Z{"등록 구역 또는&lt;br/&gt;미등록 링크?"}
+    Z -->|아니오| O["다른 유형 구간&lt;br/&gt;이월분 마감"]
+    Z -->|예| A["구간 개시 또는 거리 누적&lt;br/&gt;(이월 보유 시 흡수)"]
+    A --> X{"이탈 확정?&lt;br/&gt;node_exitcnt 또는 트립종료"}
+    X -->|아니오| S
+    X -->|예| T["꼬리 · 갭 링크 거리 보정"]
+    T --> C{"바로 다음도&lt;br/&gt;일반도로?"}
+    C -->|예| MG["다음 구간에 병합"]
+    C -->|아니오| R["행 생성 · Y / 0"]
+
+    classDef ok fill:#1b8a5a,color:#fff,stroke:#116644;
+    class R ok;
+</pre>
+  </div>
+  <p>다른 다섯 유형에 속하지 않는 모든 주행 구간이 일반도로다. 게이트가 없어 링크 자체로 판정한다.</p>
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th style="width:24%">컬럼</th><th>값</th></tr></thead>
+    <tbody>
+      <tr><td><code>FROM_ID</code> / <code>TO_ID</code></td><td>진입 링크 ID / 이탈 링크 ID (게이트 ID 아님)</td></tr>
+      <tr><td><code>ZONE_ID</code></td><td>항상 공란 — 등록 구역이든 미등록 링크든 채우지 않는다</td></tr>
+      <tr><td><code>DIST_M</code></td><td>진입~이탈 실측 누적 (+ 꼬리·갭 보정, 이월 승계분 포함)</td></tr>
+      <tr><td><code>OCCUR_DT</code></td><td><b>진출 시각</b> — 나머지 다섯 유형이 진입 시각인 것과 다른 유일한 예외</td></tr>
+      <tr><td><code>CHARGE_UNIT</code></td><td><code>0</code></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="note">
+    구간단속 구역을 지나면 그 거리는 일반도로 행으로도 한 번 더 남는다(§9 미러).
+    위반이 아니어도 도로를 달린 사실은 기록해야 하기 때문이다.
+  </div>
+</section>
+
+<section id="t1">
+  <h2>7. 개방형 <span class="ctype">charge_type = 1</span></h2>
+  <div class="src">RawLogWorker.cpp :: ProcessOpenGateCharge() · UpdateOpenGateCrossed() · BuildOpenZoneRow()</div>
+  <div class="card">
+<pre class="mermaid">
+flowchart TD
+    S(["신뢰 매칭 tick"]) --> Z{"개방형 구역?"}
+    Z -->|아니오| E(["대상 아님"])
+    Z -->|예| A["구간 개시 또는 누적&lt;br/&gt;게이트 통과 여부 갱신"]
+    A --> X{"이탈 확정?&lt;br/&gt;node_exitcnt 또는 트립종료"}
+    X -->|아니오| S
+    X -->|예| J{"운행이 구역 중간에서 시작?"}
+    J -->|아니오| Y1["Y / 0&lt;br/&gt;dist_m = 구역 등록 길이"]
+    J -->|예| G{"게이트를 실제로 지났나?"}
+    G -->|예| Y2["Y / 0&lt;br/&gt;dist_m = 실측 누적"]
+    G -->|아니오| N["N / 3 · 사유 11"]
+
+    classDef ok fill:#1b8a5a,color:#fff,stroke:#116644;
+    classDef bad fill:#c62828,color:#fff,stroke:#8e1c1c;
+    class Y1,Y2 ok;
+    class N bad;
+</pre>
+  </div>
+  <ul>
+    <li>원래 게이트 통과 순간의 점 이벤트였으나, 주행거리·시간을 남기려고 <b>구역 진입~이탈</b> 구조로 바뀌었다.</li>
+    <li>마감 시 <b>게이트 진출 이월</b>을 걸어 다음 일반도로 구간이 그 거리를 이어받는다.</li>
+    <li>GPS 간격 때문에 구역을 tick 없이 스쳐 지나면 경로 복원 행(사유 12)이 생기는데, 같은 구역의 정규 마감 행이 뒤따르면 <b>그 행에 흡수</b>된다.</li>
+  </ul>
+</section>
+
+<section id="t2">
+  <h2>8. 폐쇄형 <span class="ctype">charge_type = 2</span></h2>
+  <div class="src">RawLogWorker.cpp :: ProcessClosedRoadCharge() · CheckClosedRoadExitByRawGps()</div>
+  <div class="card">
+<pre class="mermaid">
+flowchart TD
+    S(["신뢰 매칭 tick"]) --> I{"진행 중인 구역?"}
+    I -->|아니오| N1{"입구 게이트 통과?"}
+    N1 -->|예| OP["진입 확정&lt;br/&gt;입구 게이트 · 진입시각 기록"]
+    N1 -->|아니오| E(["대상 아님"])
+    I -->|예| A["구역 안이면 거리 누적"]
+    A --> X{"출구 게이트 통과?"}
+    X -->|예| G{"게이트 이상?"}
+    X -->|아니오| L{"구역 링크 이탈?"}
+    L -->|아니오| S
+    L -->|예| U["N / 3 · 사유 23&lt;br/&gt;dist_m = 실측 누적"]
+    G -->|없음| Y["Y / 0&lt;br/&gt;dist_m = 구역 등록 길이"]
+    G -->|있음| NG["N / 3&lt;br/&gt;21 입구 · 22 입구=출구 · 23 출구"]
+
+    classDef ok fill:#1b8a5a,color:#fff,stroke:#116644;
+    classDef bad fill:#c62828,color:#fff,stroke:#8e1c1c;
+    class Y ok;
+    class U,NG bad;
+</pre>
+  </div>
+  <ul>
+    <li>한 링크에 같은 방향 게이트가 여럿이거나 입·출구 겸용(<code>B</code>)이어도 처리되도록 후보를 전부 모아 대조한다.</li>
+    <li><b>진입 모호</b> — 운행이 입구를 지난 지점에서 시작하면 입구 게이트를 비우고(사유 21) 거리도 시작점~출구 직선거리로 잡는다.</li>
+    <li>맵매칭 실패 tick 만 이어져 출구를 못 잡는 경우를 대비해 raw GPS 기준 출구 보완 판정이 따로 있다.</li>
+  </ul>
+</section>
+
+<section id="t3">
+  <h2>9. 구간단속 <span class="ctype">charge_type = 3</span></h2>
+  <div class="src">RawLogWorker.cpp :: ProcessSpeedZoneCharge() · BuildNodeStepRowFromLinkRange()</div>
+  <div class="card">
+<pre class="mermaid">
+flowchart TD
+    S(["신뢰 매칭 tick"]) --> I{"진행 중인 구역?"}
+    I -->|아니오| N1{"입구 게이트 통과?"}
+    N1 -->|예| OP["진입 확정"]
+    N1 -->|아니오| E(["대상 아님"])
+    I -->|예| A["거리 누적"]
+    A --> X{"출구 통과 또는 구역 이탈?"}
+    X -->|아니오| S
+    X -->|예| C["평균속도 = 구역 길이 ÷ 경과시간"]
+    C --> V{"제한속도 이상 또는&lt;br/&gt;제한속도 미등록?"}
+    V -->|예| Y["구간단속 행 적재&lt;br/&gt;Y / 0 (게이트 이상 시 N / 3 · 31~33)"]
+    V -->|아니오| NR["구간단속 행 미적재"]
+    Y --> MR["제한속도 등록 시&lt;br/&gt;일반도로 미러 행 항상 생성"]
+    NR --> MR
+
+    classDef ok fill:#1b8a5a,color:#fff,stroke:#116644;
+    classDef mir fill:#1e6fd9,color:#fff,stroke:#0d47a1;
+    class Y ok;
+    class MR mir;
+</pre>
+  </div>
+  <ul>
+    <li>게이트 구조는 폐쇄형과 같지만 <b>기록 조건이 다르다</b> — 구간단속 행은 위반일 때만 남는다.</li>
+    <li><code>SPEED_KMH</code> 는 순간속도가 아니라 구역 실거리 ÷ 진입~진출 경과시간, <code>SPEED_LIMIT_KMH</code> 는 구역 등록값이다.</li>
+    <li>일반도로가 구간단속 구간을 감싸 보이는 것은 이 미러 때문이며, 이중 계상이 아니라 각자 목적이 다른 정책이다.</li>
+  </ul>
+</section>
+
+<section id="t4">
+  <h2>10. 주정차 <span class="ctype">charge_type = 4</span></h2>
+  <div class="src">RawLogWorker.cpp :: ProcessParkingCharge() · BuildParkRow()<br/>config: park_accmax · park_pad · park_speedmax · park_entrycnt · park_exitcnt</div>
+  <div class="card">
+<pre class="mermaid">
+flowchart TD
+    S(["GPS tick&lt;br/&gt;매칭 실패도 포함"]) --> A{"정확도 ≤ park_accmax?"}
+    A -->|아니오| H["판정 보류 · 구간 유지"]
+    A -->|예| Z["폴리곤 조회&lt;br/&gt;버퍼 = min(park_pad, 정확도)&lt;br/&gt;이동 중이면 매칭 좌표로 교차검증"]
+    Z --> I{"구역 안?"}
+    I -->|예| K["구간 개시(park_entrycnt 연속) 또는 체류 갱신"]
+    I -->|아니오| X{"이탈 확정?&lt;br/&gt;park_exitcnt 또는 트립종료"}
+    X -->|아니오| S
+    X -->|예| M{"체류시간 ≥ 과태료 최소시간?"}
+    M -->|예| Y["행 적재 · Y / 0"]
+    M -->|아니오| D["행 미적재"]
+    K --> S
+
+    classDef ok fill:#1b8a5a,color:#fff,stroke:#116644;
+    class Y ok;
+</pre>
+  </div>
+  <ul>
+    <li>유일하게 <b>맵매칭 결과를 쓰지 않는</b> 유형 — 맵매칭은 좌표를 도로로 끌어당겨 도로 밖 주정차 위치를 왜곡한다.</li>
+    <li>단 <b>이동 중(1km/h 이상)</b> 일 때는 매칭 좌표도 같은 폴리곤 안인 구역만 남긴다.</li>
+    <li><b>매칭 좌표가 폴리곤 안이면 속도와 무관하게 주정차</b>다 — 폴리곤을 통과하는 주행도 포함된다.</li>
+    <li>체류시간은 임계값 없이 사실대로 기록한다. 위반 확정은 과금서버 몫이다.</li>
+  </ul>
+</section>
+
+<section id="t5">
+  <h2>11. 면제도로 <span class="ctype">charge_type = 5</span></h2>
+  <div class="src">RawLogWorker.cpp :: ProcessExemptZoneCharge() · BuildExemptRow()<br/>config: exempt_regrace</div>
+  <div class="card">
+<pre class="mermaid">
+flowchart TD
+    S(["신뢰 매칭 tick"]) --> Z{"면제 구역?"}
+    Z -->|아니오| G{"구역 밖 상태가&lt;br/&gt;exempt_regrace 경과?"}
+    Z -->|예| A["구간 개시 또는&lt;br/&gt;구역 내부 거리만 누적"]
+    A --> S
+    G -->|아니오| W["유예 · 마감 보류"]
+    G -->|예| X["꼬리 보정 · 진출 시각 보간"]
+    W --> S
+    X --> R["행 적재 · Y / 0"]
+    R --> C["진출 이월&lt;br/&gt;다음 일반도로 구간이 흡수"]
+
+    classDef ok fill:#1b8a5a,color:#fff,stroke:#116644;
+    class R ok;
+</pre>
+  </div>
+  <div class="note warn">
+    <b>면제도로만 강제마감 값이 다르다.</b> 정상 이탈·트립종료는 다른 유형과 같은 <span class="yn-y">Y</span>/<code>0</code>
+    이지만, GPS 가 끊겨 마감 신호를 못 받으면 <span class="yn-n">N</span>/<code>4</code>(SKIP) 다 —
+    과금 대상이 아니라 사람이 다시 볼 필요가 없다는 설계. 나머지는 같은 상황에서 <code>3</code>(AUDIT).
+  </div>
+  <div class="note">
+    <code>DIST_M</code> 은 <b>구역 내부 구간만</b> 누적한다. 재진입 유예 중 구역 밖을 달린 거리는 빠진다.
+  </div>
+</section>
+
+<section id="flush">
+  <h2>12. 강제마감 경로</h2>
+  <div class="src">RawLogWorker.cpp :: FlushOpenRunsAsAbnormalEnd() · ExpireTtlSessions() · FlushAllSessionsOnShutdown() · query.sql [trip_abend]</div>
+  <div class="card">
+<pre class="mermaid">
+flowchart LR
+    A["TTL 만료"] --> F
+    B["종료 신호 없이&lt;br/&gt;다음 운행 시작"] --> F
+    C["종료 tick 이후&lt;br/&gt;잔여 tick"] --> F
+    D["서버 종료"] --> F["열린 구간 전부 마감"]
+    F --> R1["면제도로 : N / 4&lt;br/&gt;51 · 52"]
+    F --> R2["나머지 5유형 : N / 3&lt;br/&gt;61 · 62"]
+
+    classDef bad fill:#c62828,color:#fff,stroke:#8e1c1c;
+    class R1,R2 bad;
+</pre>
+  </div>
+  <ul>
+    <li>사유 <code>51</code>·<code>61</code> 은 TTL·잔여tick·서버종료, <code>52</code>·<code>62</code> 는 종료 신호 없이 다음 운행이 시작된 경우다.</li>
+    <li>마감과 함께 <code>TRIP_END_DT</code> 를 마지막 확인 시각으로 채우고, <code>[trip_abend]</code> SQL 이 비어 있던 기존 행도 사후 정정한다.</li>
+  </ul>
+  <div class="note bad">
+    <b>꼬리 보정은 강제마감에 넣지 않는다.</b> 구역 이탈이 확정된 경우에만 마지막 링크 종점까지 더한다 —
+    TTL·트립종료에 적용하면 달리지 않은 거리를 청구하게 된다.
+  </div>
+</section>
+
+<section id="insert">
+  <h2>13. INSERT 직전 후처리</h2>
+  <div class="src">RawLogWorker.cpp :: DropNodeStepRowsWithoutMatch() · MergeAdjacentNodeStepRows() · BulkInsertCharges()</div>
+  <div class="card">
+<pre class="mermaid">
+flowchart LR
+    S(["과금 행 목록"]) --> D["① 매칭 tick 없는&lt;br/&gt;일반도로 행 제거"]
+    D --> M["② 연속된 일반도로 행 병합&lt;br/&gt;거리 · 시간 합산 후 평균속도 재계산"]
+    M --> I(["bulk INSERT"])
+
+    classDef ok fill:#1b8a5a,color:#fff,stroke:#116644;
+    class I ok;
+</pre>
+  </div>
+  <ul>
+    <li>둘 다 <b>일반도로 행에만</b> 적용된다 — 게이트형·면제·주정차는 구역 판정이라는 별도 근거가 있다.</li>
+    <li>병합 기준: GPS 순번 오름차순, 같은 tick 공유 · 다음 tick · 한 tick 공백까지.</li>
+    <li>병합 예외 둘 — ① 사이에 다른 유형 링크가 낀 "섬" ② 병합 결과가 다른 유형 구간을 진부분집합으로 감싸는 경우.</li>
+    <li>순서가 중요하다. 제거를 먼저 하지 않으면 매칭 없는 구간이 정상 구간에 흡수돼 걸러낼 수 없다.</li>
+  </ul>
+</section>
+
+<section id="summary">
+  <h2>14. 판정 요약표</h2>
+  <div class="tbl-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th style="width:12%">유형</th>
+        <th style="width:19%">판정 근거</th>
+        <th style="width:22%">행 생성 시점</th>
+        <th style="width:12%">정상</th>
+        <th>비정상 · 강제마감</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><b>0 일반도로</b></td>
+        <td>링크 (등록 구역 · 미등록 링크)</td>
+        <td>구간 이탈 · 트립종료</td>
+        <td><span class="yn-y">Y</span> / 0</td>
+        <td><span class="yn-n">N</span> / 3 — 61 · 62 (SKIP 갭 보정 시 1 · 2)</td>
+      </tr>
+      <tr>
+        <td><b>1 개방형</b></td>
+        <td>구역 + 대표 게이트</td>
+        <td>구역 이탈 · 트립종료</td>
+        <td><span class="yn-y">Y</span> / 0</td>
+        <td><span class="yn-n">N</span> / 3 — 11 · 12 · 61 · 62</td>
+      </tr>
+      <tr>
+        <td><b>2 폐쇄형</b></td>
+        <td>입·출구 게이트</td>
+        <td>출구 통과 · 구역 이탈</td>
+        <td><span class="yn-y">Y</span> / 0</td>
+        <td><span class="yn-n">N</span> / 3 — 21 · 22 · 23 · 61 · 62</td>
+      </tr>
+      <tr>
+        <td><b>3 구간단속</b></td>
+        <td>입·출구 게이트 + 평균속도</td>
+        <td>출구 통과 시 <b>위반만</b><br/>(일반도로 미러는 항상)</td>
+        <td><span class="yn-y">Y</span> / 0</td>
+        <td><span class="yn-n">N</span> / 3 — 31 · 32 · 33 · 61 · 62</td>
+      </tr>
+      <tr>
+        <td><b>4 주정차</b></td>
+        <td>raw GPS + 구역 폴리곤</td>
+        <td>구역 이탈 · 트립종료<br/>(최소 체류시간 미만이면 생성 안 함)</td>
+        <td><span class="yn-y">Y</span> / 0</td>
+        <td><span class="yn-n">N</span> / 3 — 61 · 62</td>
+      </tr>
+      <tr>
+        <td><b>5 면제도로</b></td>
+        <td>링크 (면제 구역)</td>
+        <td>구역 이탈(유예 후) · 트립종료</td>
+        <td><span class="yn-y">Y</span> / 0</td>
+        <td><span class="yn-n">N</span> / <b>4</b> — 51 · 52</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="note">
+    <code>CHARGE_STATUS</code> 는 <code>0</code>(정상) · <code>3</code>(AUDIT, 심사 대상) ·
+    <code>4</code>(SKIP, 면제도로 강제마감 전용) 세 가지. <code>NON_CHARGE_REASON</code> 은 정상 행에도
+    <code>0</code> 이 들어가 모든 행에 항상 채워진다.
+  </div>
+</section>
+
+<footer>
+  MapMatchSvr 소스 기준(2026-09-17). 그림은 판정 흐름을 단순화한 것이며, 정확한 조건·상수는 각 절 상단의
+  함수와 config 키를 확인하세요. 사유 코드는 <a href="errorcode.html">errorcode.html</a>,
+  컬럼 정의는 <a href="columns.html">columns.html</a> 참고.
+</footer>
+</main>
+</div>
+<script>
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default',
+    themeVariables: { fontSize: '12px' },
+    flowchart: { curve: 'basis', useMaxWidth: false, padding: 4, nodeSpacing: 16, rankSpacing: 26 }
+  });
+  (async function renderAllSequential() {
+    const blocks = Array.from(document.querySelectorAll('pre.mermaid'));
+    for (let i = 0; i < blocks.length; i++) {
+      const el = blocks[i];
+      const src = el.textContent;
+      try {
+        const { svg } = await mermaid.render('logicdiagram-' + i, src);
+        el.innerHTML = svg;
+      } catch (e) {
+        el.innerHTML = '<p style="color:#c62828">다이어그램 렌더링 실패: ' + e.message + '</p>';
+      }
+    }
+  })();
+</script>
+</body>
+</html>

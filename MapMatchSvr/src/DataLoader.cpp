@@ -494,8 +494,8 @@ PLINK_SGMT_INFO CDataLoader::GetLinkSgmtInfo(const uint32 dwOffset)
 }
 
 /**
- * @brief 세그먼트별 링크 정보 구하기
- * @param[in] nLinkID 링크 ID
+ * @brief 링크 ID 로 링크 정보 구하기 (세그먼트 단위는 GetLinkSgmtInfo())
+ * @param[in] qwLinkID 링크 ID
  * @return 링크 정보
 */
 PLINK_INFO CDataLoader::GetLinkInfo(const uint64 qwLinkID)

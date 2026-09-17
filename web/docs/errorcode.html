@@ -69,18 +69,6 @@
     font-size:27px; font-weight:700; letter-spacing:-.01em;
     text-wrap:balance; margin:0 0 10px;
   }
-  .subtitle{ font-size:14.5px; color:var(--text-muted); margin:0 0 4px; max-width:62ch; }
-  .subtitle b{ color:var(--text); font-weight:600; }
-
-  .legend{
-    display:flex; flex-wrap:wrap; gap:8px 18px;
-    margin-top:18px; padding-top:16px; border-top:1px solid var(--border-soft);
-    font-size:12.5px; color:var(--text-muted);
-  }
-  .legend span{ display:inline-flex; align-items:center; gap:6px; }
-  .swatch{ width:9px; height:9px; border-radius:2px; display:inline-block; }
-  .swatch.ok{ background:var(--success); }
-  .swatch.reserve{ background:transparent; border:1.5px dashed var(--text-faint); }
 
   .group{
     background:var(--surface);
@@ -159,17 +147,6 @@
   <header>
     <p class="eyebrow">PRIM_CHARGEHAND · NON_CHARGE_REASON</p>
     <h1>과금 판정 사유 코드</h1>
-    <p class="subtitle"><code>PRIM_CHARGEHAND.NON_CHARGE_REASON</code> 의 값 체계. <b>도로 유형마다 10개씩</b> 대역을 배정해, 유형 하나에 사유가 늘어나도 다른 유형의 번호를 건드리지 않는다. 컬럼명은 "비과금 사유"지만 <b>2026-09-15 정책 변경으로 정상 과금 행에도 <code>0</code> 을 적재</b>하므로, 실제 의미는 "비과금 사유"가 아니라 <b>과금 판정 사유(정상 포함)</b> 이고 <b>모든 행에 항상 채워진다</b>(NULL 없음).</p>
-    <div class="legend">
-      <span><i class="swatch ok"></i>정상 과금(Y/0)</span>
-      <span><i class="swatch reserve"></i>예약 — 아직 코드가 배정되지 않은 자리</span>
-    </div>
-
-    <p class="subtitle"><b>참고 — <code>CHARGE_STATUS</code></b>: 위치검증서버가 넣는 값은
-      <code>0</code>(정상) / <code>3</code>(AUDIT, 비정상 마감 — 전 유형) / <code>4</code>(SKIP, 면제도로 TTL
-      강제마감 전용) 3가지입니다(2026-09-15 실데이터·코드 확인). 심사 대상은 <code>charge_status=3</code>
-      행이며 그 사유가 아래 표의 코드입니다. 과금서버의 읽기 조건
-      (<code>CHARGE_YN='Y' AND CHARGE_STATUS=0</code>)에는 이 컬럼이 쓰이지 않습니다.</p>
   </header>
 
   <div class="group">

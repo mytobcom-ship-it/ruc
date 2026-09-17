@@ -390,12 +390,12 @@ typedef struct sAltitudeScoreConfig
 																			//   일관성이 없었다. query.sql [charge_insert] 가 빈 문자열을
 																			//   0 으로 변환하므로 C++ 쪽은 빈 값으로 두면 된다.
 																			//   결과적으로 이 엔진을 거친 INSERT 에는 NULL 이 존재하지 않는다
-																			//   [2026-09-17 최정우 보완 — 실서버 배포 시 확인할 것] 위 문장은 **[charge_insert]
-																			//   를 타는 경로에 한해서만** 참이다. DB 컬럼에는 DEFAULT 도 NOT NULL 도 없어서
-																			//   (실측 2026-09-17), 수작업 보정·연계 앱·데이터 이관처럼 그 SQL 을 안 타는 INSERT 가
-																			//   컬럼을 생략하면 NULL 이 된다(실측 63행 중 60행 NULL, 그중 CHARGE_YN='N' 인데
-																			//   사유 없는 행 18건). 배포 시 **doc/deploy_2026-09-17.sql** 로 DEFAULT 0 을 걸 것 —
-																			//   안내는 query.sql 최상단 '실서버 배포 시 반드시 함께 적용할 DB 변경' 섹션에도 있다
+																			//   [2026-09-17 최정우 보완] 위 문장은 **[charge_insert] 를 타는 경로에 한해서만** 참이었다.
+																			//   DB 컬럼에 DEFAULT 도 NOT NULL 도 없어, 수작업 보정·연계 앱·데이터 이관처럼 그 SQL 을
+																			//   안 타는 INSERT 가 컬럼을 생략하면 NULL 이 됐다(실측 63행 중 60행 NULL, 그중
+																			//   CHARGE_YN='N' 인데 사유 없는 행 18건).
+																			//   → doc/deploy_2026-09-17.sql 로 **DEFAULT 0 적용 완료**(2026-09-17, 로컬·실서버 양쪽).
+																			//   NOT NULL 승격은 전체 재매칭 뒤 별도로 한다(그 SQL 2절 참고)
 #define NCR_NODE_STEP_GAP_ANCHOR_LOST	1									// NODE_STEP SKIP구간 브릿지(케이스3) 시 직전 확정위치 소실
 																			//   (세션갭 30초 초과 리셋 등)로 dist_m 은 실측 누적값,
 																			//   speed_kmh/stay_seconds 는 산출 근거 없어 0으로 기록
@@ -544,5 +544,9 @@ typedef struct sMatchEntry
 } MATCH_ENTRY, *PMATCH_ENTRY;
 
 #define MATCH_ENTRY_SIZE												sizeof(MATCH_ENTRY)
+																			// [2026-09-17 최정우 확인] 현재 참조처 없음 — 유일한 사용처였던
+																			//   MapMatch.cpp 의 memcpy 통복사가 2026-07-10 에 필드별 복사로
+																			//   교체되며(구조체 레이아웃 불일치 버그) 주석 처리됐다.
+																			//   같은 통복사를 되살리려는 시도를 막기 위해 그 주석과 함께 남겨 둔다
 
 #endif //__DATADEFINE_H__

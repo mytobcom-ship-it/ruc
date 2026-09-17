@@ -118,6 +118,15 @@ void CPostgrePool::UninitializePool()
 	//   만료돼도 그 워커가 커넥션을 쥔 채 계속 돌고 있으면 재현됐음. ThreadPool 소멸자와 동일하게
 	//   최대 대기(100ms × 최대횟수)를 두고, 시간 안에 못 비우면 경고만 남기고 진행한다 — 큐에 남아
 	//   있는 유휴 커넥션은 그동안 계속 정리해준다.
+	// [버그 수정, 2026-09-17 최정우] 유휴 커넥션 회수 전에 m_bIsValid 를 내리고 대기자를 깨운다 —
+	//   getConnection() 이 "풀이 가득 참" 조건으로 조건변수에서 자고 있으면 아래 회수 루프가
+	//   아무리 돌아도 그 스레드는 영영 안 깨어나고, 그 상태로 풀이 해제되면 깨어난 뒤 이미 파괴된
+	//   뮤텍스/조건변수를 만진다. 여기서 먼저 내려야 깨어난 쪽이 술어 재검사에서 종료를 관측한다.
+	m_cMutex.lock();
+	m_bIsValid = false;
+	m_cCondition.broadcast();
+	m_cMutex.unlock();
+
 	const int nMaxWaitIter = 50;								// 100ms * 50 = 최대 5초
 	for (int i = 0; (left > 0) && (i < nMaxWaitIter); ++i)
 	{
@@ -139,7 +148,7 @@ void CPostgrePool::UninitializePool()
 
 	m_dqQueue.clear();
 	m_bIsValid = false;
-	LOGFMTI("pogstgre connection pool is uninitialize!");
+	LOGFMTI("postgre connection pool is uninitialized!");
 }
 
 /**
@@ -175,8 +184,10 @@ PGconn *CPostgrePool::createConnection()
 */
 void CPostgrePool::freeConnection(PGconn *pcHandle)
 {
+	// [정리, 2026-09-17 최정우] 여기 있던 `pcHandle = nullptr;` 를 제거했다 — 값 전달 파라미터라
+	//   호출측 포인터에는 아무 영향이 없는데(지역 사본만 바뀐다) "무효화했다" 는 오해를 부른다.
+	//   실제 무효화는 호출측이 큐에서 제거하는 것으로 이뤄진다(m_dqQueue.pop_front()/erase()).
 	PQfinish(pcHandle);
-	pcHandle = nullptr;
 	if (m_nPooledConnections > 0) m_nPooledConnections--;
 }
 
@@ -196,9 +207,21 @@ PGconn *CPostgrePool::getConnection()
 		return nullptr;
 	}
 
-	while ((m_dqQueue.empty()) && 
+	// [버그 수정, 2026-09-17 최정우] 대기 조건에 m_bIsValid 를 넣었다. 종전에는 풀이 가득 찬 상태
+	//   (유휴 큐 비었고 보유수 >= maxconnect)에서 대기 중인 스레드를 **종료 시 깨울 방법이 없었다** —
+	//   UninitializePool() 이 m_bIsValid 를 false 로 내려도 조건변수 통지가 없어 영구 대기였고,
+	//   설령 통지가 와도 이 술어가 그대로 참이라 다시 잠들었다. 아래 UninitializePool() 의
+	//   broadcast 와 짝을 이룬다. 종료 중이면 루프를 빠져나와 nullptr 을 돌려준다.
+	while (m_bIsValid && (m_dqQueue.empty()) && 
 		(m_nPooledConnections >= m_nMaxConnect))
 		m_cCondition.wait(m_cMutex);
+
+	if (!m_bIsValid)
+	{
+		m_cMutex.unlock();
+		LOGFMTW("db connection pool is shutting down!getConnection aborted");
+		return nullptr;
+	}
 
 	if (!m_dqQueue.empty())
 	{
@@ -227,11 +250,17 @@ PGconn *CPostgrePool::getConnection()
 */
 void CPostgrePool::releaseConnection(PGconn *pcHandle)
 {
+	// [버그 수정, 2026-09-17 최정우] nullptr 반납 시 m_nPooledConnections 를 감소시키던 것을
+	//   제거했다. nullptr 은 **대여된 적이 없는 값**이라(getConnection() 이 실패를 알리는 반환값),
+	//   이걸 반납했다고 보유 수를 깎으면 실제로 살아있는 커넥션 수와 카운터가 어긋난다 —
+	//   카운터가 부당하게 줄면 keepPoolAlive() 가 minconnect 를 채우려 커넥션을 계속 새로 만들고,
+	//   반대로 getConnection() 의 maxconnect 상한 판정도 틀어진다.
+	//   현재 호출부 13곳은 전부 getConnection() 성공분만 반납해(실패 시 곧바로 return) 실제로
+	//   발동하지는 않았다 — 잘못된 방어 코드였다. 앞으로 이 경로로 들어오면 로그로 드러나게 한다.
 	if (!pcHandle)
 	{
-		m_cMutex.lock();
-		if (m_nPooledConnections > 0) m_nPooledConnections--;
-		m_cMutex.unlock();
+		LOGFMTW("releaseConnection called with null handle!ignored (pooled=[%d])",
+			m_nPooledConnections);
 		return;
 	}
 
@@ -242,8 +271,13 @@ void CPostgrePool::releaseConnection(PGconn *pcHandle)
 }
 
 /**
- * @brief 사용 가능한 연결 세션 수 구하기
- * @return 사용 가능한 연결 세션 수
+ * @brief **앞으로 더 만들 수 있는** 연결 세션 수 구하기 (maxconnect - 보유수)
+ * @return 추가 생성 가능 수 (0 이상)
+ * @remark [주석 정정, 2026-09-17 최정우] 종전 @brief 는 "사용 가능한 연결 세션 수" 였는데, 이 값은
+ *   **지금 바로 대여할 수 있는 수가 아니다**. 즉시 대여 가능한 수는 유휴 큐 크기(m_dqQueue.size())
+ *   이고 이 함수는 그것을 돌려주지 않는다 — 보유수가 maxconnect 에 도달하면 유휴 커넥션이 남아
+ *   있어도 0 을 반환한다. getPooledConnections()(보유수)와 헷갈리지 말 것
+ *   (그쪽 @brief 는 2026-09-17 에 먼저 정정했다).
 */
 int CPostgrePool::getAvailableConnections()
 {
@@ -270,8 +304,10 @@ int CPostgrePool::getActiveConnections()
 }
 
 /**
- * @brief 사용 가능한 연결 세션 수 구하기
- * @return 사용 가능한 연결 세션 수
+ * @brief 풀이 현재 보유(생성)하고 있는 연결 세션 수 구하기
+ * @return 보유 중인 연결 세션 수 — 더 만들 수 있는 여유분은 getAvailableConnections()
+ *   (= maxconnect - 보유수) 이며 이 값과 다르다 (2026-09-17 최정우 정정 — 두 함수의
+ *   @brief 가 같아 구분이 안 됐다)
 */
 int CPostgrePool::getPooledConnections()
 {

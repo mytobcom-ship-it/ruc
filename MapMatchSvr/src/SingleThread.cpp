@@ -55,6 +55,16 @@ void *CSingleThread::threadHandler(void *pParam)
  * @brief 시그널 핸들러
  * @param[in] sig 시그널
  * @return void
+ * @warning [현재 미사용 + 위험 경로, 2026-09-17 최정우 확인] 이 핸들러를 발동시키는 interrupt()
+ *   (pthread_kill(SIGUSR1))는 전 소스에서 **호출되는 곳이 없다**(Server.cpp:30 은 주석 처리).
+ *   따라서 지금은 실행되지 않는 죽은 경로다. 되살리기 전에 반드시 재설계할 것 —
+ *   **비동기 시그널 핸들러 안에서 C++ 예외를 던지는 것은 정의되지 않은 동작**이다. 시그널은
+ *   임의의 명령어 경계에서 끼어들 수 있어, 그 지점이 예외 전파(스택 언와인딩)를 견딜 수 있다는
+ *   보장이 없다(핸들러 밖으로 예외가 새면 std::terminate 로 직행할 수도 있다).
+ *   되살릴 경우의 정석은 "핸들러에서는 volatile sig_atomic_t 플래그만 세우고, 실행 스레드가
+ *   안전한 지점에서 그 플래그를 폴링해 스스로 빠져나가는" 방식이다 —
+ *   IsInterrupted() 를 폴링하는 호출부(RawLogFetcher.cpp:168·184·192, Server.cpp:947·1021)가
+ *   이미 그 구조로 되어 있으므로, m_bIsInterrupted 를 핸들러에서 세우는 것만으로 충분하다.
 */
 void CSingleThread::interruptHandler(int /* sig */)		// 시그널 번호와 무관하게 동일 처리
 {

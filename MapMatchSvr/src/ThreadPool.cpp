@@ -203,7 +203,7 @@ int CThreadPool::GetMaxThreads()
 /**
  * @brief 워커 고정 큐에 데이터 넣기 및 해당 Thread 깨우기
  * @param[in] nThreadId 워커(큐) 인덱스
- * @param[in] context 큐 데이터
+ * @param[in] vtRawLog 큐 데이터(원시 GPS 배치)
  * @return void
 */
 void CThreadPool::Enqueue(int nThreadId, const RAW_LOG_BATCH &vtRawLog)

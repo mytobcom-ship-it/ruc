@@ -1,79 +1,6 @@
 ﻿-- MapMatchSvr query.sql (PostgreSQL / libpq: $1, $2, ...)
 -- 근거: doc/RUC_위치검증서버_테이블설계서_v1.3.docx §2.1, §3.1
 --
---<<<DBCHG-20260917-BEGIN>>>------------------------------------------------------
---  [일회성 안내 · 실서버 적용 후 삭제] 2026-09-17 배포 동반 DB 변경
---
---  ※ 실서버에 아래 DB 변경을 적용한 뒤에는 이 블록(위 BEGIN 줄부터 아래 END 줄까지)
---    전체를 삭제해도 된다. 일회성 작업 안내이고, 변경 이력은
---    doc/deploy_2026-09-17.sql 과 git 이력에 영구 보관된다.
---
---  무엇을 왜 바꾸나
---    ruc.prim_chargehand.non_charge_reason 에 **DEFAULT 0 을 설정**한다(컬럼 추가·타입
---    변경·데이터 변경은 없다). 코드표상 0=정상 과금인데 DB 에는 DEFAULT 도 NOT NULL 도
---    없어서, 값을 보장하는 주체가 아래 [charge_insert] 의 `ELSE 0` 하나뿐이었다. 그 SQL 을
---    타지 않는 INSERT(수작업 보정·연계 앱·데이터 이관)가 컬럼을 생략하면 NULL 이 된다.
---    실측(2026-09-17 로컬 63행): non_charge_reason IS NULL 60행, 그중 CHARGE_YN='N' 인데
---    사유가 없는 행 18건(심사 큐에 올랐는데 사유 추적 불가).
---    [charge_insert] 는 $31 을 항상 명시하므로 **엔진 동작은 조금도 바뀌지 않는다.**
---
---  적용 방법 — 둘 중 아무거나 (결과 동일)
---    (A) 스크립트 파일이 있으면
---        PGPASSWORD=... psql -h <실서버> -U <user> -d ruc -v ON_ERROR_STOP=1 \
---            -f doc/deploy_2026-09-17.sql
---    (B) 파일이 없거나 전달이 안 됐으면 — 아래 SQL 을 psql 에 그대로 붙여 넣는다
---  ── SQL 시작 ────────────────────────────────────────────────────────────────
---  BEGIN;
---
---  -- (1) 사전 점검 — 컬럼이 없으면 중단(deploy_2026-09-15.sql 가 먼저 적용돼야 한다)
---  DO $chk$
---  BEGIN
---      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
---                      WHERE table_schema='ruc' AND table_name='prim_chargehand'
---                        AND column_name='non_charge_reason') THEN
---          RAISE EXCEPTION '[중단] ruc.prim_chargehand.non_charge_reason 컬럼이 없음';
---      END IF;
---  END $chk$;
---
---  -- (2) 기본값 0 설정 — 재실행해도 안전(멱등). 기존 행 값은 건드리지 않는다
---  ALTER TABLE ruc.prim_chargehand
---      ALTER COLUMN non_charge_reason SET DEFAULT 0;
---
---  -- (3) 컬럼 코멘트 — 코드 대역 체계를 DB 에서도 알 수 있게
---  COMMENT ON COLUMN ruc.prim_chargehand.non_charge_reason IS
---      '과금 제외 사유 코드 — 0=정상 과금. 도로유형별 10단위 대역: '
---      '1~10 일반도로 / 11~20 개방식 / 21~30 폐쇄식 / 31~40 구간단속 / '
---      '41~50 주정차 / 51~60 면제도로 / 61~70 공통(강제마감). '
---      '판정(charge_yn/charge_status)에는 영향을 주지 않는 부가 설명 컬럼이다. '
---      '값 정의는 MapMatchSvr/src/DataDefine.h 의 NCR_* 상수가 정본.';
---
---  COMMIT;
---  ── SQL 끝 ──────────────────────────────────────────────────────────────────
---
---  적용됐는지 확인 (기대값: 기본값=0)
---    SELECT column_name, data_type, is_nullable, COALESCE(column_default,'(없음)')
---      FROM information_schema.columns
---     WHERE table_schema='ruc' AND table_name='prim_chargehand'
---       AND column_name='non_charge_reason';
---
---  되돌리려면
---    ALTER TABLE ruc.prim_chargehand ALTER COLUMN non_charge_reason DROP DEFAULT;
---
---  NOT NULL 승격은 **전체 재매칭 뒤에** 따로 한다 — 기존 NULL 행이 남아 있으면 실패하고,
---  그 행들(특히 CHARGE_YN='N' 인데 사유가 없는 건)은 사후에 사유를 판정할 수 없어 일괄
---  백필하면 틀린 근거를 심게 된다. 재매칭하면 엔진이 정확한 사유를 다시 붙여 준다.
---    SELECT COUNT(*) FROM ruc.prim_chargehand WHERE non_charge_reason IS NULL;  -- 0 이어야 함
---    ALTER TABLE ruc.prim_chargehand ALTER COLUMN non_charge_reason SET NOT NULL;
---
---  ── 이 블록을 지우는 법 (적용 완료 후) ──────────────────────────────────────
---    · 에디터에서 위 BEGIN 마커 줄부터 아래 END 마커 줄까지 선택해 삭제
---    · 또는 명령 한 줄(저장소 루트에서):
---        sed -i '/DBCHG-2026[0]917-BEGIN/,/DBCHG-2026[0]917-END/d' MapMatchSvr/bin/query.sql
---      (대괄호는 정규식 문자 클래스다 — 이 안내 줄이 마커에 스스로 매치돼 삭제 범위가
---       일찍 끊기는 것을 막으려고 일부러 쪼개 적었다. 실행하면 마커에 정상 매치된다)
---    · 지워도 엔진 동작에는 아무 영향이 없다(전부 주석이다). 이력은
---      doc/deploy_2026-09-17.sql 과 git 이력에 남는다.
---<<<DBCHG-20260917-END>>>--------------------------------------------------------
 --
 -- TRIP_EVENT   : 0=START, 1=NONE, 2=END
 -- DRIVE_STATUS : 0=ON_ROAD, 1=IDLE, 2=PARKED, 3=TUNNELING, 4=OFF_ROAD(비과금 구역)
@@ -482,21 +409,26 @@ ON CONFLICT (trip_id, device_key, trip_seq) DO NOTHING;
 -- 아래 서브쿼리로 (1) 배열 안에서부터 trip_id 별 가장 늦은 TRIP_END_DT 만 골라 쓰고(DISTINCT ON),
 -- (2) 이미 저장된 TRIP_END_DT 보다 늦을 때만 반영하도록(WHERE) 이중으로 보장 — 배치가 나뉘어
 -- 여러 번 호출돼도, 어떤 순서로 오든 항상 "가장 늦은 종료 시각"만 최종 반영됨.
+-- [버그 수정, 2026-09-17 최정우] 아래 설명 블록은 원래 이 SQL 의 SET 절 **안에** 있었다.
+-- query.sql 파서(CSQLAccessor::Initialize)는 각 줄의 개행을 지우고 공백 하나로 이어붙이는데
+-- '--' 주석을 제거하지 않는다 — 그래서 SQL 본문 안의 '--' 뒤가 전부 한 줄 주석으로 먹혀
+-- 쿼리가 "UPDATE ... SET" 에서 잘렸고, 실행할 때마다 "구문 오류, 입력 끝부분" 으로 실패했다
+-- (실측 000385_20260917140801: TRIP_END_DT 가 채워지지 않음. 커밋 ca547c1 에서 유입).
+-- **SQL 본문에는 '--' 주석을 절대 넣지 말 것** — 설명은 이 자리(섹션 헤더 위)에 둔다.
+-- [보강, 2026-09-17 최정우, 사용자 지시] 빈 문자열 방어.
+--   TRIP_END_DT 는 NULLIF 로 NULL 이 되게 한다 — 이 컬럼은 nullable 이고, 무엇보다
+--   [trip_abend] 의 판정 조건이 `TRIP_END_DT IS NULL` 이다. 빈 문자열('')은 NULL 이
+--   아니므로 그대로 저장되면 그 행이 [trip_abend] 대상에서 **영구히 빠져**,
+--   확정 못 한 채 끝난 트립이 N/3(심사대상)으로 강등되지 않고 Y/0(정상 과금)으로 남는다.
+--   UPD_DT 는 NOT NULL 이라 NULL 을 못 넣으므로 값을 메워야 한다. 이때 **TRIP_END_DT 를
+--   먼저 쓴다** — 이 UPDATE 에 넘어오는 두 값은 C++ 쪽에서 모두 같은 GPS 시각
+--   (FormatDateTime14(stRawLogInfo.dtGPS))으로 만들어지므로(RawLogWorker.cpp
+--   ProcessRawLog 트립종료 블록), 같은 값으로 맞추는 것이 원래 의미에 부합한다.
+--   둘 다 비어 있을 때만 최후 수단으로 현재 시각을 쓴다.
 -- $1=TRIP_ID[] $2=TRIP_END_DT[] $3=UPD_DT[]
 [trip_end]
 UPDATE RUC.PRIM_CHARGEHAND AS T
 SET
-	-- [보강, 2026-09-17 최정우, 사용자 지시] 빈 문자열 방어.
-	--   TRIP_END_DT 는 NULLIF 로 NULL 이 되게 한다 — 이 컬럼은 nullable 이고, 무엇보다
-	--   [trip_abend] 의 판정 조건이 `TRIP_END_DT IS NULL` 이다. 빈 문자열('')은 NULL 이
-	--   아니므로 그대로 저장되면 그 행이 [trip_abend] 대상에서 **영구히 빠져**,
-	--   확정 못 한 채 끝난 트립이 N/3(심사대상)으로 강등되지 않고 Y/0(정상 과금)으로 남는다.
-	--   UPD_DT 는 NOT NULL 이라 NULL 을 못 넣으므로 값을 메워야 한다. 이때 **TRIP_END_DT 를
-	--   먼저 쓴다** — 이 UPDATE 에 넘어오는 두 값은 C++ 쪽에서 모두 같은 GPS 시각
-	--   (FormatDateTime14(stRawLogInfo.dtGPS))으로 만들어지므로(RawLogWorker.cpp
-	--   ProcessRawLog 트립종료 블록), 같은 값으로 맞추는 것이 원래 의미에 부합한다.
-	--   둘 다 비어 있을 때만 최후 수단으로 현재 시각을 쓴다
-	--   (2026-09-17 최정우 보완, 사용자 지시).
 	TRIP_END_DT = NULLIF(V.TRIP_END_DT, ''),
 	UPD_DT = COALESCE(NULLIF(V.UPD_DT, ''), NULLIF(V.TRIP_END_DT, ''),
 	                  TO_CHAR(NOW(), 'YYYYMMDDHH24MISS'))
@@ -508,7 +440,7 @@ FROM (
 WHERE T.TRIP_ID = V.TRIP_ID
 	AND (T.TRIP_END_DT IS NULL OR V.TRIP_END_DT > T.TRIP_END_DT);
 
--- ── 7. 세션 TTL 만료(비정상 종료) 시 미확정 레코드 마감(5유형 공용) ─────────
+-- ── 7. 세션 TTL 만료(비정상 종료) 시 미확정 레코드 마감(전 과금유형 공용) ─────────
 -- [trip_abend] CRawLogWorker::UpdateAbnormalTripEnd() 가 ExpireTtlSessions() 안에서
 -- 실행(2026-08-13 최정우 추가, 2026-08-13 수정 — CHARGE_TYPE 제한 제거해 전 유형으로 확대).
 -- (2026-09-15 부터 ExpireTtlSessions() 외에 트립종료 잔여tick·트립전환·서버종료 경로에서도 실행됨)
@@ -533,22 +465,28 @@ WHERE T.TRIP_ID = V.TRIP_ID
 -- 손대는 행은 전부 "트립이 끝났는지 끝내 확인 못한 TTL 강제종료" 사유 하나뿐이라(C++ 쪽에서 미리
 -- 61/51 로 INSERT된 행이든, 원래 Y/0 이었다가 지금 여기서 처음 N 으로 바뀌는 행이든) 값이 갈릴
 -- 이유가 없다. C++ 상수(DataDefine.h)와 반드시 같은 값 유지할 것.
+-- [버그 수정, 2026-09-17 최정우] 아래 설명 블록은 원래 이 SQL 의 SET 절 **안에** 있었다.
+-- query.sql 파서(CSQLAccessor::Initialize)는 각 줄의 개행을 지우고 공백 하나로 이어붙이는데
+-- '--' 주석을 제거하지 않는다 — 그래서 SQL 본문 안의 '--' 뒤가 전부 한 줄 주석으로 먹혀
+-- 쿼리가 "UPDATE ... SET" 에서 잘렸고, 실행할 때마다 "구문 오류, 입력 끝부분" 으로 실패했다
+-- (실측 000385_20260917140801: TRIP_END_DT 가 채워지지 않음. 커밋 ca547c1 에서 유입).
+-- **SQL 본문에는 '--' 주석을 절대 넣지 말 것** — 설명은 이 자리(섹션 헤더 위)에 둔다.
+-- [보강, 2026-09-17 최정우, 사용자 지시] 빈 문자열 방어 — [trip_end] 와 동일 근거.
+--   여기서 ''이 들어가면 그 행은 다음 [trip_abend] 의 `TRIP_END_DT IS NULL` 에 다시는
+--   안 걸린다(이 UPDATE 자신의 WHERE 조건이기도 하다).
+-- [2026-09-17 최정우] UPD_DT 는 [trip_end] 와 달리 TRIP_END_DT 를 폴백으로 쓰지 않는다 —
+--   이 UPDATE 의 두 값은 성격이 다르기 때문이다(RawLogWorker.cpp
+--   FlushOpenRunsAsAbnormalEnd): TRIP_END_DT 는 그 트립이 마지막으로 확인된 **GPS 시각**,
+--   UPD_DT 는 이 마감을 실행한 **벽시계 시각**이다. 빈 값일 때 GPS 시각을 끌어다 쓰면
+--   "언제 마감 처리했나"라는 원래 의미가 사라지므로, 현재 시각으로 메우는 것이 맞다.
 -- $1=TRIP_ID[] $2=TRIP_END_DT[] $3=UPD_DT[]
 [trip_abend]
 UPDATE RUC.PRIM_CHARGEHAND AS T
 SET
-	-- [보강, 2026-09-17 최정우, 사용자 지시] 빈 문자열 방어 — [trip_end] 와 동일 근거.
-	--   여기서 ''이 들어가면 그 행은 다음 [trip_abend] 의 `TRIP_END_DT IS NULL` 에 다시는
-	--   안 걸린다(이 UPDATE 자신의 WHERE 조건이기도 하다).
 	TRIP_END_DT = NULLIF(V.TRIP_END_DT, ''),
 	CHARGE_YN = 'N',
 	CHARGE_STATUS = CASE WHEN T.CHARGE_TYPE = 5 THEN 4 ELSE 3 END,
 	NON_CHARGE_REASON = CASE WHEN T.CHARGE_TYPE = 5 THEN 51 ELSE 61 END,
-	-- [2026-09-17 최정우] 여기는 [trip_end] 와 달리 TRIP_END_DT 를 폴백으로 쓰지 않는다 —
-	--   이 UPDATE 의 두 값은 성격이 다르기 때문이다(RawLogWorker.cpp
-	--   FlushOpenRunsAsAbnormalEnd): TRIP_END_DT 는 그 트립이 마지막으로 확인된 **GPS 시각**,
-	--   UPD_DT 는 이 마감을 실행한 **벽시계 시각**이다. 빈 값일 때 GPS 시각을 끌어다 쓰면
-	--   "언제 마감 처리했나"라는 원래 의미가 사라지므로, 현재 시각으로 메우는 것이 맞다.
 	UPD_DT = COALESCE(NULLIF(V.UPD_DT, ''), TO_CHAR(NOW(), 'YYYYMMDDHH24MISS'))
 FROM UNNEST(
 	$1::TEXT[], $2::TEXT[], $3::TEXT[]

@@ -24,7 +24,11 @@ using namespace std;
 
 #define MATCH_STATUS_PENDING			0									// 대기 (기본값)
 #define MATCH_STATUS_MATCHED			1									// 맵매칭 완료
-#define MATCH_STATUS_PROCESSING			2									// 처리 중
+#define MATCH_STATUS_PROCESSING			2									// 처리 중 — 이 값으로의 전이는
+																			//   query.sql([rawgps_select] 의 MATCH_STATUS=2 선점 UPDATE)
+																			//   에서만 일어나 C++ 코드에는 참조가 없다. dead 상수가 아니라
+																			//   DB 와 값 체계를 맞춰 두는 코드표다 — 지우지 말 것
+																			//   (2026-09-17 최정우 주석 보완)
 #define MATCH_STATUS_SKIP				3									// 제외
 #define MATCH_STATUS_ERROR				4									// 오류
 

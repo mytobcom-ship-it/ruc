@@ -136,6 +136,10 @@ typedef struct sLinkSgmtInfo
 		dwX(0), 
 		dwY(0), 
 		wDirAng(0), 
+		wLenSgmt(0),		// [버그 수정, 2026-09-17 최정우] 초기화 누락 — 같은 구조체의 나머지
+							//   6개 필드는 모두 초기화되는데 이 필드만 빠져 있었다. 통상 경로는
+							//   link.psf 에서 값을 채우지만, 채우기 전에 읽히면 쓰레기 길이가
+							//   거리 계산에 들어간다(sGridSgmtInfo 쪽 동명 필드와 혼동 주의)
 		qwLinkID(0), 
 		wLenFromLink(0)
 	{}

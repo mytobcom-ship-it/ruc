@@ -665,6 +665,10 @@ typedef struct sVehicleTripSession
 		bGateExitAtTick(false),
 		bParkTouchHasFirstOut(false),	// (2026-09-05 최정우 추가)
 		bHasMergeCarry(false),	// (2026-09-10 최정우 추가)
+		dwMergeCarrySeq(0),		// [버그 수정, 2026-09-17 최정우] 초기화 누락 — 짝인 bHasMergeCarry 와
+								//   같은 역할의 dwGateExitGpsSeq 는 0 으로 초기화되는데 이 필드만 빠져
+								//   있었다. 현재는 bHasMergeCarry=true 인 지점에서 항상 함께 설정돼
+								//   실동작 영향은 없었으나, 미초기화 값을 비교에 쓰는 구조라 위험하다
 		bHasHeldNodeStepRun(false),	// (2026-09-03 최정우 추가)
 		bHasHandoffGapChecked(false),	// (2026-09-03 최정우 추가)
 		bHasHeldSpeedMirrorRun(false),	// (2026-09-03 최정우 추가)
@@ -789,9 +793,10 @@ typedef struct sChargeInsertRow
 																		//   (2026-08-28 최정우 추가)
 	string							strNonChargeReason;					// 빈 값=0(NCR_NORMAL, 정상 과금 — [charge_insert]가 변환.
 																		//   2026-09-15 최정우 수정, 종전엔 NULL 이었음).
-																		//   ※ 그 변환이 유일한 보증이다 — DB 컬럼에 DEFAULT/NOT NULL 이
-																		//   없어 그 SQL 을 안 타는 INSERT 는 NULL 이 될 수 있다. 배포 시
-																		//   doc/deploy_2026-09-17.sql 로 DEFAULT 0 (2026-09-17 최정우 보완).
+																		//   ※ 종전엔 그 변환이 유일한 보증이었다 — DB 컬럼에 DEFAULT/
+																		//   NOT NULL 이 없어 그 SQL 을 안 타는 INSERT 는 NULL 이 됐다.
+																		//   doc/deploy_2026-09-17.sql 로 DEFAULT 0 **적용 완료**
+																		//   (2026-09-17, 로컬·실서버 양쪽. 최정우).
 																		//   그 외는 NCR_* 코드(DataDefine.h) — 이 행의
 																		//   일부 값(주로 speed_kmh/stay_seconds)을 신뢰할 수 없어
 																		//   근사·생략 처리했다는 예외사유. 임시 코드 체계, 추후
@@ -949,16 +954,17 @@ private:
 		VEHICLE_TRIP_SESSION *pstSession, vector<CHARGE_INSERT_ROW> *pvtChargeInserts);
 	void CheckSpeedZoneExitByRawGps(int nThreadId, const sRawLogInfo& stRawLogInfo,
 		VEHICLE_TRIP_SESSION *pstSession, vector<CHARGE_INSERT_ROW> *pvtChargeInserts);
-	// [2026-09-17 최정우 정정] 여기 있던 "주정차 세션 시작 … 필드 설정만 분리" 주석은
-	//   BeginParkingZoneSession() 설명인데 그 함수는 .cpp 의 파일지역 static 으로 옮겨져
-	//   이 헤더에 선언이 없다 — 고아 주석이라 제거하고 설명은 그 구현부에 둔다.
+	// [2026-09-17 최정우 정정] 여기 있던 "주정차 세션 시작 … 필드 설정만 분리" 주석은 옛
+	//   멤버함수 BeginParkingZoneSession() 설명이었다. 그 함수는 주정차 판정 재작성(2026-08-23,
+	//   3fe4fd7 이후) 때 **제거**됐고 세션 개시 코드는 ProcessParkingCharge() 안으로 흡수됐다
+	//   (PARK_RUN_SESSION 을 직접 채우는 블록). 지금 이 이름의 함수는 어디에도 없다.
 	// 주정차(POLY) 판정 — 맵매칭 전 raw GPS·raw 속도 기준(다른 3종과 달리 매칭 결과 안 씀).
 	//   구역판정(위치, ACCURACY_M 적응형 버퍼)+SPEED_KMH(서행 컷오프)+체류시간으로 판정, 구역
 	//   이탈은 park_exitcnt 회 연속 확인 후에만 확정(디바운스) — RunMapMatch 호출 "전" 실행 (2026-08-13 최정우 추가)
 	//   2026-08-14 재진입 유예 추가: 디바운스 통과(=진짜 이탈 후보) 후에도 다른 구역이 아니라 "무존"
 	//   이면 park_regrace 초 동안 즉시 확정하지 않고 대기 — 그 안에 같은 구역으로 복귀하면 병합,
 	//   초과하면 확정 마감. 확정 마감 시점에 이미 다른 구역 위라면 유예 없이 곧바로 그 구역으로
-	//   새 세션 시작(경계 전환 병합, BeginParkingZoneSession 재사용)
+	//   새 세션 시작(경계 전환 병합 — 같은 함수 안 PARK_RUN_SESSION 개시 블록을 그대로 탄다)
 	//   2026-08-22 확장 — 규칙 2(매칭 좌표도 폴리곤 내)·규칙 4(매칭 좌표가 폴리곤 밖이면 즉시 해제)를
 	//   위해 매칭 결과를 함께 받는다. bMatchTrusted=false 면 매칭 좌표를 보지 않고 원시 좌표만으로 판정.
 	// bTrustedTripEnd — ProcessOpenGateCharge() 주석 참고, 스퓨리어스 END 로 트립종료 강제마감이
@@ -1217,7 +1223,7 @@ private:
 	bool BulkInsertCharges(PGconn *pcConn, const vector<CHARGE_INSERT_ROW>& vtCharges);
 	// 트립 종료 시 그 trip_id 의 PRIM_CHARGEHAND 전 행에 trip_end_dt 반영 (2026-08-12 최정우 추가)
 	bool UpdateTripEndDt(PGconn *pcConn, const vector<TRIP_END_UPDATE_ROW>& vtRows);
-	// TTL 만료(비정상 종료) 시 그 trip_id 의 4유형 전부 중 아직 TRIP_END_DT 없는 행을
+	// TTL 만료(비정상 종료) 시 그 trip_id 의 전 과금유형(0~5) 중 아직 TRIP_END_DT 없는 행을
 	//   N/3(AUDIT) + TRIP_END_DT(마지막 확인 시각)으로 마감(사용자 지시, 2026-08-13 추가,
 	//   2026-08-13 수정 — 개방형 한정 해제, status 4→3 정정)
 	bool UpdateAbnormalTripEnd(PGconn *pcConn, const vector<TRIP_END_UPDATE_ROW>& vtRows);

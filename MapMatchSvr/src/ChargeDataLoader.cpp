@@ -859,13 +859,6 @@ bool CChargeDataLoader::IsLinkChargeRegistered(const uint64 qwLinkID)
 }
 
 /**
- * @brief 케이스3(SKIP 구간) 전후 확정링크 스코프 판정 — road_kind=0(일반도로) 또는 3(구간단속)
- *   소속, 또는 어디에도 미등록이면 true (2026-09-01 최정우 추가)
- * @param[in] qwLinkID 매칭 링크 ID(SKIP 구간의 FROM/TO 확정 링크)
- * @return true=이 링크는 NODE_STEP 케이스3 등록 대상 범위 — 그 외(OPEN/CLOSED/PARKING/EXEMPT
- *   소속)는 false, 그 유형 자체 로직이 처리해야 함(질문2 확정 답변)
-*/
-/**
  * @brief 링크가 게이트형 구역(ROAD_KIND 1 개방식·2 폐쇄식·3 구간단속)에만 등록돼 있는지 판정
  *   (2026-09-07 최정우 추가, 사용자 지시)
  * @param[in] qwLinkID 매칭 링크 ID
@@ -890,6 +883,13 @@ bool CChargeDataLoader::IsLinkGateZoneOnly(const uint64 qwLinkID)
 	return true;
 }
 
+/**
+ * @brief 케이스3(SKIP 구간) 전후 확정링크 스코프 판정 — road_kind=0(일반도로) 또는 3(구간단속)
+ *   소속, 또는 어디에도 미등록이면 true (2026-09-01 최정우 추가)
+ * @param[in] qwLinkID 매칭 링크 ID(SKIP 구간의 FROM/TO 확정 링크)
+ * @return true=이 링크는 NODE_STEP 케이스3 등록 대상 범위 — 그 외(OPEN/CLOSED/PARKING/EXEMPT
+ *   소속)는 false, 그 유형 자체 로직이 처리해야 함(질문2 확정 답변)
+*/
 bool CChargeDataLoader::IsCase3EligibleRoadKind(const uint64 qwLinkID)
 {
 	lock_guard<CMutex> cLock(m_cZoneCacheMutex);

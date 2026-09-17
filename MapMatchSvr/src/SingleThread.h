@@ -40,7 +40,10 @@ public:
 	void start();
 	void join();
 	void join(unsigned long time);
-	void detach();
+	// [2026-09-17 최정우 정리] void detach(); 선언 제거 — 구현도 호출도 없는 dead declaration
+	//   이었다(호출했다면 링크 에러). 이 클래스의 스레드는 start() 에서 pthread_attr_setdetachstate
+	//   (PTHREAD_CREATE_DETACHED) 로 **생성 시점에** detached 로 만들어지므로 별도 detach() 가
+	//   필요 없다 — 선언만 남아 "나중에 detach 할 수 있다"는 오해를 만들고 있었다.
 	void interrupt();
 	bool IsInterrupted();
 	bool IsAlive();
@@ -59,6 +62,11 @@ private:
 	pthread_t						m_thread;
 	pthread_mutex_t					m_mutex;
 	pthread_cond_t					m_cond;
+	// [현재 미사용, 2026-09-17 최정우 확인] join()/join(time) 이 true/false 로 대입하기만 하고
+	//   **읽는 코드가 전 소스에 하나도 없다**. 2026-09-15 수정 전에는 threadHandler() 가 이 값을
+	//   락 밖에서 읽어 "join 대기자가 없으면 broadcast 생략" 하는 데 썼는데, 그 최적화 자체가
+	//   통지 유실(영구 블록)의 원인이라 제거되면서 판독부가 사라졌다. 지금은 종료 통지를 무조건
+	//   보내므로 이 플래그는 필요 없다 — 되살릴 일이 생기면 반드시 m_mutex 안에서 읽을 것.
 	bool							m_bJoinning;
 	bool							m_bIsInterrupted;
 	static pthread_attr_t			m_attr;

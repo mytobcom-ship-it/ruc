@@ -318,11 +318,16 @@ bool CIniReader::GetProfileInt(const string strSection, const string strKey, con
 		return false;
 	}							// if (itKey == mapKey->end())
 
-	// 숫자열인지 검사 — CUtil::Isdigit() 은 선행 '-'(음수)를 지원하지 않는다. 그 함수의 다른
-	//   호출부(Util.cpp StringSplit, set<uint16> 파싱용)는 음수를 걸러내는 게 맞는 동작이라
-	//   공용 함수 자체는 그대로 두고, 부호 있는 정수 설정값을 다루는 여기서만 선행 '-' 를
-	//   떼고 나머지만 검사한다 (2026-09-10 최정우 수정 — alt_penalty 의 "음수=보너스" 설정이
-	//   Isdigit() 에서 항상 실패해 조용히 기본값으로 되돌아가던 버그. 최소 재현으로 확인)
+	// 숫자열인지 검사 — CUtil::Isdigit() 은 선행 '-'(음수)를 지원하지 않는다. 공용 함수를 그대로
+	//   두고, 부호 있는 정수 설정값을 다루는 여기서만 선행 '-' 를 떼고 나머지를 검사한다
+	//   (2026-09-10 최정우 수정 — alt_penalty 의 "음수=보너스" 설정이 Isdigit() 에서 항상 실패해
+	//   조용히 기본값으로 되돌아가던 버그. 최소 재현으로 확인)
+	// [주석 정정, 2026-09-17 최정우] 종전 주석은 공용 함수를 못 고치는 근거로 "그 함수의 다른
+	//   호출부(Util.cpp StringSplit, set<uint16> 파싱용)는 음수를 걸러내는 게 맞는 동작" 을 들었으나
+	//   사실이 아니다 — CUtil::StringSplit 은 전 소스에서 호출처가 **하나도 없는** 미사용 함수다
+	//   (실사용 CUtil 멤버는 Isdigit·Isdecimal·Sleep 뿐). 즉 Isdigit() 의 실호출부는 이 파일의
+	//   GetProfileInt/GetProfileDouble 계열뿐이다. 지금 방식(호출측에서 부호 처리)을 유지하는
+	//   근거는 "다른 호출부 보호" 가 아니라 **공용 함수의 계약을 바꾸지 않는 편이 안전해서**다.
 	string strDigitCheck = itKey->second;
 	if (!strDigitCheck.empty() && (strDigitCheck[0] == '-'))
 		strDigitCheck.erase(0, 1);

@@ -151,7 +151,8 @@ private:
 	bool AttemptMatch(const sRawLogInfo& stRawLogInfo, MAP_MATCH_INPUT& stMapMatchInput,
 		uint64& qwInOutLinkID, uint64 qwPrevLinkId, MATCH_LINK_INFO *pstMatchLinkInfo,
 		const ALT_MATCH_CTX *pstAltCtx);
-	time_t GetConvertTime(char *pszDate);
+	// [2026-09-17 최정우 정리] time_t GetConvertTime(char *pszDate); 선언 제거 —
+	//   구현도 호출도 없는 dead declaration 이었다(전 소스에서 이 한 줄이 유일한 등장).
 	double GetDistance(POINT stPrePoint, 
 		MATCH_LINK_INFO stMatchLinkInfo);
 	bool GetDirAzimuth(POINT& stMatchPt, POINT& stPoint, sint16 *pnHeading);

@@ -1,6 +1,15 @@
 /**
  * @file Util.cpp
  * @brief 유틸리티 클래스 소스
+ * @remark [사용 현황, 2026-09-17 최정우 조사] 이 클래스에서 실제로 호출되는 멤버는
+ *   **Isdigit()(IniReader), Isdecimal()(IniReader), Sleep()(Server)** 셋뿐이다.
+ *   StringSplit() 4종 · SetUpper() · SetLower() · SetEucKrToUtf8() · GetDiffTime() · fswap() 은
+ *   전 소스에서 호출처가 하나도 없다(지우지 않고 남겨두되, 되살려 쓸 때는 아래 주의사항을 볼 것).
+ *   - StringSplit() 은 find_first_of() 를 쓰므로 delimiter 의 **각 문자**가 개별 구분자다
+ *     (여러 글자를 넘기면 "그 문자열"이 아니라 "그 문자들 중 아무거나"로 잘린다).
+ *   - SetUpper()/SetLower() 는 toupper()/tolower() 에 unsigned char 캐스트가 없다 — UTF-8
+ *     멀티바이트(한글 등) 0x80 이상 바이트가 signed char 에서 음수가 되어 정의되지 않은 동작이다
+ *     (SQLAccessor.cpp·IniReader.cpp 는 같은 패턴을 이미 캐스트로 고쳤다). 되살릴 때 함께 고칠 것.
 */
 #include "Util.h"
 
@@ -86,7 +95,17 @@ bool CUtil::StringSplit(string data, string delimiter, set<uint16> *psetIntList)
 		data = data.substr(pos + 1, data.length() - pos + 1);
 	}
 
-	psetIntList->insert(atoi(data.substr(0, pos).c_str()));
+	// [버그 수정, 2026-09-17 최정우] 마지막 토큰에도 루프 안과 **동일한 검증**을 적용한다.
+	//   종전에는 루프에서만 공백 제거·Isdigit()·250 초과를 걸렀고, 루프를 빠져나온 마지막 토큰은
+	//   무검증으로 insert 해서 비숫자면 atoi() 가 돌려주는 0 이, 250 초과면 그 값이 그대로 들어갔다
+	//   (같은 입력이 위치에 따라 다르게 처리되는 비일관 동작).
+	//   ※ 이 함수는 현재 호출처가 없다(파일 헤더 주석 참고) — 되살려 쓸 때를 위한 정합성 수정이다.
+	{
+		string strLast = data.substr(0, pos);
+		strLast.erase(remove(strLast.begin(), strLast.end(), ' '), strLast.end());
+		if (Isdigit(strLast) && (atoi(strLast.c_str()) <= 250))
+			psetIntList->insert(static_cast<uint16>(atoi(strLast.c_str())));
+	}
 
 	return (psetIntList->size() > 0) ? true : false;
 }
@@ -130,7 +149,7 @@ void CUtil::SetUpper(char *pszData)
 
 /**
  * @brief 소문자로 변환
- * @param[in,out] data 변환 문자열
+ * @param[in,out] pszData 변환 문자열
  * @return void
 */
 void CUtil::SetLower(char *pszData)

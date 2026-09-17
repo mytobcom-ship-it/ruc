@@ -714,10 +714,12 @@ bool CGISUtil::GetDirAngle(POINT& stSgmtPoint, POINT& stPoint, sint16 *pnDirAngl
 }
 
 /**
- * @brief 진행 각도 계산
+ * @brief 두 좌표를 잇는 진행 방위각을 도(degree) 단위로 계산 — 세그먼트 기준인
+ *   GetDirAngle() 과 달리 점 두 개만 받는다 (2026-09-17 최정우 정정 — 두 함수의
+ *   @brief 가 같아 구분이 안 됐다)
  * @param[in] stPoint1 진입 좌표
  * @param[in] stPoint2 진출 좌표
- * @return 진행각
+ * @return 진행각(0~359도)
 */
 sint16 CGISUtil::GetDirAngleDegree(POINT& stPoint1, POINT& stPoint2)
 {

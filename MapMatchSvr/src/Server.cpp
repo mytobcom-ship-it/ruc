@@ -21,13 +21,13 @@ static void ServerSignalHandler(int nSignal)
 	(void)nSignal;
 
 	// 2026-07-10 최정우 주석 처리: 시그널 컨텍스트에서 뮤텍스/조건변수/pthread_kill 호출은
-	// async-시그널-safe 위반. 특히 인터럽트()가 run 스레드에 SIGUSR1→예외를 던져
+	// async-시그널-safe 위반. 특히 interrupt()가 run 스레드에 SIGUSR1→예외를 던져
 	//   pthread_cond_timedwait(m_cRunCondition) 를 강제 언와인드 → 조건변수 내부 ref 오염 →
 	//   종료 시 pthread_cond_destroy 무한 대기(hang) 유발.
 	//if (g_pcServerInstance != nullptr)
 	//{
 	//	g_pcServerInstance->RequestShutdown();
-	//g_pcServerInstance->인터럽트();
+	//g_pcServerInstance->interrupt();
 	//}
 	// 플래그만 세팅. run 루프가 이를 관찰하여 정상 경로로 종료 (2026-07-10 최정우 수정)
 	g_nShutdownRequested = 1;

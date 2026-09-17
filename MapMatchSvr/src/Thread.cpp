@@ -127,8 +127,14 @@ void CThread::stop()
 
 /**
  * @brief 쓰레드 sleep 함수
- * @param[in] millis 마이크로 초 (1000000 : 1초)
+ * @param[in] millis **밀리초** (1000 : 1초)
  * @return void
+ * @remark [주석 정정, 2026-09-17 최정우] 종전 주석은 "마이크로 초 (1000000 : 1초)" 라고 적혀
+ *   있었으나 사실과 다르다 — 인자를 usleep() 에 넘기기 전에 ×1000 하므로 단위는 밀리초다.
+ *   호출부(ThreadPool.cpp WaitForIdle/WaitForActiveIdle/WaitForAllStopped)도 전부
+ *   `const int nStepMs = 100; CThread::sleep(nStepMs); nElapsedMs += nStepMs;` 로
+ *   밀리초 전제로 쓰고 있다. 주석만 틀렸고 동작은 처음부터 밀리초였다 — 그 주석을 믿고
+ *   값을 넣으면 1000배 어긋난다.
 */
 void CThread::sleep(long millis)
 {

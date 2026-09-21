@@ -66,8 +66,10 @@ void CMapMatch::SetAltitudeConfig(const ALTITUDE_SCORE_CONFIG& stAltConfig)
 
 /**
  * @brief 초기 맵매칭
- * @param[in] stMapMatchInput 초기 맵매칭 입력 정보
+ * @param[in] stMapMatchInput 초기 맵매칭 입력 정보 (값 전달 — 내부 좌표 변환이 호출측에 안 번진다)
  * @param[out] pstMatchLinkInfo 초기 맵매칭 응답 정보
+ * @param[in] pstTraceCtx 매칭 트레이스 컨텍스트 (nullptr=미기록)
+ *            (2026-09-21 최정우 주석 보완 — 설명이 없던 파라미터)
  * @return true(성공), false(실패)
 */
 bool CMapMatch::BeginMapMatch(MAP_MATCH_INPUT stMapMatchInput, 
@@ -156,8 +158,10 @@ bool CMapMatch::BeginGeomNearest(MAP_MATCH_INPUT stMapMatchInput, PMATCH_LINK_IN
 
 /**
  * @brief 연속 맵매칭
- * @param[in] stMapMatchInput 연속 맵매칭 입력 정보
+ * @param[in] stMapMatchInput 연속 맵매칭 입력 정보 (값 전달)
  * @param[out] pstMatchLinkInfo 연속 맵매칭 응답 정보
+ * @param[in] pstTraceCtx 매칭 트레이스 컨텍스트 (nullptr=미기록)
+ *            (2026-09-21 최정우 주석 보완 — 설명이 없던 파라미터)
  * @return true(성공), false(실패)
 */
 bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput, 
@@ -170,6 +174,21 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
 	double dfY = stMapMatchInput.dfY;
 	sint16 nAngle = stMapMatchInput.nAngle;
 	uint64 qwLinkID = stMapMatchInput.qwLinkID;
+	// [2026-09-21 최정우 보완] m_pcDataLoader 를 검사 없이 역참조하고 있었다 — 같은 클래스의
+	//   BeginMapMatch()/BeginGeomNearest() 는 하위 StartMapMatch()/FindGeomNearest() 안에서
+	//   nullptr 검사에 걸려 NOT_LOADED_MAPDATA 로 정상 실패하는데, 이 경로만 그 전에 먼저
+	//   GetSearchStep() 을 부르기 때문에 **검사에 닿기도 전에 죽는다**. Initialize() 가 실패하면
+	//   CProcessManager 가 인스턴스를 폐기하므로 현재 호출 경로에서는 발생하지 않지만,
+	//   같은 클래스 안에서 방어 수준이 갈리는 것은 그 자체로 함정이다.
+	if (m_pcDataLoader == nullptr)
+	{
+		memset(pstMatchLinkInfo, 0, MATCH_LINK_INFO_SIZE);
+		pstMatchLinkInfo->wErrorCode = NOT_LOADED_MAPDATA;
+		strcpy(pstMatchLinkInfo->szErrorMsg,
+			m_cCodeMap.GetValue(ErrorCodeTable, NOE(ErrorCodeTable), pstMatchLinkInfo->wErrorCode));
+		LOGFMTE("continue map match called before map data loaded!");
+		return false;
+	}
 	// config에서 연속 탐색 depth(검색 단계) 조회 (2026-07-08 최정우 주석 추가)
 	sint16 nSearchStep = m_pcDataLoader->GetSearchStep();
 
@@ -469,7 +488,9 @@ bool CMapMatch::ContinueMapMatch(MAP_MATCH_INPUT stMapMatchInput,
  * @param[in,out] dfX X 좌표
  * @param[in,out] dfY Y 좌표
  * @param[in] nAngle 방위각
- * @param pstMatchLinkInfo 에러 코드 및 에러 메시지
+ * @param[out] pstMatchLinkInfo 에러 코드 및 에러 메시지. **진입 즉시 memset 으로 전부 지운다**
+ *             (2026-09-21 최정우 주석 보완 — in/out 표기가 없었고, 호출 전에 채워둔 값이
+ *             날아간다는 점이 드러나지 않았다)
  * @return true(성공), false(실패)
 */
 bool CMapMatch::IsValidCommonRequestValue(enum eCoordinateType& eCoordType, 
@@ -541,10 +562,11 @@ bool CMapMatch::SetResponseValue(uint16 wErrorCode, MATCH_ENTRY stMatchEntry,
 	}
 	else
 	{
-		pstMatchLinkInfo->wErrorCode = wErrorCode;
-		// 에러 코드에 대응하는 메시지 문자열 조회 (2026-07-08 최정우 주석 추가)
-		strcpy(pstMatchLinkInfo->szErrorMsg, m_cCodeMap.GetValue(ErrorCodeTable, NOE(ErrorCodeTable), pstMatchLinkInfo->wErrorCode));
-
+		// [2026-09-21 최정우 정리] 종전에는 여기서 똑같은 "코드 대입 + 메시지 strcpy" 를 두 번
+		//   연달아 했다 — 이 else 는 wErrorCode == NO_ERROR 인 경우이므로 두 블록이 글자 그대로
+		//   같은 일을 했다(둘째 블록의 `= NO_ERROR` 도 이미 들어 있는 값을 다시 넣는 것).
+		//   읽는 사람이 "왜 두 번 하지? 사이에 뭔가 바뀌나?" 하고 멈추게 만들 뿐이라 한 번으로
+		//   줄인다. 동작 변화 없음.
 		pstMatchLinkInfo->wErrorCode = NO_ERROR;
 		// 에러 코드에 대응하는 메시지 문자열 조회 (2026-07-08 최정우 주석 추가)
 		strcpy(pstMatchLinkInfo->szErrorMsg, m_cCodeMap.GetValue(ErrorCodeTable, NOE(ErrorCodeTable), pstMatchLinkInfo->wErrorCode));
@@ -650,7 +672,13 @@ bool CMapMatch::IsValidCoordinate(enum eCoordinateType& eCoordType,
 */
 bool CMapMatch::IsValidSearchRadius(sint16& nRadius)
 {
-	if ((nRadius < 0) || (nRadius > 250))
+	// [2026-09-21 최정우 수정] 상한이 리터럴 250 으로 박혀 있었는데, 이 값은 진단용 탐색 반경
+	//   MM_DIAG_RADIUS(250m)와 **같아야만** 한다 — BeginGeomNearest() 는 nRadius 에
+	//   MM_DIAG_RADIUS 를 그대로 넣고 이 검사를 통과해야 하기 때문이다. 상수를 251 이상으로
+	//   올리는 순간 그 경로가 전부 INVALID_SEARCHRADIUS 로 조용히 실패한다(진단용 최근접
+	//   좌표를 못 남겨 SKIP 행의 MATCH_LAT/LON·INTERSECT_LEN 이 통째로 비게 된다).
+	//   현재 값이 서로 같으므로 동작 변화는 없고, 앞으로 함께 움직이도록 상수로 묶는다.
+	if ((nRadius < 0) || (nRadius > MM_DIAG_RADIUS))
 		return false;
 
 	return true;

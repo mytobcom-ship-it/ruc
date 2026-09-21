@@ -54,7 +54,17 @@ void CCondition::wait(CMutex& mutex)
  * @brief 동작 중인 Thread 를 최대 nWaitMs 밀리초 대기 (시그널 시 즉시 반환)
  * @param[in] mutex 동기화용 Mutex (호출 전 잠금 상태)
  * @param[in] nWaitMs 최대 대기 시간 (ms)
- * @return true(시그널), false(timeout)
+ * @return true(시그널을 받아 깨어남), false(타임아웃 **또는** 오류)
+ * @remark
+ *   · 기준 시계는 CLOCK_REALTIME 이다 — pthread_cond_timedwait 의 기본값이며, 조건변수에
+ *     pthread_condattr_setclock() 을 하지 않았으므로 이것이 맞다. 다만 시스템 시각이 NTP 등으로
+ *     점프하면 실제 대기 시간이 늘거나 줄 수 있다. 같은 이유로 CClock 은 2026-09-10 에
+ *     CLOCK_MONOTONIC 으로 바꿨지만(그쪽은 경과시간 측정이라 단조 시계가 필수),
+ *     여기는 "깨우기 신호를 기다리는 상한" 이라 점프의 영향이 다음 주기에 흡수된다.
+ *   · 반환값이 false 라고 반드시 타임아웃인 것은 아니다(EINVAL 등도 false). 현재 호출부
+ *     (CRawLogFetcher::run, CServer::WaitForNextCycle)는 둘 다 깨어난 뒤 종료 플래그를 다시
+ *     확인하므로 구분할 필요가 없다 — 구분이 필요해지면 errno 가 아니라 이 반환 코드를 나눠야 한다.
+ *   (2026-09-21 최정우 주석 보완)
 */
 bool CCondition::waitTimed(CMutex& mutex, int nWaitMs)
 {

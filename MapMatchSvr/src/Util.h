@@ -89,8 +89,11 @@ public:
 	bool StringSplit(string data, string delimiter, vector<int> *pvtIntList);
 	bool StringSplit(string data, string delimiter, set<uint16> *psetIntList);
 	bool StringSplit(string data, string delimiter, map<string, string> *pmapEntries);
-	void SetUpper(char *pszdata);
-	void SetLower(char *pzdata);
+	// [2026-09-21 최정우 정정] 선언부 파라미터명이 구현부(Util.cpp)의 pszData 와 달랐고,
+	//   SetLower 쪽은 `pzdata` 로 헝가리안 접두사(psz)까지 깨져 있었다. 두 함수 모두 2026-09-21
+	//   에 UTF-8 UB(unsigned char 캐스트 누락)를 수정했다 — 구현부 주석 참고.
+	void SetUpper(char *pszData);
+	void SetLower(char *pszData);
 	bool SetEucKrToUtf8(string inBuff, string& outBuff);
 	void Sleep(int sec, int micro);
 	bool Isdigit(string data);

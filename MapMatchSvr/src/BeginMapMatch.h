@@ -31,9 +31,13 @@ public:
 	CBeginMapMatch();
 	virtual ~CBeginMapMatch();
 
-	// qwBiasLinkID : 연속실패 후 Begin 재검색 시 직전 성공 링크(연결성 편향, 0=미적용) (2026-07-15 최정우 추가)
-	// 왕복분리 짝 링크 heading 교정 (2026-08-22 최정우 추가)
+	// [2026-09-21 최정우 정정] 아래 두 줄 주석이 엉뚱한 선언 위에 붙어 있었다 —
+	//   "qwBiasLinkID ..." 는 StartMapMatch() 의 인자 설명이고 "왕복분리 짝 링크 heading 교정" 은
+	//   FixOppositePairByHeading() 설명인데, 둘 다 GetLinkAzimuth() 바로 위에 있어 마치 이 함수의
+	//   설명처럼 읽혔다. 각자 제 선언 위로 옮긴다.
+	// 링크의 진행 방위각(시작노드 → 종료노드, 0=북 시계방향). 호출 전 pstLinkInfo nullptr 검사 필수
 	sint16 GetLinkAzimuth(PLINK_INFO pstLinkInfo);
+	// 왕복분리 짝 링크 heading 교정 (2026-08-22 최정우 추가)
 	void FixOppositePairByHeading(const SGMT_MATCH_INPUT& stSgmtMatchInput,
 			list<MATCH_ENTRY>& listMatchEntryList);
 	// 위 교정의 일반화 — 짝 링크(qwOppositeLinkID) 등록 여부와 무관하게, 후보 목록 안에서
@@ -44,6 +48,8 @@ public:
 	// 짝 링크(qwOppositeLinkID)가 있는 링크가 heading 과 거의 정반대로 채택됐는지 판정 —
 	//   Begin 이 Continue 결과를 병행폴백으로 대체하기 직전 거부권 용도 (2026-08-24 최정우 추가)
 	bool IsAntiHeadingOpposite(uint64 qwLinkID, sint16 nHeading, sint16 nSpeed);
+	// qwBiasLinkID : 연속실패 후 Begin 재검색 시 직전 성공 링크(연결성 편향, 0=미적용) (2026-07-15 최정우 추가)
+	// ※ stSgmtMatchInput 은 내부에서 좌표가 ×360000 으로 **덮어써진다** — 구현부 주의 주석 참고
 	bool StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& stSgmtMatchInput, 
 		uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry, PMATCH_TRACE_CTX pstTraceCtx = nullptr,
 		uint64 qwBiasLinkID = 0);

@@ -140,16 +140,25 @@ bool IsSingleInstanceLockIntact()
 */
 bool Initialize(string config_file, PCONFIG pstConfig)
 {
+	// [2026-09-21 최정우 수정] 이 함수의 실패 메시지는 종전에 전부 perror() 로 나갔다.
+	//   perror 는 **errno 에 담긴 마지막 시스템 콜 오류**를 메시지 뒤에 붙여주는 함수인데,
+	//   여기 메시지들은 대부분 시스템 콜 실패가 아니라 "설정값이 비었다/범위를 벗어났다" 라
+	//   errno 와 아무 관계가 없다. 그래서 실제 출력이
+	//     `db host is empty!` + `: Success`
+	//   처럼 나와, 읽는 사람이 성공인지 실패인지 헷갈리거나 엉뚱한 errno 를 원인으로 오해했다
+	//   (직전에 성공한 access/fopen 의 errno 가 그대로 남아 있기 때문). errno 와 무관한
+	//   메시지는 fprintf(stderr, ...) 로 바꾼다. 로거는 아직 기동 전이라 stderr 가 맞다
+	//   (run_svr.sh 가 MapMatchSvr_launcher.log 로 리다이렉트한다).
 	if (access(config_file.c_str(), F_OK) != 0)
 	{
-		perror("config.ini file not found!\n");
+		fprintf(stderr, "config.ini file not found!\n");
 		return false;
 	}
 
 	CIniReader cIniReader(config_file.c_str());
 	if (!cIniReader.Open())
 	{
-		perror("config file is not found!\n");
+		fprintf(stderr, "config file is not found!\n");
 		return false;
 	}
 
@@ -158,7 +167,7 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileStr("log", "path", CFG_DEF_PATH, pstConfig->strLogPath);
 	if (pstConfig->strLogPath.empty())
 	{
-		perror("log path is empty!\n");
+		fprintf(stderr, "log path is empty!\n");
 		return false;
 	}
 
@@ -178,7 +187,7 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileInt("log", "runtime", CFG_DEF_RUNTIME, pstConfig->nLogKeepRunTime);
 	if (pstConfig->nLogKeepRunTime > 23)
 	{
-		perror("log keep runtime is invalid!\n");
+		fprintf(stderr, "log keep runtime is invalid!\n");
 		return false;
 	}
 	if (pstConfig->nLogKeepRunTime < 0)
@@ -188,7 +197,7 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileInt("log", "keepday", CFG_DEF_KEEPDAY, pstConfig->nLogKeepDay);
 	if (pstConfig->nLogKeepRunTime > UNUSE_LOG_KEEP && pstConfig->nLogKeepDay <= 0)
 	{
-		perror("log keep day is invalid!\n");
+		fprintf(stderr, "log keep day is invalid!\n");
 		return false;
 	}
 
@@ -197,7 +206,7 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileStr("database", "host", "", pstConfig->strDBHost);
 	if (pstConfig->strDBHost.empty())
 	{
-		perror("db host is empty!\n");
+		fprintf(stderr, "db host is empty!\n");
 		return false;
 	}
 
@@ -205,7 +214,7 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileInt("database", "port", CFG_DEF_PORT, pstConfig->nDBPort);
 	if ((pstConfig->nDBPort <= 0) || (pstConfig->nDBPort > 65535))
 	{
-		perror("db port is invalid!\n");
+		fprintf(stderr, "db port is invalid!\n");
 		return false;
 	}
 
@@ -213,7 +222,7 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileStr("database", "name", "", pstConfig->strDBName);
 	if (pstConfig->strDBName.empty())
 	{
-		perror("db name is empty!\n");
+		fprintf(stderr, "db name is empty!\n");
 		return false;
 	}
 
@@ -221,7 +230,7 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileStr("database", "userid", "", pstConfig->strDBUserID);
 	if (pstConfig->strDBUserID.empty())
 	{
-		perror("db user id is empty!\n");
+		fprintf(stderr, "db user id is empty!\n");
 		return false;
 	}
 
@@ -229,7 +238,7 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileStr("database", "password", "", pstConfig->strDBPasswd);
 	if (pstConfig->strDBPasswd.empty())
 	{
-		perror("db user password is empty!\n");
+		fprintf(stderr, "db user password is empty!\n");
 		return false;
 	}
 
@@ -251,7 +260,7 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileStr("query", "file", "", pstConfig->strSQLFile);
 	if (pstConfig->strSQLFile.empty())
 	{
-		perror("sql file is empty!\n");
+		fprintf(stderr, "sql file is empty!\n");
 		return false;
 	}
 
@@ -260,7 +269,7 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileStr("sql", "rawlog_recover", "", pstConfig->strRawLogRecoverSession);
 	if (pstConfig->strRawLogRecoverSession.empty())
 	{
-		perror("gps data recover sql session is empty!\n");
+		fprintf(stderr, "gps data recover sql session is empty!\n");
 		return false;
 	}
 
@@ -268,7 +277,7 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileStr("sql", "rawlog_select", "", pstConfig->strRawLogSelectSession);
 	if (pstConfig->strRawLogSelectSession.empty())
 	{
-		perror("gps data select sql session is empty!\n");
+		fprintf(stderr, "gps data select sql session is empty!\n");
 		return false;
 	}
 
@@ -276,7 +285,7 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileStr("sql", "rawlog_update", "", pstConfig->strRawLogUpdateSession);
 	if (pstConfig->strRawLogUpdateSession.empty())
 	{
-		perror("gps data update sql session is empty!\n");
+		fprintf(stderr, "gps data update sql session is empty!\n");
 		return false;
 	}
 
@@ -330,6 +339,15 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	if (pstConfig->nNodeExitCnt < 1)
 		pstConfig->nNodeExitCnt = CFG_DEF_NODE_EXITCNT;
 
+	// [charge] zone_exitcnt — 게이트형 **다중링크** 구역(폐쇄식·구간단속) 이탈 확정 연속 GPS 건수.
+	//   링크 1개짜리 구역은 "그 링크를 벗어남=구역을 벗어남"이라 종전대로 즉시 확정하고, 이 값은
+	//   링크 2개 이상 구역에만 적용된다. **0 이면 비활성** — 종전처럼 무제한 대기(게이트·TTL·
+	//   트립종료로만 마감)로 폴백하므로 되돌리기가 설정 한 줄이다. 그래서 다른 *_cnt 와 달리
+	//   1 미만을 기본값으로 되돌리지 않고 0 을 그대로 받는다 (2026-09-21 최정우 추가)
+	cIniReader.GetProfileInt("charge", "zone_exitcnt", CFG_DEF_ZONE_EXITCNT, pstConfig->nZoneExitCnt);
+	if (pstConfig->nZoneExitCnt < 0)
+		pstConfig->nZoneExitCnt = CFG_DEF_ZONE_EXITCNT;
+
 	// [charge] park_speedmax (단위: km/h) — 이 속도 이하일 때만 주정차 판정. 실측(21트립) 결과
 	//   정차 구간 최대속도 0~5km/h, 통과 구간 12~40km/h 로 완전히 분리됨 (2026-08-22 최정우 추가)
 	cIniReader.GetProfileInt("charge", "park_speedmax", CFG_DEF_PARK_SPEEDMAX, pstConfig->nParkSpeedMax);
@@ -337,8 +355,21 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	// [charge] park_entrycnt — 조건을 연속으로 이만큼 충족해야 세션 개시. 1~2점(0~3초)짜리는
 	//   체류시간 산출이 불가능하고 GPS 튐과 구분되지 않아 제외 (2026-08-22 최정우 추가)
 	cIniReader.GetProfileInt("charge", "park_entrycnt", CFG_DEF_PARK_ENTRYCNT, pstConfig->nParkEntryCnt);
+	// [버그 수정, 2026-09-21 최정우] park_entrycnt 를 읽고서 정작 검사한 것은 **nParkExitCnt**
+	//   였다(복붙 흔적 — 같은 검사가 위 park_exitcnt 항목에도 필요해 여기 남아 있다). 그래서
+	//   nParkEntryCnt 에는 하한 검증이 통째로 빠져 있었다. 0 이나 음수를 넣으면 "연속 0건 충족
+	//   시 세션 개시" 가 되어 GPS 한 점만 튀어도 주정차 구간이 열린다(park_entrycnt 를 둔 목적이
+	//   바로 그 1~2점짜리 배제였다). 현재 config 값이 3 이라 발현하지는 않았다.
+	if (pstConfig->nParkEntryCnt < 1)
+		pstConfig->nParkEntryCnt = CFG_DEF_PARK_ENTRYCNT;
 	if (pstConfig->nParkExitCnt < 1)
 		pstConfig->nParkExitCnt = CFG_DEF_PARK_EXITCNT;
+	// [2026-09-21 최정우 보완] 아래 두 값도 하한 검증이 없었다. 둘 다 "0=비활성" 의미라
+	//   음수는 정의되지 않은 입력이다 — 0(비활성)으로 정규화하는 대신 기본값으로 되돌린다.
+	if (pstConfig->nParkSpeedMax < 0)
+		pstConfig->nParkSpeedMax = CFG_DEF_PARK_SPEEDMAX;
+	if (pstConfig->nParkAccMax < 0)
+		pstConfig->nParkAccMax = CFG_DEF_PARK_ACCMAX;
 	// [charge] park_regrace (단위: sec) — 재진입 유예시간 (2026-08-14 최정우 추가)
 	cIniReader.GetProfileInt("charge", "park_regrace", CFG_DEF_PARK_REGRACE, pstConfig->nParkRegraceSec);
 	if (pstConfig->nParkRegraceSec < 0)
@@ -398,7 +429,7 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileInt("threads", "count", CFG_DEF_COUNT, pstConfig->nThreads);
 	if (pstConfig->nThreads <= 0)
 	{
-		perror("thread count is invalid!\n");
+		fprintf(stderr, "thread count is invalid!\n");
 		return false;
 	}
 
@@ -417,7 +448,7 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileStr("data", "file", "", pstConfig->strDataFile);
 	if (pstConfig->strDataFile.empty())
 	{
-		perror("data binary file is empty!\n");
+		fprintf(stderr, "data binary file is empty!\n");
 		return false;
 	}
 
@@ -429,7 +460,10 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 
 	// [mapmatch] radius (단위: m) (2026-07-11 최정우 주석 추가)
 	cIniReader.GetProfileInt("mapmatch", "radius", CFG_DEF_RADIUS, pstConfig->nRadius);
-	if ((pstConfig->nRadius < 0) || (pstConfig->nRadius > 250))
+	// [2026-09-21 최정우 수정] 상한 리터럴 250 은 CMapMatch::IsValidSearchRadius() 가 쓰는
+	//   상한과 같은 값이어야 한다(그쪽을 넘기면 INVALID_SEARCHRADIUS 로 매칭 자체가 실패).
+	//   같은 근거로 그쪽도 이번에 MM_DIAG_RADIUS 로 묶었다 — 두 곳이 따로 놀지 않게 한다.
+	if ((pstConfig->nRadius < 0) || (pstConfig->nRadius > MM_DIAG_RADIUS))
 		pstConfig->nRadius = CFG_DEF_RADIUS;
 
 	// [mapmatch] radius_scale (2026-07-11 최정우 주석 추가)
@@ -440,7 +474,7 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	// [mapmatch] radius_min (단위: m) (2026-07-11 최정우 주석 추가)
 	cIniReader.GetProfileInt("mapmatch", "radius_min", CFG_DEF_RADIUS_MIN, pstConfig->nRadiusMin);
 	// [mapmatch] radius_max (단위: m) (2026-07-11 최정우 주석 추가)
-	cIniReader.GetProfileInt("mapmatch", "radius_max", CFG_DEF_RADIUS, pstConfig->nRadiusMax);
+	cIniReader.GetProfileInt("mapmatch", "radius_max", CFG_DEF_RADIUS_MAX, pstConfig->nRadiusMax);
 	if (pstConfig->nRadiusMin <= 0)
 		pstConfig->nRadiusMin = CFG_DEF_RADIUS_MIN;
 	if (pstConfig->nRadiusMax < pstConfig->nRadiusMin)
@@ -502,7 +536,7 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 		pstConfig->dfHopPenalty = 0.0;
 	if (pstConfig->nMaxStep <= 0)
 	{
-		perror("map match is max step is invalid!\n");
+		fprintf(stderr, "map match is max step is invalid!\n");
 		return false;
 	}
 
@@ -522,7 +556,7 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 /**
  * @brief 기동 시 로딩된 환경설정(config.ini) 값을 config.ini 섹션 단위로 묶어 로그로 남긴다.
  *   로거가 기동한 뒤(ILog4zManager::start() 이후)에만 호출 가능 — Initialize() 안에서는 로거가
- *   아직 없어 perror 만 쓸 수 있다. 선택 항목(빈 문자열이면 해당 기능 비활성)은 "(비활성)"으로
+ *   아직 없어 stderr 출력만 쓸 수 있다. 선택 항목(빈 문자열이면 해당 기능 비활성)은 "(비활성)"으로
  *   표시해 실제로 어떤 기능이 켜져 있는지 한눈에 보이게 한다 (2026-09-04 최정우 추가, 사용자 지시)
  * @param[in] stConfig 로딩된 환경설정 값
  * @return void
@@ -560,9 +594,9 @@ static void LogStartupConfig(const CONFIG& stConfig)
 		stConfig.strServerId.c_str(), stConfig.nServerStatusIntervalSec, stConfig.nStaleSec);
 	LOGFMTI("[charge] gate_reload=[%d]s park_pad=[%d]m park_accmax=[%d]m park_speedmax=[%d]km/h",
 		stConfig.nGateReloadSec, stConfig.nParkPad, stConfig.nParkAccMax, stConfig.nParkSpeedMax);
-	LOGFMTI("[charge] park_entrycnt=[%d] park_exitcnt=[%d] node_exitcnt=[%d] "
+	LOGFMTI("[charge] park_entrycnt=[%d] park_exitcnt=[%d] node_exitcnt=[%d] zone_exitcnt=[%d] "
 		"park_regrace=[%d]s park_ttl=[%d]s exempt_regrace=[%d]s",
-		stConfig.nParkEntryCnt, stConfig.nParkExitCnt, stConfig.nNodeExitCnt,
+		stConfig.nParkEntryCnt, stConfig.nParkExitCnt, stConfig.nNodeExitCnt, stConfig.nZoneExitCnt,
 		stConfig.nParkRegraceSec, stConfig.nParkTtlSec, stConfig.nExemptRegraceSec);
 	LOGFMTI("[feeder] limit=[%d] fetch_interval=[%d]ms queue_pause/max=[%d]/[%d] "
 		"queue_busymin/max=[%d]/[%d]ms",
@@ -583,6 +617,11 @@ static void LogStartupConfig(const CONFIG& stConfig)
 		"opp_streakmax=[%d] speed_factor=[%.2f] speed_margin=[%d]km/h",
 		stConfig.dfHopPenalty, stConfig.dfHopLenRatio, stConfig.nReverseConfirm,
 		stConfig.nOppStreakMax, stConfig.dfSpeedFactor, stConfig.nSpeedMargin);
+	// [2026-09-21 최정우 보완] ignore_rawvld 가 기동 로그에서 빠져 있었다 — 이 값이 1 이면
+	//   RAW_VLD 를 무시하고 전량 매칭을 시도하는 **검증 전용 모드**다. 켜둔 채 잊으면 결과를
+	//   실데이터로 오인하게 되므로, 켜져 있는지는 로그만 보고도 알 수 있어야 한다.
+	LOGFMTI("[mapmatch] ignore_rawvld=[%d]%s", stConfig.nIgnoreRawVld,
+		(stConfig.nIgnoreRawVld != 0) ? "  ※ RAW_VLD 무시 전량 매칭(검증 모드)" : "");
 	LOGFMTI("===================================================================");
 }
 
@@ -602,14 +641,21 @@ int main()
 	string config_file = "./config.ini";
 
 	// 환경설정 파일 읽기
+	// [버그 수정, 2026-09-21 최정우] 아래 초기화 실패 경로들이 전부 exit(0) — 즉 **성공 종료
+	//   코드**로 죽고 있었다. systemd 유닛(mapmatchsvr.service)이 `Restart=on-failure` 라
+	//   종료코드 0 은 "할 일을 마치고 정상적으로 끝났다" 로 해석돼 **자동 재기동이 걸리지
+	//   않는다**. DB 가 아직 안 떴다거나(After= 는 기동 순서만 보장하고 준비 완료까지는 보장하지
+	//   않는다) link.psf 가 일시적으로 없는 상황에서 엔진이 조용히 죽은 채 방치되는 경로다.
+	//   실패는 실패 코드로 알린다 — 이미 중복 기동 방지 실패(AcquireSingleInstanceLock)는
+	//   처음부터 exit(1) 이었으므로 그쪽과도 일관된다.
 	if (!Initialize(config_file, &stConfig))
-		exit(0);
+		exit(1);
 
 	// log 경로
 	if (stConfig.strLogPath.empty())
 	{
-		perror("log path is empty!\n");
-		exit(0);
+		fprintf(stderr, "log path is empty!\n");
+		exit(1);
 	}
 
 	// 데이터 바이너리 절대 경로 (실행 디렉터리 기준)
@@ -618,8 +664,8 @@ int main()
 	// 실행 디렉터리 절대 경로 획득 (2026-07-08 최정우 주석 추가)
 	if (getcwd(szPath, MAX_PATH) == nullptr)
 	{
-		perror("directory is not found!\n");
-		exit(0);
+		perror("getcwd failed");			// errno 기반 실패라 perror 가 적절한 몇 안 되는 자리
+		exit(1);
 	}
 	if (stConfig.strDataFile.empty() || stConfig.strDataFile[0] == '/')
 		; // already absolute or empty handled above
@@ -637,8 +683,8 @@ int main()
 	// log4z 로거 기동 (2026-07-08 최정우 주석 추가)
 	if (!ILog4zManager::getRef().start())
 	{
-		perror("log open fail!\n");
-		exit(0);
+		fprintf(stderr, "log open fail!\n");
+		exit(1);
 	}
 
 	// 로거가 막 기동한 시점 — 이제부터 남기는 로그가 이번 프로세스 기동의 첫 로그가 된다.
@@ -653,7 +699,8 @@ int main()
 	if (pcServer == nullptr)
 	{
 		LOGFMTE("server is null");
-		exit(0);
+		ILog4zManager::getRef().stop();		// 로거 버퍼 flush 후 종료 (2026-09-21 최정우 보완)
+		exit(1);
 	}
 
 	try

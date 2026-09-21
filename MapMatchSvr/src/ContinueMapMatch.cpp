@@ -33,10 +33,19 @@ void CContinueMapMatch::SetAltitudeConfig(const ALTITUDE_SCORE_CONFIG& stAltConf
  * @brief 연속 맵매칭 시작
  * @param[in] pcDataLoader 데이터 로딩 클래스
  * @param[in] stSgmtMatchInput 세그먼트 매칭 입력 정보
- * @param[in] qwLinkID 링크 ID
- * @param[in] nSearchStep 탐색할 단계 (0~5)
+ * @param[in] qwLinkID 직전 확정 링크 ID — depth 탐색의 출발점
+ * @param[in] nSearchStep 탐색할 최대 depth. config [mapmatch] maxstep 에 이동거리 기반 확장
+ *   (MM_STEP_EXTEND_*)이 더해진 값이 들어온다
+ *   (2026-09-21 최정우 주석 정정 — 종전 "(0~5)" 는 근거 없는 표기였다. 상한을 강제하는 코드는
+ *   어디에도 없고, 검증은 CMapMatch::IsValidSearchStep() 의 "음수 아님" 뿐이다. 이 범위를
+ *   믿고 5 기준으로 배열·루프를 짜면 어긋난다)
  * @param[out] pwErrorCode 에러 코드
  * @param[out] pstMatchEntry 검색 정보
+ * @param[in] pstTraceCtx 매칭 트레이스 컨텍스트 (nullptr=미기록)
+ *   (2026-09-21 최정우 주석 보완 — 설명이 없던 파라미터)
+ * @param[out] pvtPathLinkIDs (선택) 직전 확정 링크부터 이번 확정 링크까지 실제 경유한 링크 목록.
+ *   게이트/구역 판정이 "지나간 링크 전부"를 봐야 해서 필요하다 — ReconstructPath() 참고
+ *   (2026-09-21 최정우 주석 보완 — 설명이 없던 파라미터)
  * @param[out] psetSearchHistoryLinkID (선택) depth 탐색(maxstep 이내)으로 실제 방문한 전체
  *   링크 UID 집합 — CMapMatch::ContinueMapMatch()가 Begin 병행폴백 후보의 "진짜 갈림길" 여부
  *   판별에 사용 (2026-08-21 최정우 추가)
@@ -57,6 +66,16 @@ bool CContinueMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPU
 		PMATCH_TRACE_CTX pstTraceCtx, vector<uint64> *pvtPathLinkIDs,
 		set<uint64> *psetSearchHistoryLinkID)
 {
+	// [2026-09-21 최정우 보완] 아래 지도 로드 검사만 nullptr 을 방어하고, 그 뒤의
+	//   NOT_FOUND_LINKID·MAP_MATCH_FAIL·NO_ERROR 대입(총 6곳)은 전부 무방어 역참조였다.
+	//   CBeginMapMatch::StartMapMatch() 에 넣은 것과 같은 근거로 입구에서 한 번 막는다.
+	//   현재 호출부(MapMatch.cpp)는 항상 유효 포인터를 넘기므로 동작 변화는 없다.
+	if (pwErrorCode == nullptr)
+	{
+		LOGFMTE("continue map match called with null error code!");
+		return false;
+	}
+
 	// 경로 역추적용 — 새로 발견된 링크가 어느 링크를 거쳐 도달했는지 기록 (2026-08-20 최정우 추가)
 	unordered_map<uint64, uint64> mapParentLink;
 	m_pcDataLoader = pcDataLoader;
@@ -318,7 +337,12 @@ bool CContinueMapMatch::IsPoorAngleFit(const MATCH_ENTRY& stMatchEntry)
  * @param[out] plistMatchEntryList 검색 정보 목록
  * @param[in] bAllowOppositeCheck 역행 의심 시 opposite link(qwOppositeLinkID) 후보 재귀 평가 허용 여부 —
  *   opposite link 자체를 평가하는 재귀 호출에서는 false 로 넘겨 상호 재귀를 막는다 (2026-08-19 최정우 추가)
- * @return true(성공), false(실패)
+ * @return plistMatchEntryList 가 비어 있지 않으면 true.
+ *   [주석 정정, 2026-09-21 최정우] 종전 "true(성공), false(실패)" 는 오해를 부른다 — 이 목록은
+ *   **호출측이 depth 단위로만 비우는 누적 목록**이라, 이번 링크에서 후보를 하나도 못 찾아도
+ *   같은 depth 의 앞선 링크가 넣어둔 것이 있으면 true 가 나온다. 즉 "이 링크가 매칭됐는가" 가
+ *   아니다. 현재 호출부(StartMapMatch·TryOppositeLinkCandidate·TryNearbyRoadNameCandidate)는
+ *   모두 반환값을 쓰지 않는다 — 쓰려면 호출 전후의 목록 크기를 비교해야 한다.
 */
 bool CContinueMapMatch::LinkSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput,
 		DEPTH_LINK_INFO_DATA& stDepthLinkInfoData, list<MATCH_ENTRY> *plistMatchEntryList,
@@ -695,8 +719,14 @@ void CContinueMapMatch::TryNearbyRoadNameCandidate(SGMT_MATCH_INPUT& stSgmtMatch
 			PGRID_SGMT_INFO pstSgmt = m_pcDataLoader->GetGridSgmtInfo(s);
 			if (!pstSgmt)
 				continue;
+			// [2026-09-21 최정우 보완] 종전에는 **최종 채택된 링크만** setTried 에 넣어서,
+			//   도로명 불일치·위상 미연결로 탈락한 링크는 같은 링크의 다른 세그먼트를 만날 때마다
+			//   GetLinkInfo + strncmp + 거리 4회 계산을 처음부터 다시 했다. 링크 하나가 세그먼트
+			//   수십 개로 쪼개져 있으므로 그만큼 반복된다. 판정 결과는 세그먼트와 무관하게 링크
+			//   단위로 같으므로, 한 번 본 링크는 결과와 상관없이 기록해 건너뛴다(동작 동일).
 			if (setTried.find(pstSgmt->qwLinkID) != setTried.end())
 				continue;
+			setTried.insert(pstSgmt->qwLinkID);
 
 			PLINK_INFO pstCandInfo = m_pcDataLoader->GetLinkInfo(pstSgmt->qwLinkID);
 			if (!pstCandInfo)
@@ -723,8 +753,6 @@ void CContinueMapMatch::TryNearbyRoadNameCandidate(SGMT_MATCH_INPUT& stSgmtMatch
 			if ((m_cGISUtil.GetDistanceGEO1(stCurSt, stCandEd) > MM_NODE_BRIDGE_MAX_M)
 				|| (m_cGISUtil.GetDistanceGEO1(stCurEd, stCandSt) > MM_NODE_BRIDGE_MAX_M))
 				continue;
-
-			setTried.insert(pstSgmt->qwLinkID);
 
 			DEPTH_LINK_INFO_DATA stDepthInfo;
 			stDepthInfo.qwLinkID = pstSgmt->qwLinkID;
@@ -859,7 +887,11 @@ bool CContinueMapMatch::GetLinkDepthInfo(set<uint64> *psetSearchHistoryLinkList,
 /**
  * @brief 막다른 링크 끝점 근처에서 다른 링크의 시작점을 지리적으로 찾아 depth 후보에 추가
  * @param[in] qwFromLinkID 확장 중이던(막다른) 링크 ID — 자기 자신 제외, 경로 역추적 부모로 기록
- * @param[in] dfEndRawX/dfEndRawY qwFromLinkID 의 끝 노드 좌표(WGS84, 도 단위 — 미변환 원본)
+ * @param[in] dfEndRawX qwFromLinkID 끝 노드의 경도(WGS84, **도 단위** — 내부 스케일 미변환 원본)
+ * @param[in] dfEndRawY qwFromLinkID 끝 노드의 위도(WGS84, **도 단위** — 내부 스케일 미변환 원본)
+ *   (2026-09-21 최정우 주석 정정 — 종전에는 한 줄에 두 이름을 적어 doxygen 이 둘 다 인식하지
+ *   못했다. 단위는 이 함수가 GetNearGridID 에 그대로 넘기는 값이라 특히 중요하다 —
+ *   TryNearbyRoadNameCandidate 의 2026-09-15 버그가 정확히 이 단위 혼동이었다)
  * @param[in,out] psetSearchHistoryLinkList 이미 발견된 링크 목록(중복 방지) — 새로 찾은 링크 추가
  * @param[out] plistDepthLinkInfoList 새로 찾은 링크를 다음 depth 후보로 추가
  * @param[out] pmapParentLink 경로 역추적용 — qwFromLinkID 를 거쳐 도달한 것으로 기록
@@ -1004,9 +1036,13 @@ void CContinueMapMatch::ReconstructPath(uint64 qwFinalLinkID, const unordered_ma
 
 /**
  * @brief 검색 정보 목록 중 비용 최소 후보 추출 (dfCost 오름차순, 동률 시 INTERSECT_LEN)
- * @param[in] plistMatchEntryList 검색 정보 목록
- * @param[out] pstMatchEntry 검색 정보
+ * @param[in,out] plistMatchEntryList 검색 정보 목록. **이 함수가 그 자리에서 정렬한다**
+ * @param[out] pstMatchEntry 선택된 최소 비용 후보
+ * @param[in] pstTraceCtx 매칭 트레이스 컨텍스트 (nullptr=미기록)
+ * @param[in] stSgmtMatchInput 트레이스 기록용 입력 스냅샷
  * @return void
+ * @remark 2026-09-21 최정우 주석 보완 — 뒤 두 파라미터에 설명이 없었고, 첫 인자가 in 이 아니라
+ *   정렬로 변경되는 in,out 이라는 점도 드러나지 않았다.
 */
 void CContinueMapMatch::GetMatchEntry(list<MATCH_ENTRY> *plistMatchEntryList, PMATCH_ENTRY pstMatchEntry,
 		PMATCH_TRACE_CTX pstTraceCtx, const SGMT_MATCH_INPUT& stSgmtMatchInput)

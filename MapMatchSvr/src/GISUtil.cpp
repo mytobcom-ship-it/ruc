@@ -126,10 +126,12 @@ sint32 CGISUtil::GetGridRowNo(double& dfY)
  * @warning [2026-09-15 최정우 확인] **MapMatchSvr 전체에서 호출부 0건인 dead code 다.**
  *   (CreateData 쪽 동명 함수도 마찬가지로 호출부 0건.) 아래 IsCrossSgmt2Sgmt 가 평행·공선
  *   세그먼트를 교차로 판정하지 못하는 실제 결함을 갖고 있으나(dfSign==0.0 이면 무조건 false),
- *   이 함수가 안 불리므로 맵매칭 결과에 영향을 줄 수 없다. 2026-09-11 전체 소스리뷰에서
- *   "제대로 고치려면 겹침 여부까지 기하학적 케이스 분석이 필요하다"며 보류했던 항목인데,
- *   재확인 결과 실행되지 않는 코드라 수정 가치가 없다. 같은 파일 GetDistanceGEO2()(dead code +
- *   단위 버그)와 같은 성격. **이 함수를 실제로 쓰기 시작한다면 먼저 평행 케이스부터 고칠 것.**
+ *   이 함수가 안 불리므로 맵매칭 결과에 영향을 줄 수 없다.
+ *   [2026-09-21 최정우 수정] 2026-09-11 리뷰에서 "겹침까지 기하 케이스 분석이 필요하다"며
+ *   보류했던 그 평행·공선 결함은 **이번에 IsCrossSgmt2Sgmt() 안에서 수정 완료**했다(사용자
+ *   지시 — 호출부가 없더라도 되살리는 순간 발현하므로 미리 고쳐둔다). 비평행 경로는 그대로
+ *   두고 공선 중첩 판정만 덧붙여, 기존에 true 였던 입력의 결과는 바뀌지 않는다.
+ *   같은 파일 GetDistanceGEO2()/GetSgmtLength() 도 같은 성격(호출부 0 + 결함 선수정)이다.
  * @param[in] stPoint1 세그먼트 시작 X,Y 좌표
  * @param[in] stPoint2 세그먼트 종료 X,Y 좌표
  * @param[in] dwGridColNo X 좌표 GRID 번호
@@ -174,14 +176,53 @@ bool CGISUtil::IsCrossSgmt2Sgmt(POINT& stPoint1, POINT& stPoint2,
 {
 	bool bRet = false;
 	double dfSign = (dfYMax - dfYMin) * (stPoint2.dfX - stPoint1.dfX) - (dfXMax - dfXMin) * (stPoint2.dfY - stPoint1.dfY);
-	if (dfSign != 0.0)					// 교차하지 않음
+	// [주석 정정, 2026-09-21 최정우] 종전 주석이 "교차하지 않음" 이라 **조건과 정반대**로 읽혔다.
+	//   dfSign 은 두 세그먼트 방향벡터의 외적이라 0 이면 평행(또는 공선)이라는 뜻이고, 여기 들어오는
+	//   것은 그 반대인 "평행하지 않음 = 교차점이 존재할 수 있음" 이다. 실제로 교차하는지는 아래
+	//   매개변수 dfSign1·dfSign2 가 둘 다 0~1 범위인지로 판정한다.
+	if (dfSign != 0.0)					// 평행이 아님 — 교차점이 존재할 수 있음
 	{
 		double dfSign1 = ((dfXMax - dfXMin) * (stPoint1.dfY - dfYMin) - (dfYMax - dfYMin) * (stPoint1.dfX - dfXMin)) / dfSign;
 		double dfSign2 = ((stPoint2.dfX - stPoint1.dfX) * (stPoint1.dfY - dfYMin) - (stPoint2.dfY - stPoint1.dfY) * (stPoint1.dfX -dfXMin)) / dfSign;
 
 		if ((dfSign1 >= 0.0 && dfSign1 <= 1.0) && (dfSign2 >= 0.0 && dfSign2 <= 1.0))		// 교차함
 			bRet = true;
+
+		return bRet;
 	}
+
+	// [버그 수정, 2026-09-21 최정우] 여기는 dfSign == 0, 즉 **두 세그먼트가 평행하거나 같은
+	//   직선 위에 있는** 경우다. 종전에는 이 경우를 통째로 "교차 안 함"으로 처리했다 — 평행은
+	//   맞지만, **같은 직선 위에서 구간이 겹치는 경우(공선 중첩)까지 놓쳤다.** 이 함수의 유일한
+	//   호출자인 IsCrossSgmt2Grid() 는 그리드의 네 변과 세그먼트를 비교하므로, 도로 세그먼트가
+	//   그리드 경계선과 정확히 겹쳐 놓이면(격자에 나란한 직선 도로) 교차를 못 잡는다.
+	//   위 비평행 경로는 한 글자도 바꾸지 않았다 — 기존에 true 였던 입력은 그대로 true 이고,
+	//   여기서 늘어나는 것은 종전에 놓치던 공선 중첩뿐이다(false negative 만 감소).
+	//   ※ 이 함수 계열은 현재 호출부가 0 이다(IsCrossSgmt2Grid 의 @warning 참고). 되살려 쓸 때
+	//     바로 발현할 결함이라 미리 고쳐둔다(사용자 지시).
+
+	// 같은 직선 위인지 — 세그먼트 B(그리드 변)의 방향벡터와 "B 시작점 → A 시작점" 벡터의 외적이
+	//   0 이어야 공선이다. 0 이 아니면 나란하기만 할 뿐 절대 만나지 않는다.
+	const double dfCollinear = (dfXMax - dfXMin) * (stPoint1.dfY - dfYMin)
+		- (dfYMax - dfYMin) * (stPoint1.dfX - dfXMin);
+	if (dfCollinear != 0.0)
+		return false;					// 평행하지만 다른 직선 — 만나지 않음
+
+	// 공선이므로 두 구간이 실제로 겹치는지만 보면 된다. 축별 투영 구간이 **둘 다** 겹쳐야 한다
+	//   (수직·수평선에서도 한쪽 축은 폭이 0 이라 그대로 성립한다).
+	const double dfAMinX = (stPoint1.dfX < stPoint2.dfX) ? stPoint1.dfX : stPoint2.dfX;
+	const double dfAMaxX = (stPoint1.dfX > stPoint2.dfX) ? stPoint1.dfX : stPoint2.dfX;
+	const double dfAMinY = (stPoint1.dfY < stPoint2.dfY) ? stPoint1.dfY : stPoint2.dfY;
+	const double dfAMaxY = (stPoint1.dfY > stPoint2.dfY) ? stPoint1.dfY : stPoint2.dfY;
+	const double dfBMinX = (dfXMin < dfXMax) ? dfXMin : dfXMax;
+	const double dfBMaxX = (dfXMin > dfXMax) ? dfXMin : dfXMax;
+	const double dfBMinY = (dfYMin < dfYMax) ? dfYMin : dfYMax;
+	const double dfBMaxY = (dfYMin > dfYMax) ? dfYMin : dfYMax;
+
+	// 경계 접촉(끝점만 맞닿음)도 교차로 인정한다 — 위 비평행 경로가 매개변수 범위를
+	//   폐구간 [0,1] 로 보는 것과 같은 기준이다.
+	bRet = (dfAMinX <= dfBMaxX) && (dfAMaxX >= dfBMinX)
+		&& (dfAMinY <= dfBMaxY) && (dfAMaxY >= dfBMinY);
 
 	return bRet;
 }
@@ -262,10 +303,12 @@ double CGISUtil::GridBorderDistance(const uint32& dwGridID, const double& dfX,
 
 /**
  * @brief GRID 9등분 인덱스 위치 및 경계 좌표
+ * @warning [미사용 경고, 2026-09-21 최정우 확인] 이 함수는 전 소스에서 호출부가 0 건인 dead code
+ *   다(같은 파일의 IsCrossSgmt2Grid·GetSgmtLength·GetDistanceGEO2 와 같은 성격).
  * @param[in] dwGridID GRID ID
- * @param[in] dfX X 좌표
- * @param[in] dfY Y 좌표
- * @return 인덱스 (0 ~ 8)
+ * @param[in] dfX X 좌표 (도, WGS84)
+ * @param[in] dfY Y 좌표 (도, WGS84)
+ * @return 인덱스 (0 ~ 8). 좌표가 해당 그리드 밖이면 INVALID_GRID_SPLIT_INDEX(0xFF)
 */
 uint8 CGISUtil::GridSplitIndex(const uint32& dwGridID, const double& dfX, const double& dfY)
 {
@@ -273,12 +316,25 @@ uint8 CGISUtil::GridSplitIndex(const uint32& dwGridID, const double& dfX, const 
 	uint32 dwColNo = floor(dwGridID - dwRowNo * X_GRID_COUNT);
 
 	double dfXMin = WGS84GEO_LON_MIN + dwColNo * GRID_CELL_SIZE;
-	uint8 nXIndex = static_cast<uint8>((dfX - dfXMin) / (GRID_CELL_SIZE / 3));
-
 	double dfYMin = WGS84GEO_LAT_MIN + dwRowNo * GRID_CELL_SIZE;
-	uint8 nYIndex = static_cast<uint8>((dfY - dfYMin) / (GRID_CELL_SIZE / 3));
 
-	return nYIndex * 3 + nXIndex;
+	// [버그 수정, 2026-09-21 최정우] 종전에는 나눗셈 결과를 곧바로 uint8 로 잘라 인덱스로 썼다.
+	//   좌표가 그 그리드의 오른쪽/위쪽 경계에 정확히 걸치거나(비율 3.0) 아예 다른 그리드의
+	//   좌표가 들어오면(호출측이 dwGridID 와 좌표를 짝 맞춰 주지 않는 경우) nXIndex·nYIndex 가
+	//   3 이상이 되어 **반환값이 문서화된 0~8 범위를 넘는다**(예: 3*3+3=12). 그 값을 9칸짜리
+	//   배열 첨자로 쓰면 그대로 버퍼 오버런이다. 음수 쪽도 마찬가지로 uint8 캐스트에서 큰 값으로
+	//   뒤집힌다. 범위를 벗어나면 명시적인 실패값을 돌려주도록 고친다.
+	//   현재 호출부가 없어 동작 변화는 없다 — 되살릴 때 반환값을 반드시 검사할 것.
+	const double dfSplit = GRID_CELL_SIZE / 3.0;
+	const double dfXRatio = (dfX - dfXMin) / dfSplit;
+	const double dfYRatio = (dfY - dfYMin) / dfSplit;
+	if ((dfXRatio < 0.0) || (dfXRatio >= 3.0) || (dfYRatio < 0.0) || (dfYRatio >= 3.0))
+		return INVALID_GRID_SPLIT_INDEX;
+
+	uint8 nXIndex = static_cast<uint8>(dfXRatio);
+	uint8 nYIndex = static_cast<uint8>(dfYRatio);
+
+	return static_cast<uint8>(nYIndex * 3 + nXIndex);
 }
 
 /**
@@ -379,6 +435,10 @@ void CGISUtil::GetNearGridID(const uint32& dwGridID, const SGMT_MATCH_INPUT& stS
  * @param[in] stSgmtInfo 세그먼트 정보
  * @param[out] pstSgmtMatchRes 세그먼트 맵매칭 결과
  * @param[in] bIgnoreRadiusCheck true 이면 nRadius 초과여도 기하 매칭 허용(진단용 최근접) (2026-07-10 최정우 수정)
+ * @param[in] bIgnoreHeading true 이면 heading 이 있어도 없는 것으로 취급 — 방위각 하드컷
+ *            (MM_DIR_MAX_DEG)·소프트 비용을 모두 적용하지 않고 거리만으로 판정한다.
+ *            BEGIN 매칭 경로가 이 값을 true 로 넘긴다 (2026-09-21 최정우 주석 보완 —
+ *            설명이 없던 파라미터)
  * @return true(성공), false(실패)
 */
 bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtInfo, SGMT_MATCH_RES *pstSgmtMatchRes,
@@ -411,8 +471,10 @@ bool CGISUtil::SgmtMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, SGMT_INFO& stSgmtIn
 	// ±45 하드컷 대신 소프트 비용 사용 (2026-07-08 최정우 수정)
 	sint16 nHeadingDiff = 0;
 	bool bReverseFit = false;
-	// bIgnoreHeading=true(BEGIN 매칭 각도 미참조 실험용, 2026-08-19 최정우 임시 추가)면 heading
-	//   있어도 없는 것처럼 취급 — 하드컷(MM_DIR_MAX_DEG)·소프트 비용 전부 미적용, 거리만으로 판정
+	// bIgnoreHeading=true(BEGIN 매칭 경로가 넘긴다)면 heading 있어도 없는 것처럼 취급 —
+	//   하드컷(MM_DIR_MAX_DEG)·소프트 비용 전부 미적용, 거리만으로 판정
+	// [주석 정정, 2026-09-21 최정우] 종전 주석은 이를 "실험용, 임시 추가" 로 적었으나 임시가
+	//   아니라 확정된 설계다 — 근거는 BeginMapMatch.cpp 의 같은 날짜 정정 주석 참고.
 	// 저속(MM_SPEED_LOW_KMH 이하)이면 heading 도 없는 것처럼 취급 — 정차 중엔 실제 진행방향을
 	//   계산할 수 없어 GPS/OBD 가 관례적으로 0(정북) 등 부정확한 값을 채워 넣는 경우가 흔한데,
 	//   이 값을 그대로 믿고 bReverseFit(역방향 적합) 판정에 쓰면 우연히 세그먼트 역방향과 맞아떨어져

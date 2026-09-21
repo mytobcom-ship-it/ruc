@@ -153,11 +153,22 @@ private:
 		const ALT_MATCH_CTX *pstAltCtx);
 	// [2026-09-17 최정우 정리] time_t GetConvertTime(char *pszDate); 선언 제거 —
 	//   구현도 호출도 없는 dead declaration 이었다(전 소스에서 이 한 줄이 유일한 등장).
-	double GetDistance(POINT stPrePoint, 
-		MATCH_LINK_INFO stMatchLinkInfo);
+	// [2026-09-21 최정우 정리] double GetDistance(POINT, MATCH_LINK_INFO); 선언 제거 —
+	//   바로 위 GetConvertTime() 과 완전히 같은 경우로, 구현도 호출도 없는 dead declaration
+	//   이었다(전 소스에서 이 한 줄이 유일한 등장). 이름만 보고 "이동거리 계산이 여기 있다"고
+	//   오인할 수 있어 지운다 — 실제 거리 계산은 CGISUtil 의 Haversine 계열을 쓴다.
 	bool GetDirAzimuth(POINT& stMatchPt, POINT& stPoint, sint16 *pnHeading);
 
 private:
+	// [2026-09-21 최정우 확인 — 미사용 경고] 아래 멤버 중 m_qwLinkID / m_szStartDate /
+	//   m_szDriveID / m_szOperID / m_vtMapMatchInfoList / m_vtLinkSpeedList 6개는 생성자에서
+	//   초기화만 될 뿐 읽는 곳도 쓰는 곳도 없다(전 소스 확인). 같은 이유로 이 헤더 상단의
+	//   MAP_MATCH_INFO · LINK_SPEED 구조체와 MAP_MATCH_INFO_SIZE 도 아무 데서도 안 쓰인다 —
+	//   배치 처리(주행 단위 일괄 맵매칭 후 링크별 속도 산출) 시절의 잔재로 보인다.
+	//   삭제하지 않고 남겨두되(이력 추적 방침), **되살릴 때는 현재 구조가 tick 단위 스트리밍
+	//   처리라는 점에 주의** — CProcessManager 는 워커 스레드마다 1개씩 살아 있고 device_key
+	//   세션은 CRawLogWorker 가 들고 있으므로, 여기에 주행 단위 상태를 누적하면 여러 차량의
+	//   tick 이 한 인스턴스에 섞인다.
 	CDataLoader						*m_pcDataLoader;					// 형상정보 데이터 클래스
 	CMapMatch						*m_pcMapMatch;						// 맵매칭 (실시간 처리용)
 	CGISUtil						m_cGISUtil;

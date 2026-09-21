@@ -22,7 +22,14 @@ using namespace std;
 /**
  * @struct sVehicleTripSession
  * @brief trip_id 단위 운행 세션 (연속 맵매칭·TTL 유지용)
- * @remark TRIP_ID 는 수집서버가 START 시 적재한다. 세션 맵 키 = TRIP_ID.
+ * @remark [2026-09-21 최정우 정정] 종전 주석의 "세션 맵 키 = TRIP_ID" 는 **틀렸다** —
+ *   실제 키는 **DEVICE_KEY** 다(run() 의 mapSessions.find(strDeviceKey)). 이 차이가 동작을
+ *   가르는 지점이 여러 곳이라 오인하면 안 된다 — ①종료신호(TRIP_EVENT=END) 없이 같은 차량의
+ *   다음 운행이 시작되면 세션이 **그 자리에서 재사용**되므로 TTL 이 그 상황을 못 잡는다
+ *   (그래서 NCR_NO_TRIP_END_FORCED_CLOSE=62 가 따로 있다). ②트립이 바뀌어도 세션 객체는
+ *   살아있으므로, 트립 단위 상태를 새로 추가하면 ResetTripSessionForBegin(bFullReset) 에
+ *   리셋을 **반드시 같이** 넣어야 한다(실제로 빠뜨려 2026-09-21 에 수정한 전례 있음).
+ *   TRIP_ID 자체는 수집서버가 START 시 적재하며, 세션은 szTripId 로 신규 trip 을 감지한다.
 */
 // 같은 유형의 과금구역이 한 도로를 공유할 수 있다(인접 구역의 경계 링크, 장구간 안의 단구간 등).
 //   예전엔 유형당 세션이 1개뿐이라 겹친 구역 중 하나만 잡히고 나머지는 조용히 사라졌다.
@@ -64,6 +71,16 @@ typedef struct sZoneRunSession
 	double							dfFirstOutY;
 	time_t							dtFirstOut;
 	// 개방형(ROAD_KIND=1) 전용 — 다른 유형은 기본값(false) 그대로 미사용 (2026-08-25 최정우 추가)
+	// 구역 안에서 실측된 tick 수와 그 중 최대 순간속도 — 개방형(OPEN) 체류시간 보정 전용.
+	//   구역 안에 tick 이 **하나뿐**이면 진입·진출 보간이 통행 전체를 감쌀 수 없어, 거리는
+	//   구역 등록길이(전 구간)인데 경과시간은 보간된 두 경계 사이(수 초)만 남는 모순이 생긴다
+	//   — 실측 000994_20250903152350 RL-Z00004(141.6m): seq87 한 tick 만 구역 안에 걸려
+	//   142m/1초/512km/h 가 됐다(그 tick 의 보고 속도는 50km/h). 구역이 GPS 수신 간격 동안의
+	//   이동거리보다 짧으면 구조적으로 발생한다.
+	//   BuildOpenZoneRow() 가 이 둘로 "평균속도는 구역 안에서 관측된 최대 순간속도를 넘을 수
+	//   없다"는 물리 한계를 걸어 경과시간을 보정한다 (2026-09-21 최정우 추가)
+	int								nInZoneTicks;
+	float							fMaxSpeed;
 	bool							bStartedByTrip;						// true=트립 자체가 이 구역 도로 위에서 시작(TRIP_EVENT=START
 																		//   행의 매칭 링크가 이미 이 구역 link_ids 안). dist_m 산출
 																		//   방식이 갈린다 — false 면 구역 전체길이(dfLengthM) 고정값,
@@ -102,6 +119,7 @@ typedef struct sZoneRunSession
 		dfLastX(0.0), dfLastY(0.0), qwLastLinkID(0), dtLastInZoneTime(0), dwLastInZoneGpsSeq(0),
 		dtExitCandidateTime(0), nExitTicks(0),
 		dfFirstOutX(0.0), dfFirstOutY(0.0), dtFirstOut(0),
+		nInZoneTicks(0), fMaxSpeed(0.0f),	// (2026-09-21 최정우 추가)
 		bStartedByTrip(false), bGateCrossed(false),
 		bSeenBeforeGate(false), qwPendingEntryFromLinkID(0), qwEntryLinkID(0), qwFirstOutLinkID(0)
 	{
@@ -170,6 +188,28 @@ typedef struct sParkCandidate
 	sParkCandidate() : nTicks(0), dtTime(0), dwGpsSeq(0), dfX(0.0), dfY(0.0) { szRoadID[0] = '\0'; }
 } PARK_CANDIDATE;
 
+// 링크 폴리라인이 주정차 폴리곤 "안"에 들어가 있는 한 구간 (2026-09-21 최정우 추가)
+//   한 링크가 폴리곤을 여러 번 드나들 수 있어(모서리를 스치는 링크 등) 목록으로 돌려준다.
+//   거리는 전부 "링크 시작 노드로부터"이며, 좌표는 평문 경위도다.
+//   bEntry/bExitIsBoundary 는 그 끝점이 **실제 경계 교차**인지, 아니면 링크 자체의 끝
+//   (= 링크가 폴리곤 안에서 시작하거나 안에서 끝남)인지를 구분한다 — 종전
+//   FindLinkPolygonExitCrossing() 이 "링크 전체가 폴리곤 안"을 false 로 돌려주던 구분을
+//   값으로 보존하기 위함.
+typedef struct sLinkPolySpan
+{
+	double							dfStartDistM;						// 구간 시작 — 링크 시작 노드로부터의 거리(m)
+	double							dfEndDistM;							// 구간 끝   — 〃
+	double							dfStartX;							// 구간 시작 좌표(경도)
+	double							dfStartY;							// 〃 (위도)
+	double							dfEndX;								// 구간 끝 좌표(경도)
+	double							dfEndY;								// 〃 (위도)
+	bool							bEntryIsBoundary;					// 시작이 실제 밖→안 경계인가(false=링크가 안에서 시작)
+	bool							bExitIsBoundary;					// 끝이 실제 안→밖 경계인가(false=링크가 안에서 끝남)
+
+	sLinkPolySpan() : dfStartDistM(0.0), dfEndDistM(0.0), dfStartX(0.0), dfStartY(0.0),
+		dfEndX(0.0), dfEndY(0.0), bEntryIsBoundary(false), bExitIsBoundary(false) {}
+} LINK_POLY_SPAN;
+
 typedef struct sVehicleTripSession
 {
 	uint64							qwLinkID;							// 직전 맵매칭 링크 ID (연속 맵매칭)
@@ -214,6 +254,25 @@ typedef struct sVehicleTripSession
 	//   비어있는 경우 — 출구가 나중에 확정되더라도 ZONE_INFO.dfLengthM(구역 전체 등록 길이)를
 	//   쓰면 안 되고, 실제 출발 지점(dfEntryFromLat/Lon, 이 경우 링크 시작점이 아니라 실제
 	//   매칭 좌표)~출구 게이트 간 실거리를 써야 함(사용자 지시, 2026-08-25 최정우 추가)
+	// 게이트형 다중링크 구역 이탈 디바운스(config zone_exitcnt) 스트릭 — 구역 링크에서
+	//   벗어난 tick 이 **연속으로** 몇 번 나왔는지. 구역 안 tick 이 한 번이라도 나오면 0 으로
+	//   리셋된다. 종전에는 링크 2개 이상 구역이 무제한 대기라 실제 우회 주행까지 구역 체류로
+	//   흡수됐다(실측 000984_20250903153702 — 진입 직후 90초·500m 우회 후 복귀).
+	//   NODE_STEP 의 ZONE_RUN_SESSION.nExitTicks·PARKING 의 PARK_RUN_SESSION.nExitTicks 와
+	//   같은 역할이며, 이쪽은 세션당 유형별로 하나씩만 필요해 세션 필드로 둔다
+	//   (2026-09-21 최정우 추가)
+	int								nClosedExitTicks;
+	// 같은 링크 재진입 재발화 차단 — 진출이 확정된 "구역 road_id + 그 tick 의 매칭 링크".
+	//   **그 링크를 벗어나면 해제**되므로 다음 통행의 정상 재진입은 막지 않는다.
+	//   종전엔 위치 기반 가드(dfCurPosOnLink >= 출구게이트거리 - 3.0m)만 있었는데, 정차 중
+	//   GPS 드리프트가 링크 진행거리를 그 임계 안팎으로 오가게 만들어 무력화됐다 — 실측
+	//   000994_20250903152350 RL-Z00003: seq215 에 328.4m(임계 딱 도달)로 진출 확정 →
+	//   seq216 에 드리프트로 311.4m 로 17m 후퇴 → 재진입 → seq220 링크 이탈로 재진출,
+	//   그 3초짜리 재진입분에 구역 등록길이 331m 가 통째로 부과돼 398km/h(제한 20)가 됐다.
+	//   2026-08-20 에 폐기된 "세션에 남기는 방식"은 트립 끝까지 막아버린 게 문제였는데,
+	//   링크 단위로 키를 잡고 링크 이탈 시 해제하면 그 부작용이 없다 (2026-09-21 최정우 추가)
+	uint64							qwClosedExitedLinkID;
+	char							szClosedExitedRoadId[20+1];
 	bool							bClosedEntryAmbiguous;
 	// 게이트를 못 찾고 구역을 나간 경우(매칭 링크가 이 구역 link_ids 를 벗어남)에 dist_m·
 	//   speed_kmh·stay_seconds 를 0 대신 실측값으로 채우기 위한 실시간 위치·누적거리 추적
@@ -266,6 +325,11 @@ typedef struct sVehicleTripSession
 	//   진입 애매 시 실거리 계산에 필요해 신설(2026-08-25 최정우 추가)
 	double							dfSpeedEntryFromLat;
 	double							dfSpeedEntryFromLon;
+	// 위 nClosedExitTicks 의 구간단속판 (2026-09-21 최정우 추가)
+	int								nSpeedExitTicks;
+	// 위 qwClosedExitedLinkID 의 구간단속판 (2026-09-21 최정우 추가)
+	uint64							qwSpeedExitedLinkID;
+	char							szSpeedExitedRoadId[20+1];
 	bool							bSpeedEntryAmbiguous;
 	// 폐쇄형과 동일 이유(2026-08-25 최정우 추가) — ProcessClosedRoadCharge() 필드 주석 참고
 	double							dfSpeedLastX;
@@ -603,6 +667,8 @@ typedef struct sVehicleTripSession
 		dfEntryFromLon(0.0),	// (2026-08-12 최정우 추가)
 		dtEntryTime(0),	// (2026-08-12 최정우 추가)
 		dwEntryGpsSeq(0),	// (2026-08-28 최정우 추가)
+		nClosedExitTicks(0),			// (2026-09-21 최정우 추가)
+		qwClosedExitedLinkID(0),		// (2026-09-21 최정우 추가)
 		bClosedEntryAmbiguous(false),	// (2026-08-25 최정우 추가)
 		dfClosedLastX(0.0),	// (2026-08-25 최정우 추가)
 		dfClosedLastY(0.0),	// (2026-08-25 최정우 추가)
@@ -619,6 +685,8 @@ typedef struct sVehicleTripSession
 		qwSpeedEntryLinkID(0),	// (2026-09-01 최정우 추가)
 		dfSpeedEntryFromLat(0.0),	// (2026-08-25 최정우 추가)
 		dfSpeedEntryFromLon(0.0),	// (2026-08-25 최정우 추가)
+		nSpeedExitTicks(0),				// (2026-09-21 최정우 추가)
+		qwSpeedExitedLinkID(0),			// (2026-09-21 최정우 추가)
 		bSpeedEntryAmbiguous(false),	// (2026-08-25 최정우 추가)
 		dfSpeedLastX(0.0),	// (2026-08-25 최정우 추가)
 		dfSpeedLastY(0.0),	// (2026-08-25 최정우 추가)
@@ -704,6 +772,8 @@ typedef struct sVehicleTripSession
 		szTripId[0] = '\0';									// (2026-07-08 최정우 추가)
 		szEntryTollgateId[0] = '\0';							// (2026-08-12 최정우 추가)
 		szClosedRoadId[0] = '\0';							// (2026-08-12 최정우 추가)
+		szClosedExitedRoadId[0] = '\0';					// (2026-09-21 최정우 추가)
+		szSpeedExitedRoadId[0] = '\0';					// (2026-09-21 최정우 추가)
 		szSpeedZoneRoadId[0] = '\0';							// (2026-08-12 최정우 추가)
 		szSpeedEntryTollgateId[0] = '\0';						// (2026-08-20 최정우 추가)
 		szParkTouchZoneRoadId[0] = '\0';						// (2026-09-03 최정우 추가)
@@ -858,6 +928,7 @@ typedef struct sRawLogWorkerConfig
 	int								nIgnoreRawVld;						// config ignore_rawvld — RAW_VLD 무시 전량 매칭(검증용) (2026-08-23 최정우 추가)
 	int								nParkAccMax;						// config park_accmax — 주정차 판정 좌표 정확도 상한(m), 0=비활성 (2026-08-23 최정우 추가)
 	int								nParkExitCnt;						// config park_exitcnt — 구역 이탈 확정 연속 GPS 건수(디바운스) (2026-08-13 최정우 추가)
+	int								nZoneExitCnt;						// config zone_exitcnt — 게이트형 다중링크 구역 이탈 확정 연속 GPS 건수(디바운스), 0=비활성 (2026-09-21 최정우 추가)
 	int								nNodeExitCnt;						// config node_exitcnt — 일반도로(NODE_STEP) 이탈 확정 연속 GPS 건수(디바운스) (2026-08-24 최정우 추가)
 	int								nParkSpeedMax;						// config park_speedmax — 주정차 판정 속도 상한(km/h) (2026-08-22 최정우 추가)
 	int								nParkEntryCnt;						// config park_entrycnt — 세션 개시 연속 GPS 건수 (2026-08-22 최정우 추가)
@@ -1140,6 +1211,13 @@ private:
 	//   구한다 — 주정차 접촉으로 마감되는 NODE_STEP run의 누락 링크 보정 전용(사용자 지시,
 	//   2026-09-03 최정우 추가). 링크 전체가 폴리곤 밖이면 false(호출측이 전체 길이를 더하고
 	//   다음 링크로 진행)
+	// 링크가 폴리곤 안에 들어가 있는 **모든** 구간을 링크 진행순으로 돌려준다 — 아래 두 함수
+	//   (첫 교차만 보는 진입·이탈 전용)의 일반형이며, 그 둘은 이 함수 결과의 첫 구간을 읽어
+	//   종전과 동일한 값을 만든다. 한 링크가 폴리곤을 여러 번 드나드는 경우(모서리를 스치는
+	//   링크)를 다루려면 이 함수를 써야 한다 (2026-09-21 최정우 추가, 사용자 지시 — 이슈 31)
+	// 반환: true=구간을 하나 이상 찾음, false=링크 전체가 폴리곤 밖이거나 링크·폴리곤 정보 없음
+	bool FindLinkPolygonSpans(uint64 qwLinkID, const vector<POINT>& vtPolyCoords,
+		vector<LINK_POLY_SPAN> *pvtSpans);
 	bool FindLinkPolygonCrossing(uint64 qwLinkID, const vector<POINT>& vtPolyCoords,
 		double *pdfPartialDistM, double *pdfCrossX, double *pdfCrossY);
 	// 위 함수의 이탈 방향 대칭 — 링크를 시작 노드부터 따라가며 폴리곤 "안→밖"으로 벗어나는
@@ -1191,6 +1269,14 @@ private:
 	// 구역 이탈 경계 보정(구간단속·폐쇄형 공용) — 면제도로가 쓰던 것과 동일 원리.
 	//   거리 누적을 "구역 안 tick 만"으로 바꾼 뒤 생긴 경계 구간 누락을 메운다
 	//   (2026-09-15 최정우 추가, 상세 근거는 .cpp 함수 주석 참고)
+	// @warning **"구역 이탈이 확정된" 경로에서만 쓸 것.** 이 함수는 마지막으로 구역 안에서
+	//   확인된 지점부터 구역 경계까지의 "꼬리" 거리를 더해준다 — 차가 실제로 그 경계를 지나
+	//   나갔다는 것이 전제다. TTL 만료·트립종료처럼 **출구를 못 본 채 끝난** 마감 경로에 넣으면
+	//   주행하지도 않은 거리를 청구하게 된다(2026-09-15 에 실제로 폐쇄형·구간단속 강제마감에
+	//   넣었다가 같은 날 되돌린 전례가 있다. 구간단속은 더 위험하다 — 부풀려진 거리가 평균속도를
+	//   끌어올려 있는 위반을 없는 위반으로 뒤집을 수 있다).
+	//   (2026-09-21 최정우 주석 보완 — 되돌린 근거가 .cpp 두 곳에만 흩어져 있어 헤더만 보고
+	//    재사용하면 같은 실수를 반복하게 된다)
 	double ApplyZoneExitTailDist(uint64 qwLastZoneLinkID,
 		double *pdfLastZoneX, double *pdfLastZoneY, double *pdfAccumDistM);
 	// 세션이 지워지기(TTL) 또는 정리되기(트립 정상종료) 직전, 아직 입구만 통과하고 출구를 못 찾은
@@ -1201,6 +1287,13 @@ private:
 	//   직전 tick 의 복사본이라 구역 갱신 경로를 안 타서 세션의 dwSpeedLastGpsSeq 가 그 앞에서
 	//   멈춘다 — 호출측이 실제 종료 seq 를 넘겨 구간 표기를 트립 끝에 맞춘다
 	//   (2026-09-06 최정우 추가, 사용자 지시)
+	// [2026-09-21 최정우 주석 보완] **이 함수만 bNoTripEnd 파라미터가 없는 것은 누락이 아니라
+	//   의도**다. 다른 Append*(Parking/Exempt/NodeStep/Open/Closed)는 강제마감 행에
+	//   non_charge_reason 62(면제 52)를 붙이는데, 이 함수가 만드는 유일한 행은 일반도로 미러이고
+	//   그 행은 Y/0(코드 0, 정상 과금)이라 붙일 사유 자체가 없다. 구간단속(CHARGE_TYPE=3) 행은
+	//   2026-09-06 부터 "진입·진출 게이트 양쪽 통과 + 평균속도 초과" 일 때만 만들어지므로,
+	//   정의상 진출 게이트를 못 본 이 경로에서는 아예 생성되지 않는다(구현부 @remark 참고).
+	//   헤더만 보고 "5개는 받는데 여기만 빠졌네" 로 오해해 파라미터를 추가하지 말 것.
 	void AppendExpiredSpeedZoneCharge(int nThreadId, const string& strDeviceKey,
 		const VEHICLE_TRIP_SESSION& stSession, time_t dtEndTime, vector<CHARGE_INSERT_ROW> *pvtOut,
 		uint32 dwEndGpsSeq = 0);

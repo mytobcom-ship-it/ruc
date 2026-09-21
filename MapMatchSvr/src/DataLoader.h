@@ -30,7 +30,11 @@ public:
 	CDataLoader();
 	virtual ~CDataLoader();
 
-	void Initialize(string& strGeometryFile, const sint16 nMaxDepth);
+	// [2026-09-21 최정우 정정] 선언부 파라미터명이 구현부(DataLoader.cpp)와 달랐다 —
+	//   strGeometryFile→strDataFile, nMaxDepth→nMaxStep. 특히 뒤 인자는 "깊이(Depth)"가
+	//   아니라 연속 맵매칭 최대 검색 "단계(Step)"(config [mapmatch] maxstep)이며, 같은 값을
+	//   돌려주는 접근자도 GetSearchStep() 이다. 헤더만 보고 코딩하면 의미를 오인한다.
+	void Initialize(string& strDataFile, const sint16 nMaxStep);
 	void Uninitialize();
 	bool SetDataUpdate();
 	void SetDataInfoDisplay();

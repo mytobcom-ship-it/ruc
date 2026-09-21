@@ -38,9 +38,21 @@ using namespace std;
 */
 typedef struct sRawLogInfo
 {
-	char							szDeviceID[56+1];					// 디바이스 ID (DEVICE_KEY_YYYYMMDD_운행순번4자리)
+	// [2026-09-21 최정우 정정 — 주석 오류 + 미사용 경고] ①형식 주석이 틀렸다. 실제로 이 필드에
+	//   들어가는 값은 RawLogFetcher.cpp 의 단 한 줄(strncpy(..., pszDeviceKey, ...))이 넣는
+	//   **DEVICE_KEY 원문**이지 "DEVICE_KEY_YYYYMMDD_운행순번4자리" 같은 합성 문자열이 아니다.
+	//   ②그 한 줄이 전 소스에서 이 필드를 쓰는 유일한 곳이고 **읽는 코드는 없다** — 아래
+	//   szDeviceKey 가 그 역할을 전부 대신한다. 이력 추적 방침대로 지우지는 않되, 새 코드에서
+	//   이 필드를 "운행순번이 들어있는 ID" 로 오인해 쓰지 말 것
+	char							szDeviceID[56+1];					// 디바이스 ID (실제 적재값 = DEVICE_KEY 원문, 위 경고 참고)
 	char							szDeviceKey[47+1];					// 디바이스 키 (모바일 앱 인증 키)
-	char							szTripID[60+1];						// 운행 ID (수집서버 적재: {DEVICE_KEY}_{YYYYMMDDHH24MISS})
+	// [2026-09-21 최정우 정정] 종전 주석은 "{DEVICE_KEY}_{YYYYMMDDHH24MISS}" 였으나 수집서버의
+	//   TRIP_ID 형식 변경 이후 실제 적재값은 **{CAR_SEQ_NO 6자리}_{YYYYMMDDHH24MISS}** 다
+	//   (실측: device_key=CAR000427 / trip_id=000370_20260819093236 — 앞 6자리는 차량순번이지
+	//   DEVICE_KEY 가 아니다). 옛 DEVICE_KEY 형식 trip_id 는 형식 변경 전 레거시 데이터다.
+	//   ExtractTripStartDt() 는 '_' 뒤 14자리만 보므로 두 형식 모두 동작한다 — 앞부분을
+	//   DEVICE_KEY 로 가정하고 파싱하는 코드를 새로 만들지 말 것
+	char							szTripID[60+1];						// 운행 ID (수집서버 적재: {CAR_SEQ_NO 6자리}_{YYYYMMDDHH24MISS})
 	sint16							nTripEvent;							// TRIP_EVENT SMALLINT (0:START, 1:NONE, 2:END)
 	sint16							nDriveStatus;						// DRIVE_STATUS SMALLINT (0:ON_ROAD, 1:IDLE, 2:PARKED, 3:TUNNELING)
 	uint32							dwSeqNo;							// 순번

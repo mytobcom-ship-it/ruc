@@ -34,7 +34,7 @@ CClock::~CClock()
 	// (grep 확인) 안전하게 바꿀 수 있다.
  	clock_gettime(CLOCK_MONOTONIC, &m_tvStart);
  	clock_gettime(CLOCK_MONOTONIC, &m_tvEnd);
-	m_dbElapsedTime = 0.0f;
+	m_dbElapsedTime = 0.0;					// (2026-09-21 최정우 정리 — double 멤버에 float 리터럴)
  }
 
 /**
@@ -60,7 +60,9 @@ double CClock::GetElapsedTime()
 	if (tvDiffTime.tv_nsec < 0)
 	{
 		tvDiffTime.tv_sec -= 1;
-		tvDiffTime.tv_nsec += 1000000000.0;
+		// (2026-09-21 최정우 정리) tv_nsec 은 정수(long)인데 실수 리터럴 1000000000.0 을 더하고
+		//   있었다 — 값은 같지만 부동소수를 한 번 거쳤다가 다시 정수로 잘린다. 정수 리터럴로 정리.
+		tvDiffTime.tv_nsec += 1000000000L;
 	}
 
 	m_dbElapsedTime = static_cast<double>(tvDiffTime.tv_sec) + static_cast<double>(tvDiffTime.tv_nsec) / 1000000000.0;

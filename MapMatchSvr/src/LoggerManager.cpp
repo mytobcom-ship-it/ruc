@@ -99,6 +99,10 @@ void CLoggerManager::LogDeleteRun(time_t dtNow)
 	}
 
 	// 실행 시간 1 번만 실행 플래그
+	// [2026-09-21 최정우 주석 보완] m_bRun 은 이름과 달리 "서버가 실행 중" 이 아니라
+	//   **"이번 실행 시각(시간대)에 아직 삭제를 안 돌렸다"** 는 뜻이다(삭제 직후 false,
+	//   다음 시간대로 넘어가면 위에서 true 로 복귀). CServer::m_bRun(서버 구동 플래그)과
+	//   이름이 같아 혼동하기 쉬운 자리다.
 	if (!m_bRun) return;
 
 	if ((m_bRun) && (stTm.tm_hour == m_nLogKeepRunTime))
@@ -131,7 +135,15 @@ bool CLoggerManager::SetRemoveLogFile(time_t dtRmTime, string strLogPath)
 	memset(reinterpret_cast<void *>(&stStatInfo), 0, sizeof(struct stat));
 
 	// 로그 경로가 디렉터리인지 lstat 확인 (2026-07-08 최정우 주석 추가)
-	lstat(strLogPath.c_str(), &stStatInfo);
+	// [2026-09-21 최정우 보완] lstat 반환값을 안 보고 st_mode 를 읽고 있었다. 실패하면 memset
+	//   해둔 0 이 그대로라 S_ISDIR(0)=false 가 되어 "디렉터리가 아님" 으로 빠지므로 결과적으로는
+	//   안전했지만, 실패와 "파일임" 이 구분되지 않아 로그가 원인을 가린다.
+	if (lstat(strLogPath.c_str(), &stStatInfo) != 0)
+	{
+		LOGFMTW("lstat failed!path=[%s] err=[%d : %s]",
+			strLogPath.c_str(), errno, strerror(errno));
+		return false;
+	}
 	if (!S_ISDIR(stStatInfo.st_mode))
 	{
 		LOGFMTW("directory is not found!path=[%s]", strLogPath.c_str());
@@ -157,14 +169,36 @@ bool CLoggerManager::SetRemoveLogFile(time_t dtRmTime, string strLogPath)
 		while (strFilePath.find("//") != string::npos)
 			strFilePath.replace(strFilePath.find("//"), 2, "/");
 
-		stat(strFilePath.c_str(), &stStatInfo);
+		// [버그 수정, 2026-09-21 최정우] stat 반환값을 안 봤다. 실패하면(권한 변경, 조회 직전에
+		//   다른 프로세스가 지운 경우 등) stStatInfo 가 memset 해둔 0 그대로라 **st_mtim=0 이
+		//   되어 "아주 오래된 파일" 로 판정**되고, 이름이 .log 로 끝나기만 하면 그대로 remove()
+		//   대상이 됐다. 지금 존재를 확인할 수 없는 파일은 건드리지 않는 편이 맞다.
+		if (stat(strFilePath.c_str(), &stStatInfo) != 0)
+		{
+			LOGFMTW("stat failed!skip - file=[%s] err=[%d : %s]",
+				strFilePath.c_str(), errno, strerror(errno));
+			continue;
+		}
+
 		if (S_ISDIR(stStatInfo.st_mode))						// 디렉토리이면 ...
 		{
 			if ((strcmp(pstEntry->d_name, "..") == 0) || 
 				(strcmp(pstEntry->d_name, ".") == 0))
 				continue;
 
+			// [버그 수정, 2026-09-21 최정우] 위 stat() 은 심볼릭 링크를 따라간다. 로그 디렉터리
+			//   안에 상위(또는 자기 조상)를 가리키는 심링크가 하나라도 있으면 이 재귀가 그 링크를
+			//   타고 영원히 내려가 스택을 소진한다(`.`/`..` 만 걸러서는 막히지 않는다).
+			//   링크 자체의 정보를 보는 lstat 으로 한 번 더 확인해 심링크면 내려가지 않는다.
 			string strSubDir = strLogPath + "/" + pstEntry->d_name;
+			struct stat stLinkInfo;
+			memset(reinterpret_cast<void *>(&stLinkInfo), 0, sizeof(struct stat));
+			if ((lstat(strSubDir.c_str(), &stLinkInfo) == 0) && S_ISLNK(stLinkInfo.st_mode))
+			{
+				LOGFMTW("symlink directory skipped!path=[%s] — 재귀 순환 방지", strSubDir.c_str());
+				continue;
+			}
+
 			// 하위 디렉터리 재귀 탐색 (2026-07-08 최정우 주석 추가)
 			SetRemoveLogFile(dtRmTime, strSubDir);
 		}

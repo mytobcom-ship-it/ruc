@@ -48,7 +48,13 @@ CIniReader::CIniReader(const string strFile) :
 	else
 	{
 		m_strPath = strFile.substr(0, nIndex);
-		m_strFile = strFile.substr(nIndex, strFile.length());
+		// [버그 수정, 2026-09-21 최정우] 종전 `substr(nIndex, ...)` 는 구분자 위치부터 잘라
+		//   파일명에 구분자가 붙었다("/home/x/config.ini" → m_strFile="/config.ini").
+		//   구분자 다음 문자부터(nIndex + 1) 잘라야 한다. 길이 인자도 "남은 전체"를 뜻하는
+		//   npos 로 바로잡는다(strFile.length() 는 남은 길이보다 커서 우연히 동작했을 뿐).
+		//   m_strPath/m_strFile 은 현재 읽는 곳이 없어(Open() 은 m_strFullName 만 사용)
+		//   동작 변화는 없다 — 나중에 이 값을 쓰는 순간 드러날 결함이라 지금 고쳐둔다.
+		m_strFile = strFile.substr(nIndex + 1, string::npos);
 	}							// if (nIndex == string::npos)
 
 	m_mapSection.clear();
@@ -63,8 +69,13 @@ CIniReader::~CIniReader()
 	for (it=m_mapSection.begin(); it!=m_mapSection.end(); ++it)
 	{
 		multimap<string, string> *mapKey = reinterpret_cast<multimap<string, string> *>(it->second);
+		// [2026-09-21 최정우 정리] 종전에는 clear() 로 **먼저 역참조한 뒤** nullptr 을 검사했다 —
+		//   검사가 방어 역할을 전혀 못 하는 순서였다(정말 nullptr 이면 clear() 에서 이미 죽는다).
+		//   ReadIniFile() 이 new 성공분만 등록하므로 실제로 nullptr 이 들어올 일은 없지만,
+		//   검사하려면 역참조보다 앞이어야 한다.
+		if (mapKey == nullptr) continue;
 		mapKey->clear();
-		if (mapKey != nullptr) delete mapKey;
+		delete mapKey;
 		mapKey = nullptr;
 	}							// for (it=m_mapSection.begin(); it!=m_mapSection.end(); ++it)
 
@@ -84,7 +95,9 @@ bool CIniReader::Open()
 		LOGFMTE("file path is invalid!path=[%s]", m_strFullName.c_str());
 		return false;
 	}							// if ((m_strFullName.empty()) || 
-								//	   (m_strFullName.length() > static_cast<std::size_t>(PATH_MAX)))
+								//	   (m_strFullName.length() > static_cast<std::size_t>(MAX_PATH)))
+								// (2026-09-21 최정우 정정 — 닫는 주석이 PATH_MAX 로 적혀 있어
+								//  실제 코드가 쓰는 상수 MAX_PATH 와 달랐다)
 
 	// 파일이 존재하는지 확인 처리 (2025-12-04 최정우 추가)
 	if (access(m_strFullName.c_str(), F_OK) != 0)
@@ -271,7 +284,15 @@ bool CIniReader::GetProfileStr(const string strSection, const string strKey, con
 	}							// if (itSection == m_mapSection.end())
 
 	multimap<string, string> *mapKey = reinterpret_cast<multimap<string, string> *>(itSection->second);
-	if (mapKey == nullptr) return false;
+		// [버그 수정, 2026-09-21 최정우] 이 경로만 출력 파라미터를 건드리지 않고 false 를
+		//   돌려주고 있었다 — 같은 함수의 다른 실패 경로(섹션 없음/키 없음)는 전부 기본값을
+		//   채워준다. 호출측이 반환값을 안 보고 값만 쓰면 **초기화 안 된 변수**를 쓰게 된다
+		//   (AppMain.cpp 의 config 읽기가 실제로 반환값을 대부분 무시한다). 계약을 맞춘다.
+	if (mapKey == nullptr)
+	{
+		strValue = strDefault;
+		return false;
+	}
 
 	strTmp = strKey;
 	transform(strTmp.begin(), strTmp.end(), strTmp.begin(), ::toupper);
@@ -307,7 +328,15 @@ bool CIniReader::GetProfileInt(const string strSection, const string strKey, con
 	}							// if (itSection == m_mapSection.end())
 
 	multimap<string, string> *mapKey = reinterpret_cast<multimap<string, string> *>(itSection->second);
-	if (mapKey == nullptr) return false;
+		// [버그 수정, 2026-09-21 최정우] 이 경로만 출력 파라미터를 건드리지 않고 false 를
+		//   돌려주고 있었다 — 같은 함수의 다른 실패 경로(섹션 없음/키 없음)는 전부 기본값을
+		//   채워준다. 호출측이 반환값을 안 보고 값만 쓰면 **초기화 안 된 변수**를 쓰게 된다
+		//   (AppMain.cpp 의 config 읽기가 실제로 반환값을 대부분 무시한다). 계약을 맞춘다.
+	if (mapKey == nullptr)
+	{
+		nValue = nDefault;
+		return false;
+	}
 
 	strTmp = strKey;
 	transform(strTmp.begin(), strTmp.end(), strTmp.begin(), ::toupper);
@@ -380,7 +409,15 @@ bool CIniReader::GetProfileFloat(const string strSection, const string strKey, c
 	}							// if (itSection == m_mapSection.end())
 
 	multimap<string, string> *mapKey = reinterpret_cast<multimap<string, string> *>(itSection->second);
-	if (mapKey == nullptr) return false;
+		// [버그 수정, 2026-09-21 최정우] 이 경로만 출력 파라미터를 건드리지 않고 false 를
+		//   돌려주고 있었다 — 같은 함수의 다른 실패 경로(섹션 없음/키 없음)는 전부 기본값을
+		//   채워준다. 호출측이 반환값을 안 보고 값만 쓰면 **초기화 안 된 변수**를 쓰게 된다
+		//   (AppMain.cpp 의 config 읽기가 실제로 반환값을 대부분 무시한다). 계약을 맞춘다.
+	if (mapKey == nullptr)
+	{
+		fValue = fDefault;
+		return false;
+	}
 
 	strTmp = strKey;
 	transform(strTmp.begin(), strTmp.end(), strTmp.begin(), ::toupper);
@@ -447,7 +484,15 @@ bool CIniReader::GetProfileDouble(const string strSection, const string strKey, 
 	}							// if (itSection == m_mapSection.end())
 
 	multimap<string, string> *mapKey = reinterpret_cast<multimap<string, string> *>(itSection->second);
-	if (mapKey == nullptr) return false;
+		// [버그 수정, 2026-09-21 최정우] 이 경로만 출력 파라미터를 건드리지 않고 false 를
+		//   돌려주고 있었다 — 같은 함수의 다른 실패 경로(섹션 없음/키 없음)는 전부 기본값을
+		//   채워준다. 호출측이 반환값을 안 보고 값만 쓰면 **초기화 안 된 변수**를 쓰게 된다
+		//   (AppMain.cpp 의 config 읽기가 실제로 반환값을 대부분 무시한다). 계약을 맞춘다.
+	if (mapKey == nullptr)
+	{
+		dfValue = dfDefault;
+		return false;
+	}
 
 	strTmp = strKey;
 	transform(strTmp.begin(), strTmp.end(), strTmp.begin(), ::toupper);
@@ -498,11 +543,28 @@ bool CIniReader::GetProfileDouble(const string strSection, const string strKey, 
  * @param[in] strSection Section 명
  * @param[in] strKey Key Key 명
  * @param[out] pstrValue Section, Key 에 해당하는 값 목록
- * @param[out] nCount Section, Key 에 해당하는 값 목록 갯수
+ * @param[in,out] nCount 입력 시 pstrValue 배열의 수용 가능 개수(상한), 출력 시 실제 채운 개수
  * @return true, false
+ * @remark
+ * \t[미사용 경고, 2026-09-21 최정우 확인] 이 함수와 GetProfileFloat() 은 전 소스에서 호출부가
+ * \t0 이다. 같은 키가 여러 번 나오는 설정(multimap 의 equal_range)을 배열로 받으려고 만든
+ * \t것으로, 현재 config.ini 에는 그런 키가 없다. 되살릴 때 주의할 점:
+ * \t  · nCount 는 **입출력 겸용**이다. 호출 전에 반드시 배열 크기를 넣어야 하며, 0 을 넣으면
+ * \t    아무것도 채우지 않고 true 를 돌려준다(위 @param 설명이 out 전용으로만 적혀 있어
+ * \t    오해를 부르던 것을 이번에 in,out 으로 정정했다).
+ * \t  · pstrValue 는 호출측이 할당한 배열이어야 한다 — 아래 nullptr 가드 참조.
  */
 bool CIniReader::GetProfileArrayStr(const string strSection, const string strKey, string *pstrValue, int& nCount)
 {
+	// [2026-09-21 최정우 보완] 배열 포인터·상한 검증 — 종전에는 검사 없이 pstrValue[nCnt] 에
+	//   바로 썼다. nCount 가 음수면 아래 `nCnt >= nCount` 가 첫 회에 성립해 쓰기는 없지만,
+	//   pstrValue 가 nullptr 이면 그대로 역참조한다.
+	if (pstrValue == nullptr || nCount <= 0)
+	{
+		nCount = 0;
+		return false;
+	}
+
 	string strTmp = strSection;
 	transform(strTmp.begin(), strTmp.end(), strTmp.begin(), ::toupper);
 	map<string, void *>::iterator itSection = m_mapSection.find(strTmp);
@@ -515,7 +577,12 @@ bool CIniReader::GetProfileArrayStr(const string strSection, const string strKey
 	multimap<string, string>::iterator itKey;
 	pair<multimap<string, string>::iterator, multimap<string, string>::iterator> range;
 	multimap<string, string> *mapKey = reinterpret_cast<multimap<string, string> *>(itSection->second);
-	if (mapKey == nullptr) return false;
+	// [2026-09-21 최정우 보완] 위와 같은 이유로 nCount 를 0 으로 확정한 뒤 실패를 돌려준다.
+	if (mapKey == nullptr)
+	{
+		nCount = 0;
+		return false;
+	}
 
 	int nCnt = 0;
 	strTmp = strKey;

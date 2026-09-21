@@ -112,7 +112,14 @@ bool CDataLoader::SetDataUpdate()
 		return false;
 	}
 
-	// 데이터 크기 검증
+	// 데이터 크기 검증 — 헤더가 선언한 "개수 x 레코드크기" 와 "총 바이트수" 가 어긋나면 파일이
+	//   깨진 것이므로 적재하지 않는다. 이 5개 분기는 아래 SetDataInit() **이전**이라 기존에
+	//   적재돼 있던 도로망은 그대로 살아 있다 — 그래서 m_bLoad 는 일부러 건드리지 않는다.
+	// [버그 수정, 2026-09-21 최정우] 다만 반환값이 `return m_bLoad;` 였다. 실패 경로인데
+	//   "직전 적재 성공 여부"를 돌려주는 셈이라, 재적재(reload) 기능이 생기는 순간 호출측이
+	//   **깨진 파일을 읽었는데도 성공으로 오인**한다. 현재는 SetDataUpdate() 호출부가
+	//   CServer::Initialize() 기동 1회뿐이라 m_bLoad 가 항상 false 여서 발현하지 않았다
+	//   (즉 동작 변화 없음). 의미대로 false 를 명시한다.
 	if ((m_pstDataFileHead->dwGridInfoCount * GRID_INFO_SIZE) != m_pstDataFileHead->dwGridInfoSize)
 	{
 		if (m_pstDataFileHead != nullptr) delete m_pstDataFileHead;
@@ -120,7 +127,7 @@ bool CDataLoader::SetDataUpdate()
 		if (fp != nullptr) fclose(fp);
 		fp = nullptr;
 		LOGFMTE("grid info size is not same!");
-		return m_bLoad;
+		return false;
 	}
 
 	if ((m_pstDataFileHead->dwGridSgmtInfoCount * GRID_SGMT_INFO_SIZE) != m_pstDataFileHead->dwGridSgmtInfoSize)
@@ -130,7 +137,7 @@ bool CDataLoader::SetDataUpdate()
 		if (fp != nullptr) fclose(fp);
 		fp = nullptr;
 		LOGFMTE("grid segment info size is not same!");
-		return m_bLoad;
+		return false;
 	}
 	
 	if ((m_pstDataFileHead->dwLinkSgmtInfoCount * LINK_SGMT_INFO_SIZE) != m_pstDataFileHead->dwLinkSgmtInfoSize)
@@ -140,7 +147,7 @@ bool CDataLoader::SetDataUpdate()
 		if (fp != nullptr) fclose(fp);
 		fp = nullptr;
 		LOGFMTE("link segment info size is not same!");
-		return m_bLoad;
+		return false;
 	}
 	
 	if ((m_pstDataFileHead->dwLinkInfoCount * LINK_INFO_DATA_SIZE) != m_pstDataFileHead->dwLinkInfoSize)
@@ -150,7 +157,7 @@ bool CDataLoader::SetDataUpdate()
 		if (fp != nullptr) fclose(fp);
 		fp = nullptr;
 		LOGFMTE("link info size is not same!");
-		return m_bLoad;
+		return false;
 	}
 
 	if ((m_pstDataFileHead->dwTurnInfoCount * TURN_INFO_SIZE) != m_pstDataFileHead->dwTurnInfoSize)
@@ -160,7 +167,7 @@ bool CDataLoader::SetDataUpdate()
 		if (fp != nullptr) fclose(fp);
 		fp = nullptr;
 		LOGFMTE("turn info size is not same!");
-		return m_bLoad;
+		return false;
 	}
 
 	// 데이터 초기화 — 이 아래(new/fread)에서 실패하면 기존에 로딩돼있던 데이터도 이미 지워진
@@ -206,7 +213,6 @@ bool CDataLoader::SetDataUpdate()
 		LOGFMTE("road network data now empty!prior loaded data already destroyed at SetDataInit() before this failure, map-matching unavailable until next successful reload");
 		return false;
 	}
-	LOGFMTT("grid info read end!");
 
 	fseek(fp, m_dwGridInfoStartOffset, SEEK_SET);
 	if (fread(m_pstGridInfoList, 1, m_dwGridInfoSize, fp) != m_dwGridInfoSize)
@@ -219,6 +225,11 @@ bool CDataLoader::SetDataUpdate()
 		LOGFMTE("road network data now empty!prior loaded data already destroyed at SetDataInit() before this failure, map-matching unavailable until next successful reload");
 		return false;
 	}
+	// [2026-09-21 최정우 정정] "grid info read end!" 로그가 종전에는 메모리 할당 직후·fread
+	//   **이전**에 찍혀 있었다 — 아래 다른 4개 블록(grid segment/link segment/link data/turn)은
+	//   전부 읽기를 마친 뒤에 end 를 찍는데 여기만 어긋나, 로그만 보면 실제로는 아직 안 읽은
+	//   상태인데 다 읽은 것으로 보였다. 짧은 읽기로 죽는 위치를 로그로 좁힐 때 오도된다.
+	LOGFMTT("grid info read end!");
 
 	// 그리드별 세그먼트 정보 로딩 메모리
 	LOGFMTT("grid segment info read start!");

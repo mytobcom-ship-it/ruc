@@ -67,11 +67,15 @@ private:
 	virtual void run();
 	void LogMonitorStatus(time_t dtNow);
 	void WaitForNextCycle();
-	// 서버 상태(CPU/메모리) 하트비트 — PROC_SERVERSTATUS 주기 UPDATE (2026-08-20 최정우 추가)
+	// [2026-09-21 최정우 정정] 아래 하트비트 설명 주석이 RecoverStaleProcessing() 위에 붙어 있어
+	//   마치 이 함수가 PROC_SERVERSTATUS 를 갱신하는 것처럼 읽혔다 — 제 선언 위로 옮긴다.
 	// 좀비 PROCESSING(2) 운영 중 회수 — [stale_recover] (2026-08-29 최정우 추가)
 	void RecoverStaleProcessing();
+	// /proc/stat 1초 주기 샘플링 — m_dfLastCpuPct 갱신 (2026-08-20 최정우 추가)
 	void UpdateCpuSample();
+	// /proc/meminfo 기반 **시스템 전체** 메모리 사용량(엔진 자체 RSS 아님) (2026-08-20 최정우 추가)
 	bool GetMemInfo(int& nUsedMB, int& nTotalMB, double& dfMemPct);
+	// 서버 상태(CPU/메모리) 하트비트 — PROC_SERVERSTATUS 주기 UPDATE (2026-08-20 최정우 추가)
 	void UpdateServerStatus();
 
 private:
@@ -135,6 +139,7 @@ private:
 	int								m_nIgnoreRawVld;					// [mapmatch] ignore_rawvld — RAW_VLD 무시 전량 매칭(검증용) (2026-08-23 최정우 추가)
 	int								m_nParkAccMax;						// [charge] park_accmax — 주정차 판정 좌표 정확도 상한(m), 0=비활성 (2026-08-23 최정우 추가)
 	int								m_nParkExitCnt;						// [charge] park_exitcnt — 구역 이탈 확정 연속 GPS 건수(디바운스) (2026-08-13 최정우 추가)
+	int								m_nZoneExitCnt;						// [charge] zone_exitcnt — 게이트형 다중링크 구역 이탈 확정 연속 GPS 건수(디바운스), 0=비활성 (2026-09-21 최정우 추가)
 	int								m_nNodeExitCnt;						// [charge] node_exitcnt — 일반도로(NODE_STEP) 이탈 확정 연속 GPS 건수(디바운스) (2026-08-24 최정우 추가)
 	int								m_nParkRegraceSec;					// [charge] park_regrace — 재진입 유예시간(초) (2026-08-14 최정우 추가)
 	int								m_nParkTtlSec;						// [charge] park_ttl — 마지막 신뢰 확인 후 강제 마감까지의 시간(초) (2026-08-19 최정우 추가)

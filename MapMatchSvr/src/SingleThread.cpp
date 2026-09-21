@@ -5,6 +5,12 @@
 #include <errno.h>					// pthread_cond_timedwait 의 ETIMEDOUT (2026-09-15 최정우 추가)
 #include "SingleThread.h"
 
+// [2026-09-21 최정우 추가] 시그널 핸들러가 "자기 스레드의" 인터럽트 플래그를 세울 수 있게
+//   하는 스레드 지역 포인터. 핸들러는 static 멤버라 어느 인스턴스의 시그널인지 알 방법이
+//   없는데, SIGUSR1 은 pthread_kill 로 특정 스레드에만 전달되므로 그 스레드의 지역 변수로
+//   대상을 특정할 수 있다. threadHandler() 진입 시 1회 설정한다.
+static __thread CSingleThread *s_pcCurrentThread = nullptr;
+
 long CSingleThread::m_nId = 0;
 pthread_attr_t CSingleThread::m_attr;
 long CSingleThread::m_nAttrRefCount = 0;
@@ -17,15 +23,21 @@ pthread_mutex_t CSingleThread::m_staticMutex = PTHREAD_MUTEX_INITIALIZER;
 */
 void *CSingleThread::threadHandler(void *pParam)
 {
-	signal(SIGUSR1, interruptHandler);
 	CSingleThread *pcThread = reinterpret_cast<CSingleThread *>(pParam);
+	// 핸들러가 이 스레드의 플래그를 세울 수 있도록 먼저 등록한다 (2026-09-21 최정우 추가)
+	s_pcCurrentThread = pcThread;
+	signal(SIGUSR1, interruptHandler);
+	// [2026-09-21 최정우] try/catch 는 남겨둔다 — run() 본문이 던지는 예외까지 잡아 스레드가
+	//   조용히 죽는 대신 인터럽트로 기록되게 하던 기존 계약을 그대로 유지하기 위함이다.
+	//   다만 interruptHandler() 가 더 이상 throw 하지 않으므로, 이 catch 로 들어오는 경로는
+	//   "run() 안에서 명시적으로 던진 경우" 뿐이다(현재 그런 코드는 없다).
 	try
 	{
 		pcThread->run();
 	}
 	catch (InterruptedException& e)
 	{
-		pcThread->m_bIsInterrupted = true;
+		pcThread->m_bIsInterrupted = 1;
 	}
 
 	// [버그 수정, 2026-09-15 최정우] 종료 통지를 **뮤텍스 안에서 상태 전이와 함께, 무조건** 한다.
@@ -55,20 +67,40 @@ void *CSingleThread::threadHandler(void *pParam)
  * @brief 시그널 핸들러
  * @param[in] sig 시그널
  * @return void
- * @warning [현재 미사용 + 위험 경로, 2026-09-17 최정우 확인] 이 핸들러를 발동시키는 interrupt()
- *   (pthread_kill(SIGUSR1))는 전 소스에서 **호출되는 곳이 없다**(Server.cpp:30 은 주석 처리).
- *   따라서 지금은 실행되지 않는 죽은 경로다. 되살리기 전에 반드시 재설계할 것 —
- *   **비동기 시그널 핸들러 안에서 C++ 예외를 던지는 것은 정의되지 않은 동작**이다. 시그널은
- *   임의의 명령어 경계에서 끼어들 수 있어, 그 지점이 예외 전파(스택 언와인딩)를 견딜 수 있다는
- *   보장이 없다(핸들러 밖으로 예외가 새면 std::terminate 로 직행할 수도 있다).
- *   되살릴 경우의 정석은 "핸들러에서는 volatile sig_atomic_t 플래그만 세우고, 실행 스레드가
- *   안전한 지점에서 그 플래그를 폴링해 스스로 빠져나가는" 방식이다 —
- *   IsInterrupted() 를 폴링하는 호출부(RawLogFetcher.cpp:168·184·192, Server.cpp:947·1021)가
- *   이미 그 구조로 되어 있으므로, m_bIsInterrupted 를 핸들러에서 세우는 것만으로 충분하다.
+ * @remark [2026-09-21 최정우 — 아래 @warning 의 지적대로 재설계 완료]
+ *   이 핸들러는 이제 **플래그(m_bIsInterrupted)만 세운다.** 실제 종료는 실행 스레드가
+ *   IsInterrupted() 를 폴링해 스스로 처리한다(RawLogFetcher·Server 에 그 구조가 이미 있다).
+ *
+ * @warning [2026-09-17 진단 → 2026-09-21 수정 완료] 종전에는 여기서 곧바로 C++ 예외를 던졌다.
+ *   **비동기 시그널 핸들러 안에서 예외를 던지는 것은 정의되지 않은 동작**이다 — 시그널은 임의의
+ *   명령어 경계에서 끼어들 수 있어 그 지점이 스택 언와인딩을 견딘다는 보장이 없고, 핸들러 밖으로
+ *   예외가 새면 std::terminate 로 직행할 수도 있다.
+ *   **2026-09-17 진단에는 한 가지 오류가 있었다** — "interrupt() 호출부가 없으니 실행되지 않는
+ *   죽은 경로" 라고 적었는데, 그렇지 않다. threadHandler() 가 스레드마다 이 함수를 SIGUSR1
+ *   핸들러로 **항상 등록**하므로, 내부에서 interrupt() 를 부르지 않아도 **외부에서 SIGUSR1 을
+ *   한 번 보내면(kill -USR1 <pid>) 그대로 발동**한다. 즉 죽은 코드가 아니라 상시 노출된
+ *   경로였다. "호출부가 0" 과 "도달 불가" 는 다르다.
+ *   현재 상태: interrupt()(pthread_kill(SIGUSR1))의 호출부는 여전히 0 건이므로(Server.cpp 의
+ *   해당 줄은 주석 처리) **정상 동작에는 변화가 없고**, 외부 SIGUSR1 을 받았을 때 죽지 않고
+ *   안전하게 무시하게 된 것만 달라졌다.
 */
 void CSingleThread::interruptHandler(int /* sig */)		// 시그널 번호와 무관하게 동일 처리
 {
-	throw InterruptedException("thread interrupted!");
+	// [버그 수정, 2026-09-21 최정우] 종전에는 여기서 곧바로 C++ 예외를 던졌다 — **시그널 핸들러
+	//   안에서의 throw 는 정의되지 않은 동작**이다(핸들러는 비동기 시그널 안전 함수만 호출할 수
+	//   있고, 예외 전파에 필요한 언와인딩 자체가 그 범주 밖이다). 게다가 이 함수는 "죽은 코드"가
+	//   아니다 — threadHandler() 가 스레드마다 SIGUSR1 핸들러로 **항상 등록**하므로, 내부에서
+	//   interrupt() 를 안 부르더라도 외부에서 SIGUSR1 이 한 번 들어오면 그 스레드에서 그대로
+	//   발동해 프로세스가 비정상 종료될 수 있었다(kill -USR1 <pid> 만으로 재현 가능한 경로).
+	//   위 @warning 이 적어둔 "정석" 대로, 여기서는 플래그만 세우고 실제 종료는 실행 스레드가
+	//   IsInterrupted() 를 폴링해 스스로 처리한다. 그 폴링 구조는 RawLogFetcher·Server 에 이미
+	//   있다. m_bIsInterrupted 를 volatile sig_atomic_t 로 바꾼 것도 같은 이유다 — 핸들러에서
+	//   안전하게 쓸 수 있다고 표준이 보장하는 유일한 타입이다.
+	//   동작 변화: interrupt() 호출부가 전 소스에 0 건이라 정상 경로에는 영향이 없다. 달라지는
+	//   것은 외부에서 SIGUSR1 을 받았을 때뿐이며, 그때 죽지 않고 안전하게 무시하게 된다.
+	CSingleThread *pcThread = s_pcCurrentThread;
+	if (pcThread != nullptr)
+		pcThread->m_bIsInterrupted = 1;
 }
 
 /**
@@ -125,7 +157,7 @@ void CSingleThread::Initialize(const string& name)
 {
 	m_name = name;
 	m_bJoinning = false;
-	m_bIsInterrupted = false;
+	m_bIsInterrupted = 0;
 	pthread_mutex_init(&m_mutex, nullptr);
 	pthread_cond_init(&m_cond, nullptr);
 	m_nState = static_cast<int>(ESS_INITIAL);
@@ -251,7 +283,7 @@ void CSingleThread::interrupt()
 */
 bool CSingleThread::IsInterrupted()
 {
-	return m_bIsInterrupted;
+	return (m_bIsInterrupted != 0);
 }
 
 /**

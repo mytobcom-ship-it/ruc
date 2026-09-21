@@ -36,6 +36,11 @@
 #define CFG_DEF_RADIUS				50									// [mapmatch] radius (단위: m) (2026-07-11 최정우 주석 추가)
 #define CFG_DEF_RADIUS_SCALE		2.5									// [mapmatch] radius_scale (2026-07-11 최정우 수정)
 #define CFG_DEF_RADIUS_MIN			20									// [mapmatch] radius_min (단위: m) (2026-07-11 최정우 주석 추가)
+// [2026-09-21 최정우 추가] radius_max 만 전용 기본상수가 없어 AppMain 이 CFG_DEF_RADIUS(50) 를
+//   폴백으로 쓰고 있었다 — config.ini 에서 이 키가 빠지면 적응형 검색반경 상한이 조용히 75→50 으로
+//   좁아져 매칭률이 떨어지는데, 로그만 봐서는 "기본값이 원래 그런가" 로 읽힌다. 운영값과 같은
+//   75 로 전용 상수를 둔다(현행 config.ini 에 radius_max=75 가 있어 동작 변화는 없음)
+#define CFG_DEF_RADIUS_MAX			75									// [mapmatch] radius_max (단위: m)
 #define CFG_DEF_RADIUS_SKIP			0									// [mapmatch] radius_skip (단위: m) (2026-07-11 최정우 주석 추가)
 #define CFG_DEF_ALT_GAP				8									// [mapmatch] alt_gap (단위: m) (2026-07-21 최정우 수정 — altitude_gap 이름 변경)
 #define CFG_DEF_ALT_PENALTY			10									// [mapmatch] alt_penalty (양수=페널티·음수=보너스) (2026-07-21 최정우 수정 — altitude_bonus/altitude_penalty 통합)
@@ -60,6 +65,15 @@
 #define CFG_DEF_IGNORE_RAWVLD		0									// [mapmatch] ignore_rawvld — 1이면 RAW_VLD 무시하고 전량 맵매칭 시도(검증용) (2026-08-23 최정우 추가)
 #define CFG_DEF_PARK_EXITCNT		3									// [charge]	park_exitcnt — 구역 이탈 확정 연속 GPS 건수(디바운스) (2026-08-13 최정우 추가)
 #define CFG_DEF_NODE_EXITCNT		3									// [charge]	node_exitcnt — 일반도로(NODE_STEP) 이탈 확정 연속 GPS 건수(디바운스) (2026-08-24 최정우 추가)
+#define CFG_DEF_ZONE_EXITCNT		3									// [charge]	zone_exitcnt — 게이트형 다중링크 구역(폐쇄식·구간단속) 이탈 확정 연속 GPS 건수(디바운스)
+																	//			0=비활성(종전처럼 무제한 대기). 링크 1개짜리 구역은 이 값과 무관하게 즉시 확정
+																	//			3 인 근거: 종전엔 링크 2개 이상 구역에 이탈 디바운스가 아예 없어 진출게이트를 못 잡으면
+																	//			**무제한 대기**했고, 구역을 벗어나 한참 주행한 구간까지 구역 체류로 흡수돼 평균속도가
+																	//			실제보다 낮게 나왔다 — 실측 000984_20250903153702 은 진입 직후 90초·500m 를 우회하고
+																	//			돌아왔는데 체류 165초·16km/h 로 기록됐다(실제는 63초·41km/h). 값은 park_exitcnt·
+																	//			node_exitcnt 와 같은 3 으로 맞췄다 — 이미 검증된 디바운스 폭이고 유형마다 다른 값을 쓸
+																	//			근거가 없었다. 적용 결과 일반도로 거리 +2,130m 회복·Y/0 구간중복 8→2쌍
+																	//			(2026-09-21 최정우 추가)
 #define CFG_DEF_PARK_SPEEDMAX		0									// [charge]	park_speedmax (단위: km/h) — 주정차 판정 속도 상한, 0=비활성 (2026-08-22 최정우 추가)
 #define CFG_DEF_PARK_ENTRYCNT		3									// [charge]	park_entrycnt — 주정차 세션 개시 연속 GPS 건수 (2026-08-22 최정우 추가)
 #define CFG_DEF_PARK_REGRACE		60									// [charge]	park_regrace (단위: sec) — 재진입 유예시간 (2026-08-14 최정우 추가)

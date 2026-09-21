@@ -195,15 +195,32 @@ bool CBeginMapMatch::IsAntiHeadingOpposite(uint64 qwLinkID, sint16 nHeading, sin
 /**
  * @brief 초기 맵매칭 시작
  * @param[in] pcDataLoader 데이터 로딩 클래스
- * @param[in] stSgmtMatchInput 세그먼트 매칭 입력 정보
+ * @param[in,out] stSgmtMatchInput 세그먼트 매칭 입력 정보.
+ *                **주의: 좌표(stPoint)가 내부에서 ×360000 으로 덮어써진다** — 아래 본문의
+ *                ※※ 주의 주석 참고 (2026-09-21 최정우 주석 보완 — in 으로만 적혀 있어
+ *                호출측이 값이 보존되는 것으로 오해할 수 있었다)
  * @param[out] pwErrorCode 에러 코드
  * @param[out] pstMatchEntry 검색 정보
+ * @param[in] pstTraceCtx 매칭 트레이스 컨텍스트 (nullptr=트레이스 미기록)
+ *                (2026-09-21 최정우 주석 보완 — 설명이 없던 파라미터)
+ * @param[in] qwBiasLinkID 연결성 편향 기준 링크(직전 성공 링크). 0=편향 미적용
+ *                (2026-09-21 최정우 주석 보완 — 설명이 없던 파라미터)
  * @return true(성공), false(실패)
 */
 bool CBeginMapMatch::StartMapMatch(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& stSgmtMatchInput,
 		uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry, PMATCH_TRACE_CTX pstTraceCtx,
 		uint64 qwBiasLinkID)
 {
+	// [2026-09-21 최정우 보완] 아래 지도 로드 검사만 `if (pwErrorCode != nullptr)` 로 방어하고,
+	//   그 뒤의 NOT_FOUND_GRIDINFO·MAP_MATCH_FAIL·NO_ERROR 대입은 전부 무방어 역참조였다.
+	//   이 함수는 에러코드 없이는 결과를 해석할 수 없으므로 입구에서 한 번 막는 편이 맞다.
+	//   현재 호출부(MapMatch.cpp)는 항상 유효 포인터를 넘기므로 동작 변화는 없다.
+	if (pwErrorCode == nullptr)
+	{
+		LOGFMTE("begin map match called with null error code!");
+		return false;
+	}
+
 	m_pcDataLoader = pcDataLoader;
 
 	// 형상 데이터 로더 유효성·로드 상태 확인 (2026-07-08 최정우 주석 추가)
@@ -374,8 +391,13 @@ bool CBeginMapMatch::GridSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, uint32
 		stSgmtInfo.qwLinkID = pstGridSgmtInfo->qwLinkID;
 
 		// INTERSECT_LEN(GPS↔세그먼트 교차점 거리)·방위 비용 매칭 (2026-07-08 최정우 주석 추가)
-		// BEGIN 매칭 각도 미참조 실험(2026-08-19 최정우 임시) — bIgnoreHeading=true 로 heading
+		// BEGIN 매칭은 heading 을 후보 판정에 쓰지 않는다 — bIgnoreHeading=true 로 heading
 		//   하드컷·소프트 비용 전부 미적용, 거리(INTERSECT_LEN)만으로 후보 판정
+		// [주석 정정, 2026-09-21 최정우] 종전 주석은 이를 "실험(2026-08-19 임시)" 이라고 적었으나
+		//   임시가 아니라 **확정된 설계**다. 트립 첫 점의 heading 은 신뢰할 수 없다는 실측
+		//   (전국 21트립: 이후 점들의 평균 방향과 41° 어긋남)에 따른 것이고, 그 때문에 방향
+		//   보정은 후보를 다 모은 뒤 FixOppositePairByHeading·FixReverseLinkByAzimuth 두
+		//   교정 계층에서 따로 한다. "임시" 로 읽고 되돌리면 그 두 교정의 전제가 깨진다.
 		if (!m_cGISUtil.SgmtMatch(stSgmtMatchInput, stSgmtInfo, &stSgmtMatchRes, false, true))
 			continue;
 
@@ -462,6 +484,16 @@ bool CBeginMapMatch::GridSgmtMapMatch(SGMT_MATCH_INPUT& stSgmtMatchInput, uint32
 
 /**
  * @brief GRID 내 세그먼트 기하 최근접(반경 무시) — 진단반경 초과 SKIP 참고용 (2026-07-10 최정우 수정)
+ * @param[in] stSgmtMatchInput 세그먼트 매칭 입력 (좌표는 호출측에서 이미 ×360000 된 상태)
+ * @param[in] dwStartSgmtOffset 이 그리드의 세그먼트 시작 offset
+ * @param[in] dwEndSgmtOffset 이 그리드의 세그먼트 끝 offset(미포함)
+ * @param[in,out] stBest 지금까지의 최근접 후보. 더 가까운 것을 만나면 갱신된다
+ * @param[in,out] dfBestDist 위 후보의 INTERSECT_LEN. 갱신 시 함께 바뀐다
+ * @param[in,out] bFound 후보를 한 번이라도 찾았는지. **여러 그리드에 걸쳐 누적**되므로
+ *                호출측이 루프 밖에서 초기화하고 그대로 넘겨야 한다
+ * @return bFound 와 같은 값(누적 결과)
+ * @remark 2026-09-21 최정우 주석 보완 — @param 이 하나도 없어, 특히 뒤 3개가 "이 그리드만의
+ *   결과" 가 아니라 그리드 루프 전체에 걸친 누적 상태라는 점이 드러나지 않았다.
 */
 bool CBeginMapMatch::GridSgmtGeomNearest(SGMT_MATCH_INPUT& stSgmtMatchInput, uint32 dwStartSgmtOffset,
 		uint32 dwEndSgmtOffset, MATCH_ENTRY& stBest, double& dfBestDist, bool& bFound)
@@ -534,12 +566,26 @@ bool CBeginMapMatch::GridSgmtGeomNearest(SGMT_MATCH_INPUT& stSgmtMatchInput, uin
 
 /**
  * @brief 소속·인접 GRID 에서 반경 무시 기하 최근접 세그먼트 1건 (2026-07-10 최정우 수정)
+ * @param[in] pcDataLoader 데이터 로딩 클래스
+ * @param[in,out] stSgmtMatchInput 세그먼트 매칭 입력. **좌표가 ×360000 으로 덮어써진다**
+ * @param[out] pwErrorCode 에러 코드
+ * @param[out] pstMatchEntry 최근접 1건
+ * @return true(1건 확보), false(후보 없음·지도 미적재)
  * @remark 정식 매칭 실패·진단반경(MM_DIAG_RADIUS) 내 후보도 없을 때 호출.
  *         그리드에 링크가 있으나 거리만 먼 경우 SKIP용 MATCH_LAT/LON·INTERSECT_LEN 확보.
+ *         (2026-09-21 최정우 주석 보완 — @param 이 하나도 없었다)
 */
 bool CBeginMapMatch::FindGeomNearest(CDataLoader *pcDataLoader, SGMT_MATCH_INPUT& stSgmtMatchInput,
 		uint16 *pwErrorCode, PMATCH_ENTRY pstMatchEntry)
 {
+	// StartMapMatch() 와 동일 근거 — 아래 MAP_MATCH_FAIL·NO_ERROR 대입이 무방어였다
+	//   (2026-09-21 최정우 보완)
+	if (pwErrorCode == nullptr)
+	{
+		LOGFMTE("begin geom nearest called with null error code!");
+		return false;
+	}
+
 	m_pcDataLoader = pcDataLoader;
 
 	if ((m_pcDataLoader == nullptr) || (!m_pcDataLoader->IsLoad()))

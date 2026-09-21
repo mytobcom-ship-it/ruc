@@ -24,6 +24,11 @@ static void ServerSignalHandler(int nSignal)
 	// async-시그널-safe 위반. 특히 interrupt()가 run 스레드에 SIGUSR1→예외를 던져
 	//   pthread_cond_timedwait(m_cRunCondition) 를 강제 언와인드 → 조건변수 내부 ref 오염 →
 	//   종료 시 pthread_cond_destroy 무한 대기(hang) 유발.
+	// [주석 보완, 2026-09-21 최정우] 위 서술은 **2026-07-10 당시의 상황**이다(이력으로 남긴다).
+	//   지금은 CSingleThread::interruptHandler() 가 예외를 던지지 않고 플래그만 세우므로
+	//   "SIGUSR1→예외→강제 언와인드" 경로 자체가 없어졌다. 그래도 아래 주석 처리는 그대로
+	//   두는 것이 맞다 — 뮤텍스·조건변수 조작이 시그널 핸들러에서 안전하지 않다는 근본 이유는
+	//   변하지 않았고, 플래그만 세우는 현재 방식이 이미 정석이기 때문이다.
 	//if (g_pcServerInstance != nullptr)
 	//{
 	//	g_pcServerInstance->RequestShutdown();
@@ -119,6 +124,7 @@ CServer::CServer() :
 	m_nIgnoreRawVld(CFG_DEF_IGNORE_RAWVLD),
 	m_nParkAccMax(CFG_DEF_PARK_ACCMAX),
 	m_nParkExitCnt(CFG_DEF_PARK_EXITCNT),
+	m_nZoneExitCnt(CFG_DEF_ZONE_EXITCNT),
 	m_nNodeExitCnt(CFG_DEF_NODE_EXITCNT),
 	m_nParkRegraceSec(CFG_DEF_PARK_REGRACE),
 	m_nParkTtlSec(CFG_DEF_PARK_TTL),
@@ -227,6 +233,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	m_nParkAccMax = stConfig.nParkAccMax;						// (2026-08-23 최정우 추가)
 	m_nIgnoreRawVld = stConfig.nIgnoreRawVld;					// (2026-08-23 최정우 추가)
 	m_nParkExitCnt = stConfig.nParkExitCnt;						// (2026-08-13 최정우 추가)
+	m_nZoneExitCnt = stConfig.nZoneExitCnt;						// (2026-09-21 최정우 추가)
 	m_nNodeExitCnt = stConfig.nNodeExitCnt;						// (2026-08-24 최정우 추가)
 	m_nParkSpeedMax = stConfig.nParkSpeedMax;					// (2026-08-22 최정우 추가)
 	m_nParkEntryCnt = stConfig.nParkEntryCnt;					// (2026-08-22 최정우 추가)
@@ -592,6 +599,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	stWorkerConfig.nParkAccMax = m_nParkAccMax;					// (2026-08-23 최정우 추가)
 	stWorkerConfig.nIgnoreRawVld = m_nIgnoreRawVld;				// (2026-08-23 최정우 추가)
 	stWorkerConfig.nParkExitCnt = m_nParkExitCnt;				// (2026-08-13 최정우 추가)
+	stWorkerConfig.nZoneExitCnt = m_nZoneExitCnt;				// (2026-09-21 최정우 추가)
 	stWorkerConfig.nNodeExitCnt = m_nNodeExitCnt;				// (2026-08-24 최정우 추가)
 	stWorkerConfig.nParkSpeedMax = m_nParkSpeedMax;				// (2026-08-22 최정우 추가)
 	stWorkerConfig.nParkEntryCnt = m_nParkEntryCnt;				// (2026-08-22 최정우 추가)
@@ -811,11 +819,22 @@ void CServer::Uninitialize()
 	}
 
 	// timer thread join
+	// 타이머 스레드 종료 대기.
+	// [중요, 2026-09-21 최정우 주석 보완] **이 join 의 위치는 우연이 아니라 필수 조건이다.**
+	//   TimerThread → ProcessPeriodSec() 은 m_pcLoggerManager · m_pcChargeDataLoader ·
+	//   m_pcPostgrePool 을 직접 참조한다. 그 셋의 delete 는 모두 이 join **아래**에 있어야
+	//   안전하다(현재 그렇다). 반대로 위쪽에서 먼저 지우는 ThreadPool·RawLogWorker 는
+	//   ProcessPeriodSec() 이 건드리지 않는 객체들이라 문제가 없다.
+	//   ProcessPeriodSec() 에 새 의존 객체를 추가한다면, 그 객체의 해제도 반드시 이 아래로 둘 것.
+	//   (RequestShutdown() 이 m_bRun=false 를 세워도 이미 진입한 그 회차는 끝까지 실행되고,
+	//    LoadGates/LoadZones 같은 DB 조회가 수백 ms 걸릴 수 있어 창이 짧지 않다.)
 	if (m_hTimerThread)
 	{
-		long int nStatus;
-		// 로그 보관 타이머 쓰레드 종료 대기 (2026-07-08 최정우 주석 추가)
-		pthread_join(m_hTimerThread, reinterpret_cast<void **>(&nStatus));
+		// [2026-09-21 최정우 정리] 종전에는 `long int nStatus` 를 void** 로 캐스팅해 넘겼다 —
+		//   64비트에서 크기가 같아 동작했을 뿐, 스레드 반환값은 void* 이므로 타입을 맞춘다.
+		//   TimerThread 는 항상 nullptr 을 돌려주므로 값 자체는 쓰지 않는다.
+		void *pvThreadResult = nullptr;
+		pthread_join(m_hTimerThread, &pvThreadResult);
 		m_hTimerThread = 0;
 	}
 	LOGFMTI("timer thread join success!");
@@ -1008,6 +1027,9 @@ void CServer::LogMonitorStatus(time_t dtNow)
 		m_bAllBusyWarnActive = false;
 	}
 
+	// [2026-09-21 최정우 확인 — 미사용] m_nLastQueueCount 는 여기서 쓰기만 하고 읽는 곳이
+	//   전 소스에 없다. "직전 주기 대비 증감" 을 보려던 흔적으로 보인다 — 되살린다면 현재
+	//   임계 기반 경고(m_bQueueWarnActive)와 중복되지 않게 용도를 먼저 정할 것.
 	m_nLastQueueCount = nQueue;
 	(void)dtNow;
 }
@@ -1062,7 +1084,11 @@ void CServer::ProcessPeriodSec(time_t dtNow)
 	}
 
 	// 설정 시각·보관일 기준 만료 로그 파일 삭제 (2026-07-08 최정우 주석 추가)
-	m_pcLoggerManager->LogDeleteRun(dtNow);
+	// [2026-09-21 최정우 보완] 아래 다른 참조들과 달리 nullptr 검사가 없었다. 타이머 스레드는
+	//   로거 매니저 초기화가 끝난 뒤에야 생성되므로 현재는 항상 유효하지만, 이 함수 안에서
+	//   유일하게 무방어인 자리라 맞춰둔다(동작 변화 없음).
+	if (m_pcLoggerManager != nullptr)
+		m_pcLoggerManager->LogDeleteRun(dtNow);
 
 	// 게이트·구역 캐시 주기 재조회 — gate_reload=0 이면 비활성. 기존 타이머 스레드(1초 주기) 재사용,
 	// 별도 스레드 없음. 워커 처리량에 영향 없도록 best-effort — 실패해도 이전 캐시 유지 (2026-08-12 최정우 추가)
@@ -1214,6 +1240,13 @@ void CServer::UpdateCpuSample()
  * @param[out] nTotalMB 전체 메모리(MB)
  * @param[out] dfMemPct 사용률(%)
  * @return true(성공), false(읽기 실패)
+ * @warning **이 값은 이 프로세스가 아니라 장비 전체(시스템)의 메모리 사용량이다.**
+ *   /proc/meminfo 는 호스트 전역 통계이므로, 다른 프로세스가 메모리를 먹어도 여기 수치가
+ *   올라간다. 위 UpdateCpuSample() 의 CPU 사용률(/proc/stat)도 마찬가지로 전역 값이다.
+ *   그래서 서버상태 로그의 mem/cpu 가 높다는 것만으로 **맵매칭 엔진이 메모리를 누수한다고
+ *   판단하면 안 된다** — 2026-09-10 에 실제로 그렇게 오진단한 적이 있고, 진짜 원인은 다른
+ *   프로세스가 유발한 OOM kill 이었다. 엔진 자신의 사용량이 필요하면 /proc/self/status 의
+ *   VmRSS 를 따로 읽어야 한다 (2026-09-21 최정우 주석 보완)
 */
 bool CServer::GetMemInfo(int& nUsedMB, int& nTotalMB, double& dfMemPct)
 {

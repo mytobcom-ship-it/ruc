@@ -108,6 +108,7 @@ typedef struct sConfig
 	//   클램프 저신뢰·hop 페널티)이 걸러내는지로 판별한다 (2026-08-23 최정우 추가)
 	int								nIgnoreRawVld;
 	int								nParkExitCnt;						// [charge] park_exitcnt — 구역 이탈 확정 연속 GPS 건수(디바운스) (2026-08-13 최정우 추가)
+	int								nZoneExitCnt;						// [charge] zone_exitcnt — 게이트형 다중링크 구역 이탈 확정 연속 GPS 건수(디바운스), 0=비활성 (2026-09-21 최정우 추가)
 	int								nNodeExitCnt;						// [charge] node_exitcnt — 일반도로(NODE_STEP) 이탈 확정 연속 GPS 건수(디바운스) (2026-08-24 최정우 추가)
 	int								nParkSpeedMax;						// [charge] park_speedmax (단위: km/h) — 이 속도 이하에서만 주정차로 판정 (2026-08-22 최정우 추가)
 	int								nParkEntryCnt;						// [charge] park_entrycnt — 세션 개시에 필요한 연속 충족 GPS 건수 (2026-08-22 최정우 추가)

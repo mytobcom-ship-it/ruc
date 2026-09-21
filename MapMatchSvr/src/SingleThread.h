@@ -68,7 +68,10 @@ private:
 	//   통지 유실(영구 블록)의 원인이라 제거되면서 판독부가 사라졌다. 지금은 종료 통지를 무조건
 	//   보내므로 이 플래그는 필요 없다 — 되살릴 일이 생기면 반드시 m_mutex 안에서 읽을 것.
 	bool							m_bJoinning;
-	bool							m_bIsInterrupted;
+	// [2026-09-21 최정우 수정] bool → volatile sig_atomic_t. 이 값은 SIGUSR1 핸들러
+	//   (interruptHandler)가 직접 쓰므로, 시그널 핸들러에서 접근해도 안전하다고 표준이
+	//   보장하는 유일한 타입이어야 한다. 읽는 쪽(IsInterrupted)은 0/비0 으로 판정한다.
+	volatile sig_atomic_t			m_bIsInterrupted;
 	static pthread_attr_t			m_attr;
 	static long						m_nId;
 	// [버그 수정, 2026-09-10 최정우] m_attr(위)은 static(전 인스턴스 공유)인데, 소멸자가 가드
@@ -87,6 +90,13 @@ private:
 };
 
 /**
+ * @warning [2026-09-21 최정우 확인] **이 예외를 던지는 코드는 이제 전 소스에 없다.**
+ *   유일한 발생원이던 CSingleThread::interruptHandler() 가 같은 날 "플래그만 세우는" 방식으로
+ *   바뀌었기 때문이다(시그널 핸들러 안 throw 는 UB). threadHandler() 의 catch 블록은 run()
+ *   본문이 직접 던지는 경우에 대비해 남겨뒀을 뿐이며, 현재 그런 코드도 없다.
+ *   지우지 않고 두는 이유는 그 catch 계약을 유지하기 위해서다 — 되살려 쓸 거라면
+ *   **시그널 핸들러가 아닌 곳에서만** 던질 것.
+ *
  * @class InterruptedException : public exception
  * @brief 인터럽트 클래스
 */

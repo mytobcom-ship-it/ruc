@@ -11,6 +11,10 @@
 //   2세대(현재+직전 재조회분)면 충분한 여유 (2026-08-14 최정우 추가)
 static const size_t RETIRED_CACHE_GENERATIONS = 2;
 
+// DistanceToPolygonBoundaryMeters() 의 "거리 없음" 표시값 — 어떤 실제 거리보다도 크게 잡아
+//   호출측의 `<= 임계` 비교에서 항상 탈락시킨다 (2026-09-21 최정우 추가, 종전 1e18 리터럴)
+static const double POLY_DIST_INFINITE = 1e18;
+
 /**
  * @brief COORDS(jsonb) 파싱 — "[[lon,lat],[lon,lat],...]" 형태에서 정점 목록 추출 (2026-08-13 최정우 추가)
  * @param[in] strJson base_roadlink.coords 원본 텍스트(GEOM_TYPE='POLY')
@@ -81,7 +85,11 @@ static void ParseLinkIdsJson(const string& strJson, vector<uint64> *pvtOut)
 /**
  * @brief 점 P 가 폴리곤 내부인지 — 표준 ray-casting(even-odd) 판정 (2026-08-13 최정우 추가)
  * @param[in] dfLon 점 경도, dfLat 점 위도
- * @param[in] vtPoly 폴리곤 정점 목록(닫힌 도형 가정 — 첫/끝 정점 별도 처리 불필요)
+ * @param[in] vtPoly 폴리곤 정점 목록. **닫혀 있든(첫 정점 == 끝 정점) 열려 있든 모두 동작한다** —
+ *            아래 루프가 j=마지막 정점에서 시작해 마지막↔첫 변을 항상 포함하기 때문이다
+ *            (2026-09-21 최정우 주석 정정 — 종전에는 "닫힌 도형 가정" 이라고만 적혀 있어,
+ *            열린 폴리라인을 넘기면 틀린 답이 나오는 것처럼 읽혔다. 실제로는 닫힌 입력일 때
+ *            마지막 변이 길이 0 이 되어 판정에 영향을 주지 않을 뿐이다)
  * @return true=내부(경계 포함 판정은 버퍼 거리 검사가 별도로 처리)
 */
 bool CChargeDataLoader::IsPointInPolygon(double dfLon, double dfLat, const vector<POINT>& vtPoly)
@@ -110,12 +118,16 @@ bool CChargeDataLoader::IsPointInPolygon(double dfLon, double dfLat, const vecto
 */
 double CChargeDataLoader::DistanceToPolygonBoundaryMeters(double dfLon, double dfLat, const vector<POINT>& vtPoly)
 {
-	if (vtPoly.size() < 2) return 1e18;
+	// [2026-09-21 최정우 정리] 반환 매직넘버 1e18 을 상수로 빼고, 최소 정점 수 기준을 짝 함수인
+	//   IsPointInPolygon(3개 미만이면 폴리곤 아님)과 맞춘다. 종전에는 여기만 2 여서 "정점 2개짜리
+	//   선분" 에 대해 경계거리는 계산해주고 내부 판정은 무조건 false 인 비대칭이 있었다 —
+	//   현재 호출부(GetParkingZoneContaining 계열)가 둘 다 size()<3 으로 먼저 걸러 실害는 없다.
+	if (vtPoly.size() < 3) return POLY_DIST_INFINITE;
 
 	const double dfMPerLon = 111320.0 * cos(RAD(dfLat));
 	const double dfMPerLat = 111320.0;
 
-	double dfMinDist = 1e18;
+	double dfMinDist = POLY_DIST_INFINITE;
 	size_t nCount = vtPoly.size();
 	for (size_t i = 0, j = nCount - 1; i < nCount; j = i++)
 	{
@@ -190,9 +202,33 @@ bool CChargeDataLoader::Initialize(CPostgrePool *pcPostgrePool, const string& st
 */
 void CChargeDataLoader::Uninitialize()
 {
-	m_mapGateInfo.clear();
-	m_mapZoneInfo.clear();
-	m_nParkFineMinSec = 0;
+	// [2026-09-21 최정우 보완] 종전에는 주 캐시 2개만 비우고 **역인덱스 4개·전체등록링크 집합·
+	//   retired 세대 보관함은 그대로 남겼다**. 소멸자 경로에서는 멤버가 어차피 파괴돼 누수가 아니지만,
+	//   "Uninitialize() 후 다시 Initialize()/Load*()" 로 재사용하는 순간 **이미 지운 구역을 가리키는
+	//   낡은 역인덱스가 살아남아** IsLinkChargeRegistered()/GetNodeStepZonesByLinkId() 가 유령
+	//   링크를 등록된 것으로 답하게 된다. 지금은 그런 호출 경로가 없지만, 비우는 대상이 반쪽인 것은
+	//   그 자체로 함정이라 전부 정리한다.
+	// 캐시 교체(Load*)와 같은 락을 잡는다 — 종료 순서상 워커가 먼저 멈춰 경합은 없으나,
+	//   같은 자료를 만지는 코드가 한쪽만 무락인 상태를 남기지 않는다.
+	{
+		lock_guard<CMutex> cLock(m_cGateCacheMutex);
+		m_mapGateInfo.clear();
+		m_dqRetiredGateInfo.clear();
+	}
+	{
+		lock_guard<CMutex> cLock(m_cZoneCacheMutex);
+		m_mapZoneInfo.clear();
+		m_dqRetiredZoneInfo.clear();
+		m_mapNodeStepLinkToRoadId.clear();
+		m_mapExemptLinkToRoadId.clear();
+		m_mapOpenLinkToRoadId.clear();
+		m_mapSpeedLinkToRoadId.clear();
+		m_setAllRegisteredLinkIds.clear();
+	}
+	{
+		lock_guard<CMutex> cLock(m_cParkFineMutex);
+		m_nParkFineMinSec = 0;
+	}
 	m_bLoad = false;
 }
 

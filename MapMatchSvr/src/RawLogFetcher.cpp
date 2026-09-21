@@ -187,7 +187,11 @@ void CRawLogFetcher::run()
 		int nSleepMs = ComputeFetchSleepMs(nQueueCount);
 		// 큐 적재량에 따른 적응형 poll 대기 — 조건변수 기반 대기로 WakeUp() 이 즉시 깨울 수 있다
 		//   (2026-07-08 최정우 주석 추가, 2026-09-11 최정우 수정 — CUtil::Sleep(select 기반) +
-		//   CSingleThread::interrupt()(SIGUSR1→예외) 조합 대신. 자세한 배경은 헤더 WakeUp() 주석 참고)
+		//   CSingleThread::interrupt() 조합 대신. 자세한 배경은 헤더 WakeUp() 주석 참고)
+		//   [주석 정정, 2026-09-21 최정우] 위 "(SIGUSR1→예외)" 표기를 지웠다 — 같은 날
+		//   CSingleThread::interruptHandler() 가 **예외를 던지지 않고 플래그만 세우도록** 바뀌어
+		//   더 이상 사실이 아니다(시그널 핸들러 안 throw 는 UB 였다). 다만 그 조합을 쓰지 않는
+		//   이 결정 자체는 그대로 유효하다 — 조건변수 대기가 더 정확하고 즉시 깨울 수 있다.
 		m_cSleepMutex.lock();
 		if ((m_pbRun != nullptr) && *m_pbRun && !IsInterrupted())
 			m_cSleepCondition.waitTimed(m_cSleepMutex, nSleepMs);
@@ -305,7 +309,12 @@ bool CRawLogFetcher::FetchAndDispatch()
 /**
  * @brief [rawgps_select] UPDATE RETURNING – PENDING 예약(Reserve) 및 행 조회
  * @param[in] pcConn DB 커넥션
- * @param[out] pvtRawLogInfos 예약된 RAW_LOG_INFO 목록 (SQL ORDER BY 순)
+ * @param[out] pvtRawLogInfos 예약된 RAW_LOG_INFO 목록 (**UPDATE ... RETURNING 이 돌려준 순서
+ *             그대로** — 정렬은 호출측 FetchAndDispatch 가 따로 한다)
+ *             [주석 정정, 2026-09-21 최정우] 종전에는 "SQL ORDER BY 순" 이라고 적혀 있었으나,
+ *             [rawgps_select] 의 ORDER BY 는 LIMIT 대상을 고르는 내부 서브쿼리에만 있어 바깥
+ *             RETURNING 의 출력 순서를 보장하지 않는다(그래서 호출측이 재정렬한다). 이 설명을
+ *             믿고 호출측 정렬을 지우면 배치 묶음이 깨진다.
  * @return true(예약·파싱 완료), false(SQL 오류·release 실패)
  * @remark
  *   - $1=LIMIT
@@ -412,7 +421,14 @@ bool CRawLogFetcher::ReserveFetchBatch(PGconn *pcConn, vector<sRawLogInfo> *pvtR
  * @param[in] vtRawLogInfos SQL 정렬 순 RAW_LOG_INFO 목록
  * @param[out] pvtBatches trip_id 별 batch 목록
  * @return void
- * @remark 입력은 ORDER BY device_key, trip_id, gps_dt, gps_seq 가정
+ * @remark 입력은 device_key, trip_id, **gps_seq** 순 정렬 가정 — 인접한 같은 trip_id 구간만 묶으므로
+ *   정렬이 깨지면 같은 트립이 여러 batch 로 쪼개져 서로 다른 처리 순서에 놓인다.
+ *   [주석 정정, 2026-09-21 최정우] 종전에는 정렬 키에 gps_dt 가 들어 있다고 적혀 있었는데,
+ *   **그 키는 2026-08-23 에 의도적으로 제거된 것**이다(FetchAndDispatch 의 stable_sort 주석 참고).
+ *   GPS_DT 를 GPS_SEQ 앞에 두는 바람에 도착 이벤트 행이 앞으로 당겨져 seq 역전으로 오인되고,
+ *   세션 앵커가 폐기되며 BEGIN 강등 → 왕복분리 도로 오매칭까지 간 실측 사례
+ *   (000376_20260819140856)가 그 제거의 이유다. 이 주석만 옛 상태로 남아 있어, 읽고
+ *   "그럼 SQL 이나 정렬에 gps_dt 를 다시 넣어야겠다" 로 오도될 수 있었다.
 */
 void CRawLogFetcher::GroupByTripId(const vector<sRawLogInfo>& vtRawLogInfos, vector<RAW_LOG_BATCH> *pvtBatches)
 {
@@ -704,6 +720,8 @@ bool CRawLogFetcher::ReleaseReservedRows(PGconn *pcConn,
 
 	ExecStatusType nExecStatus = PQresultStatus(pcResult);
 	const int nExpected = static_cast<int>(nCount);
+	// [2026-09-21 최정우 정리] 종전에는 중간 분기에서 이미 false 인 bOk 에 false 를 다시 넣고
+	//   있었다(초기값과 같은 값). 세 갈래가 각각 다른 일을 하는 것처럼 보였을 뿐이라 정리한다.
 	bool bOk = false;
 
 	if (nExecStatus != PGRES_COMMAND_OK)
@@ -711,10 +729,10 @@ bool CRawLogFetcher::ReleaseReservedRows(PGconn *pcConn,
 		LOGFMTE("raw log fetcher: release reserved rows error! count=[%d] msg=[%s]",
 			nExpected, PQresultErrorMessage(pcResult));
 	}
-	else if (!CheckPgUpdateAffected(pcResult, nExpected, "raw log fetcher: release reserved rows"))
-		bOk = false;
 	else
-		bOk = true;
+	{
+		bOk = CheckPgUpdateAffected(pcResult, nExpected, "raw log fetcher: release reserved rows");
+	}
 
 	PQclear(pcResult);
 	return bOk;
@@ -833,6 +851,11 @@ time_t CRawLogFetcher::ParseDateTime(const char *pszDateTime)
 
 	struct tm stTm;
 	memset(reinterpret_cast<void *>(&stTm), 0, sizeof(stTm));
+	// [2026-09-21 최정우 보완] memset 으로 tm_isdst 가 0(=서머타임 아님)으로 고정된다. 한국은
+	//   서머타임이 없어 현재는 결과가 같지만, 이는 "이 코드가 KST 전용" 이라는 숨은 전제다.
+	//   -1 은 "모르니 mktime 이 알아서 판단하라" 는 뜻으로, 서머타임이 있는 지역에서 돌려도
+	//   전환 시각 주변에서 1시간 어긋나지 않는다. 동작 변화 없음(KST 기준 동일 결과).
+	stTm.tm_isdst = -1;
 
 	char szBuf[5];
 

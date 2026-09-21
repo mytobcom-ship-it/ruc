@@ -6,6 +6,18 @@
 -- DRIVE_STATUS : 0=ON_ROAD, 1=IDLE, 2=PARKED, 3=TUNNELING, 4=OFF_ROAD(비과금 구역)
 -- MATCH_STATUS : 0=PENDING, 1=MATCHED, 2=PROCESSING, 3=SKIP, 4=ERROR
 --
+-- ※※ 작성 규칙 (파서 CSQLAccessor::Load() 의 한계에서 나온 것 — 어기면 조용히 깨진다)
+--   ① **SQL 본문 안에 `--` 주석을 쓰지 말 것.** 파서는 줄의 개행을 지우고 공백 하나로 이어
+--      붙이기만 할 뿐 `--` 를 제거하지 않는다. 본문 중간에 `--` 가 있으면 그 뒤의 모든 줄이
+--      한 줄짜리 주석 안으로 빨려 들어가 쿼리가 잘린다("구문 오류, 입력 끝부분").
+--      2026-09-17 에 [trip_end]·[trip_abend] 두 SQL 이 실제로 이 이유로 실행 불능이었다.
+--      설명은 지금 이 줄들처럼 `[key]` 헤더 **위**에 두면 된다(어느 섹션에도 담기지 않는다).
+--   ② 각 SQL 은 세미콜론으로 끝낼 것. 없으면 다음 `[key]` 를 만나는 순간 조용히 버려진다.
+--   ③ 한 섹션에 세미콜론으로 끝나는 문장을 2개 이상 두지 말 것 — 뒤엣것이 버려진다.
+--      같은 섹션명을 두 번 쓰는 것도 마찬가지(2026-09-21 부터 그 경우 ERROR 로그가 남는다).
+--   ④ `[key]` 는 줄 맨 앞에서 시작할 것(들여쓰면 SQL 본문으로 취급된다).
+--   (2026-09-21 최정우 추가 — 규칙 자체는 SQLAccessor.cpp 의 @warning 과 동일 내용)
+--
 -- 처리 흐름
 --   0) rawgps_recover     : 기동 시 PROCESSING(2) → PENDING(0) 복구
 --   1) rawgps_select      : PENDING 예약(Reserve) + RETURNING

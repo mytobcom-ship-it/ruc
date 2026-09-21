@@ -64,6 +64,10 @@ private:
 	pthread_t						m_hThread;
 	int								m_nPooledConnections;
 	bool							m_bIsValid;
+	// [2026-09-21 최정우 추가] UninitializePool() 중복 실행 가드. m_bIsValid 로는 대신할 수 없다 —
+	//   그 값은 정리 **도중에도** false 이기 때문에(회수 루프 전에 먼저 내린다) "이미 정리를
+	//   마쳤는가" 를 구분하지 못한다. CServer::m_bUninitialized 와 같은 패턴이다.
+	bool							m_bUninitialized;
 };
 
 #endif	//__POSTGREPOOL_H__

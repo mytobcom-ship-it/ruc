@@ -14,7 +14,6 @@
 #include <set>
 #include "TypeDefine.h"
 #include "DataDefine.h"
-#include "DataDefine.h"
 #include "DataFormat.h"
 #include "DataLoader.h"
 #include "CoordConvert.h"

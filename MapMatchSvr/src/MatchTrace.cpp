@@ -15,7 +15,9 @@ namespace {
  * @brief 고도(m) 값을 로그용 문자열로 변환
  * @param[out] pszBuf 출력 버퍼
  * @param[in] nBufLen 버퍼 크기
- * @param[in] nAlt 고도(m). NO_ALTITUDE 미만이면 "-"
+ * @param[in] nAlt 고도(m). **음수이면**(NO_ALTITUDE=-1 포함) "-" 로 표기
+ *            (2026-09-21 최정우 주석 정정 — 종전 "NO_ALTITUDE 미만" 은 실제 조건
+ *            (nAlt >= 0)과 달라, -1 은 숫자로 찍힐 것처럼 읽혔다)
  * @return void
 */
 void AltValue(char *pszBuf, size_t nBufLen, sint16 nAlt)

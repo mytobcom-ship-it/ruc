@@ -19,6 +19,7 @@ using namespace std;
 #define INVALID_GRID_COL_NO			-1									// 유효하지 않은 GRID X 좌표 번호
 #define INVALID_GRID_ROW_NO			-1									// 유효하지 않은 GRID Y 좌표 번호
 #define INVALID_GRID_ID				-1									// 유효하지 않은 GRID ID
+#define INVALID_GRID_SPLIT_INDEX	0xFF								// 유효하지 않은 GRID 9등분 인덱스 (0~8 범위 밖) (2026-09-21 최정우 추가)
 
 #pragma pack(push, 1)
 

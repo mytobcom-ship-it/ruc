@@ -234,6 +234,8 @@ void CProcessManager::BuildMapMatchInput(const sRawLogInfo& stRawLogInfo,
  * @param[in] stRawLogInfo 원시 GPS
  * @param[in,out] qwInOutLinkID 직전 링크 ID (device_key 세션). 성공 시 갱신
  * @param[out] pstMatchLinkInfo 맵매칭 결과
+ * @param[in] pstAltCtx 연속 맵매칭 보조 컨텍스트 (고도 앵커·직전 매칭 위치, nullable)
+ *                      (2026-09-21 최정우 주석 보완 — 파라미터가 있는데 설명이 빠져 있었다)
  * @return true(매칭 성공), false(실패)
 */
 bool CProcessManager::ProcessRawLog(const sRawLogInfo& stRawLogInfo, uint64& qwInOutLinkID,
@@ -305,8 +307,13 @@ bool CProcessManager::ProcessRawLog(const sRawLogInfo& stRawLogInfo, uint64& qwI
  * @brief 반경 밖 최근접 세그먼트 탐색(진단용) — MATCH_LAT/LON·INTERSECT_LEN(GPS↔세그먼트 교차점 거리) 확보
  * @param[in] stRawLogInfo 원시 GPS
  * @param[out] pstMatchLinkInfo 최근접 세그먼트 결과(좌표·INTERSECT_LEN·링크정보)
+ * @param[in] bIgnoreHeading true(기본)면 방위각을 지우고 순수 기하 최근접으로 찾는다.
+ *                           false 면 원본 heading 을 살려 방향이 맞는 후보를 우선한다
+ *                           (2026-09-21 최정우 주석 보완 — 기본값이 있는 파라미터라 설명이
+ *                           빠져 있었고, 아래 @remark 는 "방위각 무시" 만 적어 마치 항상
+ *                           무시하는 것처럼 읽혔다)
  * @return true(최근접 후보 발견), false(진단 반경 내 후보 없음)
- * @remark 방위각 무시, 시작(연속 아님), 진단반경 MM_DIAG_RADIUS 이내.
+ * @remark 시작(연속 아님), 진단반경 MM_DIAG_RADIUS 이내. 방위각은 bIgnoreHeading 에 따름.
  *         MATCHED 아님 — SKIP·세션 미갱신·DB 참고용만 (2026-07-10 최정우 수정)
 */
 bool CProcessManager::FindNearestSegment(const sRawLogInfo& stRawLogInfo,
@@ -492,35 +499,37 @@ bool CProcessManager::AttemptMatch(const sRawLogInfo& stRawLogInfo, MAP_MATCH_IN
 }
 
 /**
- * @brief 진행 각도 계산
- * @param[in] stMatchPt 매칭 X,Y 좌표
- * @param[in] stPoint 요청 X,Y 좌표
+ * @brief 두 좌표를 잇는 진행 방위각 계산 (0=북, 시계방향 0~359도)
+ * @param[in] stMatchPt 기준(매칭) X,Y 좌표 — 좌표정수(도×360000)
+ * @param[in] stPoint 대상(요청) X,Y 좌표 — 좌표정수(도×360000)
  * @param[out] pnHeading 진행 각도(방위각)
- * @return true(성공), false(실패)
+ * @return true(성공), false(두 좌표가 같아 방향을 정의할 수 없음)
+ * @remark
+ * \t[미사용 경고, 2026-09-21 최정우 확인] 이 함수는 전 소스에서 호출부가 0 이다(정의만 존재).
+ * \t실제로 쓰이는 방위각 계산은 CGISUtil::GetDirAngle() / GetDirAngleDegree() 이며,
+ * \t둘 다 2026-08-26 에 BearingDegScaled() 로 교체돼 cos(위도) 보정이 들어가 있다.
+ * \t삭제하지 않고 남기되(이력 추적 방침) **되살릴 거면 아래 수정 내역을 반드시 볼 것.**
+ *
+ * \t[버그 수정, 2026-09-21 최정우] 종전 구현에는 결함이 2 개 있어 되살리는 즉시 오작동했다.
+ * \t  (1) **방위각이 대각선 반사돼 나왔다.** 종전 코드의 분기별 계산 결과는 이미 방위각
+ * \t      (atan(Δx/Δy) = 북쪽 기준 시계방향)인데, 마지막에 "수학각도→방위각" 변환인
+ * \t      `nHeading = 90 - nHeading;` 을 한 번 더 걸었다. 그 결과 정북(0)이 90(정동)으로,
+ * \t      정동(90)이 0(정북)으로 뒤집혔다 — 45·135·225·315도에서만 우연히 값이 일치해
+ * \t      눈으로 검산하면 맞는 것처럼 보인다.
+ * \t  (2) **경도축 cos(위도) 보정 누락.** 좌표가 위·경도(도×360000)라 Δx 를 그대로 쓰면
+ * \t      위도 37°대에서 동서 성분이 약 1.26배 부풀려진다(GISUtil.cpp BearingDegScaled 주석의
+ * \t      실측 사례: 오차 4.74도가 154m 세그먼트에서 11.9m 옆으로 밀림).
+ * \t두 결함 모두 검증된 공용 구현으로 위임해 해소한다. 호출부가 없어 동작 변화는 없다.
 */
 bool CProcessManager::GetDirAzimuth(POINT& stMatchPt, POINT& stPoint, sint16 *pnHeading)
 {
-	int nHeading = 0;
-
-	if ((stPoint.dfY - stMatchPt.dfY) > 0)
-		nHeading = DEG(atan((stPoint.dfX - stMatchPt.dfX) / (stPoint.dfY - stMatchPt.dfY)));
-	else if (((stPoint.dfY - stMatchPt.dfY) < 0) && ((stPoint.dfX - stMatchPt.dfX) > 0))
-		nHeading = DEG(atan((stPoint.dfX - stMatchPt.dfX) / (stPoint.dfY - stMatchPt.dfY))) + 180;
-	else if (((stPoint.dfY - stMatchPt.dfY) < 0) && ((stPoint.dfX - stMatchPt.dfX) < 0))
-		nHeading = DEG(atan((stPoint.dfX - stMatchPt.dfX) / (stPoint.dfY - stMatchPt.dfY))) - 180;
-	else if (((stPoint.dfY - stMatchPt.dfY < 0) && (stPoint.dfX == stMatchPt.dfX)))
-		nHeading = 180;
-	else if ((stPoint.dfY == stMatchPt.dfY) && ((stPoint.dfX - stMatchPt.dfX) > 0))
-		nHeading = 90;
-	else if ((stPoint.dfY == stMatchPt.dfY) && ((stPoint.dfX - stMatchPt.dfX) < 0))
-		nHeading = -90;
-	else
+	if (pnHeading == nullptr)
 		return false;
 
-	nHeading = 90 - nHeading;
-	while (nHeading < 0)
-		nHeading += 360;
+	// 두 점이 같으면 방향이 정의되지 않는다 — 종전 구현의 마지막 else(return false) 와 동일 계약
+	if ((stPoint.dfX == stMatchPt.dfX) && (stPoint.dfY == stMatchPt.dfY))
+		return false;
 
-	*pnHeading = nHeading;
+	*pnHeading = m_cGISUtil.GetDirAngleDegree(stMatchPt, stPoint);
 	return true;
 }

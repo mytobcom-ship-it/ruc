@@ -72,9 +72,10 @@ typedef unordered_map<uint64, vector<GATE_INFO>>	mapGateInfo;
  * @struct sZoneInfo
  * @brief base_roadlink 1행에 대응하는 구역 정보 (2026-08-12 최정우 추가)
  * @remark
- *   - 개방형은 road_nm(zone_name)만 당장 사용. link_ids/coords는 원본 jsonb 텍스트 그대로
- *     보관만 해두고, 실제 파싱(멤버십 조회·PointInPolygon)은 폐쇄형/구간단속/주정차 구역
- *     진입·이탈 판정 구현 시점에 처리 — 이 코드베이스에 JSON 파서가 아직 없어 지금은 미파싱
+ *   - [2026-09-21 최정우 정정] 종전 주석의 "JSON 파서가 아직 없어 지금은 미파싱" 은 낡았다 —
+ *     LoadZones() 가 ParseCoordsJson()/ParseLinkIdsJson() 으로 **이미 파싱해** vtCoords(POLY 만)·
+ *     vtLinkIds 를 채우고, 구역 진입·이탈 판정이 그 결과를 쓴다. strCoordsJson/strLinkIdsJson 은
+ *     파싱 입력으로만 남아 있는 원문 보관 필드다.
 */
 typedef struct sZoneInfo
 {
@@ -85,8 +86,8 @@ typedef struct sZoneInfo
 	char							szGeomType[4+1];						// LINE/POLY
 	double							dfSpeedLimitKmh;						// 제한속도(구간단속용, 해당없음=0)
 	char							szUseYN[1+1];
-	string							strLinkIdsJson;							// link_ids 원본(jsonb 텍스트, 미파싱 TODO)
-	string							strCoordsJson;							// coords 원본(jsonb 텍스트, 미파싱 TODO)
+	string							strLinkIdsJson;							// link_ids 원본(jsonb 텍스트) — ParseLinkIdsJson() 입력. 결과는 vtLinkIds
+	string							strCoordsJson;							// coords 원본(jsonb 텍스트) — ParseCoordsJson() 입력. 결과는 vtCoords(POLY 만)
 	double							dfLengthM;								// coords 폴리라인 실거리(m) — [zone_select] SQL 에서
 																			//   하버사인 합산 계산됨. 폐쇄형·구간단속 dist_m 산출에 사용 (2026-08-12 최정우 추가)
 	double							dfFirstLon;								// coords 첫 정점 — 구간단속 from_lon (2026-08-12 최정우 추가)

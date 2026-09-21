@@ -26,6 +26,7 @@ CPostgrePool::CPostgrePool()
 	m_dqQueue.clear();
 	m_nPooledConnections = 0;
 	m_bIsValid = false;
+	m_bUninitialized = false;					// (2026-09-21 최정우 추가)
 }
 
 /**
@@ -97,6 +98,21 @@ bool CPostgrePool::InitializePool(string strUserID, string strPassword, string s
 */
 void CPostgrePool::UninitializePool()
 {
+	// [버그 수정, 2026-09-21 최정우] **이 함수는 종료 시 두 번 불린다** —
+	//   CServer::Uninitialize() 의 명시적 호출 + delete 가 부르는 소멸자. 그 명시적 호출은
+	//   의도된 것이라 없애면 안 된다(m_bSkipDependentTeardown 이 true 면 delete 를 건너뛰는데
+	//   그때도 풀은 닫아야 한다 — Server.cpp 해당 주석 참고). 대신 여기서 중복 실행을 막는다.
+	//   종전에는 아래 m_bIsValid 가드가 **스레드 cancel/join 만** 덮고 있어서, 두 번째 호출도
+	//   (a) 락을 잡아 m_bIsValid 를 다시 내리고 조건변수를 broadcast 하고,
+	//   (b) 유휴 커넥션 회수 루프를 다시 돌고,
+	//   (c) "postgre connection pool is uninitialized!" 로그를 한 번 더 찍었다.
+	//   (c) 는 로그가 두 줄 나오는 정도지만, **(b) 는 첫 호출이 타임아웃(대여 중 커넥션이 반납되지
+	//   않아 left > 0)된 경우 두 번째 호출에서 최대 5초를 또 기다려 종료가 그만큼 늦어진다.**
+	//   m_bIsValid 로는 이 가드를 대신할 수 없다 — 그 값은 정리 도중에도 false 이기 때문이다.
+	if (m_bUninitialized)
+		return;
+	m_bUninitialized = true;
+
 	int left = m_nPooledConnections;
 
 	if (m_bIsValid)

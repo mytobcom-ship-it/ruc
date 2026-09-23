@@ -505,7 +505,15 @@ FROM UNNEST(
 ) AS V(TRIP_ID, TRIP_END_DT, UPD_DT)
 WHERE T.TRIP_ID = V.TRIP_ID AND T.TRIP_END_DT IS NULL;
 
--- ── 8. 트립 종료 시 TRIP_SEQ 를 실제 GPS 주행 순서대로 재부여 ────────────────
+-- ── 8. 트립 종료 시 TRIP_SEQ 재부여 (2026-09-22 부터 **비활성이 기본**) ─────────────
+-- ※ [2026-09-22 최정우] config.ini 의 trip_seqoff/trip_seqfin 이 **빈 값**이라 이 두 섹션은
+--   로드되지 않고 UpdateTripSeqOrder() 는 선두 가드에서 바로 반환한다. 아래 설명은 그 시절
+--   동작을 그대로 남겨둔 것이다. 지금은 RawLogWorker 의 **워터마크 큐**(CalcChargeWatermark /
+--   ReleaseChargeQueue)가 적재 시점에 TRIP_SEQ 를 GPS_SEQ 순·1..N 연속으로 확정한다 —
+--   ①1~N 연속 ②GPS_SEQ 순 ③**등록 후 변경 금지** 세 요구를 동시에 만족해야 하는데, 사후
+--   재부여는 PK(TRIP_ID,DEVICE_KEY,TRIP_SEQ) 자체를 UPDATE 하고 번호가 행끼리 **교환**되므로
+--   외부 과금서버(60초 폴링)가 옛 번호로 마킹하면 엉뚱한 행이 조용히 갱신된다.
+--   되돌리려면 config 두 줄에 섹션명을 다시 채우면 된다(재빌드 불필요).
 -- [trip_seqoff]/[trip_seqfin] CRawLogWorker::UpdateTripSeqOrder() 가 [trip_end]/[trip_abend]
 -- 직후 같은 TRIP_ID 목록으로 실행(2026-09-03 최정우 추가). 6개 과금유형(개방형/폐쇄형/구간단속/
 -- 주정차/면제/일반도로)이 각자 독립된 상태머신으로 실시간 마감·INSERT 되다 보니, TRIP_SEQ는

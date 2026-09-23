@@ -5,6 +5,10 @@ WORK = _os.environ.get('ZONE_CHECK_WORK',
     _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'work')) + '/'
 _os.makedirs(WORK, exist_ok=True)
 
+# [2026-09-21 최정우 수정] network.moct_link/moct_node(구 roadnet DB, 2026-08-26 참조 제거됨) →
+#   ruc.mv_zone_link/mv_zone_node 로 전환. 현행 도로망은 ruc.road_link(coords jsonb, 3중중첩)라
+#   PostGIS geom 이 없어, 과금구역 주변(구역 bbox +0.05도) 링크만 SRID 5186 LineString 으로
+#   감싼 구체화뷰를 쓴다. 갱신: REFRESH MATERIALIZED VIEW ruc.mv_zone_link, ruc.mv_zone_node;
 import json, math, psycopg2, collections
 cn=psycopg2.connect(host='127.0.0.1',user='mytobcom',password='my664761',dbname='ruc'); cn.set_session(readonly=True)
 cu=cn.cursor()
@@ -22,14 +26,14 @@ for z in zones: allids|=set(parse(z[3]))
 def load(ids):
     if not ids: return {}
     cu.execute("""SELECT link_id,f_node,t_node,length,ST_AsGeoJSON(ST_Transform(geom,4326),7)
-                  FROM network.moct_link WHERE link_id=ANY(%s)""",(list(ids),))
+                  FROM ruc.mv_zone_link WHERE link_id=ANY(%s)""",(list(ids),))
     return {r[0]:{'f':r[1],'t':r[2],'len':float(r[3] or 0),'g':json.loads(r[4])} for r in cu.fetchall()}
 LK=load(allids)
 
 # ── 체인 재구성 (이전과 동일) ───────────────────────────────
 def outadj(nodes):
     if not nodes: return {}
-    cu.execute("SELECT link_id,f_node,t_node FROM network.moct_link WHERE f_node=ANY(%s)",(list(nodes),))
+    cu.execute("SELECT link_id,f_node,t_node FROM ruc.mv_zone_link WHERE f_node=ANY(%s)",(list(nodes),))
     d=collections.defaultdict(list)
     for lid,f,t in cu.fetchall(): d[f].append((lid,t))
     return d

@@ -144,6 +144,7 @@ private:
 	int								m_nParkRegraceSec;					// [charge] park_regrace — 재진입 유예시간(초) (2026-08-14 최정우 추가)
 	int								m_nParkTtlSec;						// [charge] park_ttl — 마지막 신뢰 확인 후 강제 마감까지의 시간(초) (2026-08-19 최정우 추가)
 	int								m_nExemptRegraceSec;				// [charge] exempt_regrace — 재진입 유예시간(초) (2026-08-14 최정우 추가)
+	int								m_nExemptOutMax;					// [charge] exempt_outmax — 이 거리(m) 이상 구역 밖을 주행하면 재진입 유예 무효 (2026-09-23 최정우 추가)
 	string							m_strServerStatusSQL;				// 서버 상태 하트비트 UPDATE SQL, 비어 있으면 비활성 (2026-08-20 최정우 추가)
 	string							m_strServerId;						// [server] id — PROC_SERVERSTATUS.SERVER_ID (2026-08-20 최정우 추가)
 	int								m_nServerStatusIntervalSec;			// [server] status_interval — 하트비트 주기(초, 0=비활성) (2026-08-20 최정우 추가)

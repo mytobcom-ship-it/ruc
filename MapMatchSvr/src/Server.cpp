@@ -129,6 +129,7 @@ CServer::CServer() :
 	m_nParkRegraceSec(CFG_DEF_PARK_REGRACE),
 	m_nParkTtlSec(CFG_DEF_PARK_TTL),
 	m_nExemptRegraceSec(CFG_DEF_EXEMPT_REGRACE),
+	m_nExemptOutMax(CFG_DEF_EXEMPT_OUTMAX),
 	m_strServerId(CFG_DEF_SERVER_ID),
 	m_nServerStatusIntervalSec(CFG_DEF_STATUS_INTVL),
 	m_dtLastServerStatusUpdate(0),
@@ -240,6 +241,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	m_nParkRegraceSec = stConfig.nParkRegraceSec;					// (2026-08-14 최정우 추가)
 	m_nParkTtlSec = stConfig.nParkTtlSec;							// (2026-08-19 최정우 추가)
 	m_nExemptRegraceSec = stConfig.nExemptRegraceSec;				// (2026-08-14 최정우 추가)
+	m_nExemptOutMax = stConfig.nExemptOutMax;						// (2026-09-23 최정우 추가)
 	m_strServerId = stConfig.strServerId;							// (2026-08-20 최정우 추가)
 	m_nServerStatusIntervalSec = stConfig.nServerStatusIntervalSec;	// (2026-08-20 최정우 추가)
 
@@ -606,6 +608,7 @@ bool CServer::Initialize(const CONFIG& stConfig)
 	stWorkerConfig.nParkRegraceSec = m_nParkRegraceSec;			// (2026-08-14 최정우 추가)
 	stWorkerConfig.nParkTtlSec = m_nParkTtlSec;					// (2026-08-19 최정우 추가)
 	stWorkerConfig.nExemptRegraceSec = m_nExemptRegraceSec;		// (2026-08-14 최정우 추가)
+	stWorkerConfig.nExemptOutMax = m_nExemptOutMax;				// (2026-09-23 최정우 추가)
 	// 워커에 DB pool·ProcessManager·SQL·TTL·conn_retry 등 공유 설정 전달 (2026-07-10 최정우 추가)
 	m_pcRawLogWorker->SetConfig(stWorkerConfig);
 

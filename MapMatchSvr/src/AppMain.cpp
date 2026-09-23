@@ -383,6 +383,10 @@ bool Initialize(string config_file, PCONFIG pstConfig)
 	cIniReader.GetProfileInt("charge", "exempt_regrace", CFG_DEF_EXEMPT_REGRACE, pstConfig->nExemptRegraceSec);
 	if (pstConfig->nExemptRegraceSec < 0)
 		pstConfig->nExemptRegraceSec = CFG_DEF_EXEMPT_REGRACE;
+	// [charge] exempt_outmax (단위: m) — 재진입 유예를 무효화하는 구역 밖 주행거리 (2026-09-23 최정우 추가)
+	cIniReader.GetProfileInt("charge", "exempt_outmax", CFG_DEF_EXEMPT_OUTMAX, pstConfig->nExemptOutMax);
+	if (pstConfig->nExemptOutMax < 0)
+		pstConfig->nExemptOutMax = CFG_DEF_EXEMPT_OUTMAX;
 
 	// [feeder] (2026-07-11 최정우 주석 추가)
 	// [feeder] limit (단위: 건수) (2026-07-11 최정우 주석 추가)
@@ -595,9 +599,10 @@ static void LogStartupConfig(const CONFIG& stConfig)
 	LOGFMTI("[charge] gate_reload=[%d]s park_pad=[%d]m park_accmax=[%d]m park_speedmax=[%d]km/h",
 		stConfig.nGateReloadSec, stConfig.nParkPad, stConfig.nParkAccMax, stConfig.nParkSpeedMax);
 	LOGFMTI("[charge] park_entrycnt=[%d] park_exitcnt=[%d] node_exitcnt=[%d] zone_exitcnt=[%d] "
-		"park_regrace=[%d]s park_ttl=[%d]s exempt_regrace=[%d]s",
+		"park_regrace=[%d]s park_ttl=[%d]s exempt_regrace=[%d]s exempt_outmax=[%d]m",
 		stConfig.nParkEntryCnt, stConfig.nParkExitCnt, stConfig.nNodeExitCnt, stConfig.nZoneExitCnt,
-		stConfig.nParkRegraceSec, stConfig.nParkTtlSec, stConfig.nExemptRegraceSec);
+		stConfig.nParkRegraceSec, stConfig.nParkTtlSec, stConfig.nExemptRegraceSec,
+		stConfig.nExemptOutMax);
 	LOGFMTI("[feeder] limit=[%d] fetch_interval=[%d]ms queue_pause/max=[%d]/[%d] "
 		"queue_busymin/max=[%d]/[%d]ms",
 		stConfig.nFetchLimit, stConfig.nFetchInterval, stConfig.nQueuePauseCount,

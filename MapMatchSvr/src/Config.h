@@ -115,6 +115,7 @@ typedef struct sConfig
 	int								nParkRegraceSec;					// [charge] park_regrace (단위: sec) — 재진입 유예시간 (2026-08-14 최정우 추가)
 	int								nParkTtlSec;						// [charge] park_ttl (단위: sec) — 마지막 신뢰(RAW_VLD=true) 확인 후 강제 마감까지의 시간 (2026-08-19 최정우 추가)
 	int								nExemptRegraceSec;					// [charge] exempt_regrace (단위: sec) — 재진입 유예시간 (2026-08-14 최정우 추가)
+	int								nExemptOutMax;						// [charge] exempt_outmax (단위: m) — 이 거리 이상 구역 밖을 주행하면 재진입 유예 무효 (2026-09-23 최정우 추가)
 
 	string							strServerId;						// [server] id — PROC_SERVERSTATUS.SERVER_ID (2026-08-20 최정우 추가)
 	int								nServerStatusIntervalSec;			// [server] status_interval (단위: sec, 0=비활성) (2026-08-20 최정우 추가)

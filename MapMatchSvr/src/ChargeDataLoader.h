@@ -102,6 +102,12 @@ typedef struct sZoneInfo
 																			//   '3'(구간단속)도 파싱은 되지만 진입/이탈은 여전히 게이트 기반 —
 																			//   게이트를 못 찾고 이 링크들을 벗어났는지("확정 이탈")만 보조로
 																			//   확인하는 용도(2026-08-25 최정우 추가)
+																			//   [2026-09-23 최정우 보완] 폐쇄형(2)은 용도가 하나 늘었다 —
+																			//   m_mapClosedZoneLinkToRoadId(링크→구역 역인덱스)를 이 목록으로
+																			//   구성해, **입구게이트를 통과하지 않고 구역 중간으로 진입한
+																			//   경우**의 진입 판정에 쓴다(ProcessClosedRoadCharge). 즉 폐쇄형의
+																			//   진입 경로는 "게이트 통과" 와 "구역 링크 진입(게이트 미확인)"
+																			//   두 가지가 됐다. 구간단속(3)은 종전대로 게이트 기반이다.
 
 	sZoneInfo() :
 		dfSpeedLimitKmh(0.0),
@@ -195,6 +201,16 @@ public:
 	//   역인덱스 어디에도 없는 등록 링크. true 면 그 구역 run 이 열려 있지 않은 동안(게이트 미통과·
 	//   진출 후 잔여 tick)에는 일반도로(0)로 계상해야 한다 (2026-09-07 최정우 추가, 사용자 지시)
 	bool IsLinkGateZoneOnly(const uint64 qwLinkID);
+	// 링크가 속한 폐쇄식 구역(ROAD_KIND=2)의 road_id — 입구게이트 미통과로
+	//   일반도로(0)로 계상되는 구간에 "어느 구역을 게이트 없이 지났는가"를 남기기 위한 조회.
+	//   여러 구역에 속하면 첫 항목만 돌려준다(실데이터상 폐쇄식 구역끼리 링크를 공유하지 않음).
+	//   true=찾음(pszOut 채움), false=폐쇄식 구역 소속이 아님(pszOut 은 빈 문자열)
+	//   (2026-09-23 최정우 추가, 사용자 확정)
+	bool GetClosedZoneRoadIdByLinkId(const uint64 qwLinkID, char *pszOut, const size_t nOutSize);
+	// 링크가 속한 구간단속 구역(ROAD_KIND=3)의 road_id — 위 폐쇄식판과 같은 목적(진입게이트를
+	//   거치지 않고 구역 중간으로 진입한 경우의 진입 판정). 이쪽은 m_mapSpeedLinkToRoadId 가
+	//   이미 있어 그것을 그대로 쓴다 (2026-09-23 최정우 추가, 사용자 지시)
+	bool GetSpeedZoneRoadIdByLinkId(const uint64 qwLinkID, char *pszOut, const size_t nOutSize);
 
 	// 폴리곤 기하 유틸 — 원래 .cpp 파일 내부 static 함수였으나, 주정차 경계 통과 시각 보간
 	//   (CRawLogWorker::InterpolateZoneCrossingTime)에서도 같은 판정을 써야 해서 공개 static
@@ -244,13 +260,30 @@ private:
 																			//   게이트 기반이라 불필요했으나, IsCase3EligibleRoadKind() 의
 																			//   "이 링크가 구간단속 구역 소속인가" O(1) 판정에 필요해 추가
 																			//   (2026-09-01 최정우 추가)
+	unordered_map<uint64, vector<string> >	m_mapClosedZoneLinkToRoadId;	// 폐쇄식(ROAD_KIND=2) link_id → road_id 역인덱스 — 폐쇄식은
+																			//   게이트 기반이라 종전에 전용 역인덱스가 없었다. 입구게이트를
+																			//   통과하지 않은 채 그 구역 링크를 지나는 구간에 "어느
+																			//   구역이었나"를 붙이는 GetClosedZoneRoadIdByLinkId() 전용.
+																			//   **다른 게이트형 둘은 일부러 뺐다**(2026-09-23 실측 근거):
+																			//   · 구간단속(3) — 위반 시 같은 구간을 일반도로 행으로 함께
+																			//     등록하는 미러 정책이 이미 있어(미러는 SPEED 처리기가 따로
+																			//     만든다) 여기서 또 끊으면 미러와 tick 범위가 어긋나 같은
+																			//     유형 구간중복이 8건 생겼다.
+																			//   · 개방식(1) — 게이트를 안 지나도 구역 진입만으로 OPEN 행이
+																			//     생기고 게이트 미통과는 charge_yn/status(N/3)로 표현한다.
+																			//     그래서 일반도로로 흡수되는 구간이 원래 경계 1 tick 뿐이고,
+																			//     쪼개면 0~19m 짜리 행 4건과 경계 중복만 남았다.
+																			//   폐쇄식만 다르다 — 게이트 통과가 run 개시의 **유일한** 조건
+																			//   이라, 게이트 없이 지나면 구간이 통째로 일반도로에 묻힌다
+																			//   (실측 최대 3,380m). (2026-09-23 최정우 추가, 사용자 확정)
 	unordered_set<uint64>			m_setAllRegisteredLinkIds;				// ROAD_KIND 0/1/2/3/5 link_ids 전체 합집합 — "어떤 과금유형에도
 																			//   등록 안 된 도로"(NODE_STEP 케이스2) 판정용. PARKING(4)은
 																			//   폴리곤 기반이라 제외 (2026-09-01 최정우 추가)
 	bool							m_bLoad;
 	mutable CMutex					m_cGateCacheMutex;						// m_mapGateInfo 재조회(swap)/조회 동시접근 보호 (2026-08-14 최정우 추가)
 	mutable CMutex					m_cZoneCacheMutex;						// m_mapZoneInfo+m_mapNodeStepLinkToRoadId+m_mapExemptLinkToRoadId+
-																			//   m_mapOpenLinkToRoadId+m_mapSpeedLinkToRoadId+m_setAllRegisteredLinkIds
+																			//   m_mapOpenLinkToRoadId+m_mapSpeedLinkToRoadId+
+																			//   m_mapClosedZoneLinkToRoadId+m_setAllRegisteredLinkIds
 																			//   재조회(swap)/조회 동시접근 보호 — 전부 LoadZones() 에서 항상 같이
 																			//   swap 되므로 락도 하나로 공유(항상 일관된 스냅샷 보장) (2026-08-14 최정우 추가,
 																			//   2026-09-01 최정우 수정 — 신규 멤버 2개 추가)

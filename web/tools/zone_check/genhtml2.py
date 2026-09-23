@@ -303,7 +303,7 @@ HTML=r'''<!DOCTYPE html>
 <main>
 <h1>과금구역 링크·좌표 점검</h1>
 <p class="subtitle">ruc.base_roadlink 의 <b>link_ids</b>(링크 연결)와 <b>coords</b>(구간 좌표)를 주행 방향 기준으로
-교차 검증했습니다. 링크의 t_node 가 다음 링크의 f_node 와 맞지 않는 지점은 network.moct_link 에서 최단 경로를 찾아
+교차 검증했습니다. 링크의 t_node 가 다음 링크의 f_node 와 맞지 않는 지점은 ruc.road_link 에서 최단 경로를 찾아
 <span class="bad">누락 링크</span>로 표시하고, coords 는 그 주행 체인 위에 투영해 <b>덮는 범위</b>와 <b>진행 방향</b>을 확인했습니다.</p>
 
 <div class="legend">

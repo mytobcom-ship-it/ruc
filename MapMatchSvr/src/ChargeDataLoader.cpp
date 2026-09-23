@@ -202,7 +202,7 @@ bool CChargeDataLoader::Initialize(CPostgrePool *pcPostgrePool, const string& st
 */
 void CChargeDataLoader::Uninitialize()
 {
-	// [2026-09-21 최정우 보완] 종전에는 주 캐시 2개만 비우고 **역인덱스 4개·전체등록링크 집합·
+	// [2026-09-21 최정우 보완] 종전에는 주 캐시 2개만 비우고 **역인덱스(현재 5개)·전체등록링크 집합·
 	//   retired 세대 보관함은 그대로 남겼다**. 소멸자 경로에서는 멤버가 어차피 파괴돼 누수가 아니지만,
 	//   "Uninitialize() 후 다시 Initialize()/Load*()" 로 재사용하는 순간 **이미 지운 구역을 가리키는
 	//   낡은 역인덱스가 살아남아** IsLinkChargeRegistered()/GetNodeStepZonesByLinkId() 가 유령
@@ -223,6 +223,7 @@ void CChargeDataLoader::Uninitialize()
 		m_mapExemptLinkToRoadId.clear();
 		m_mapOpenLinkToRoadId.clear();
 		m_mapSpeedLinkToRoadId.clear();
+		m_mapClosedZoneLinkToRoadId.clear();				// (2026-09-23 최정우 추가)
 		m_setAllRegisteredLinkIds.clear();
 	}
 	{
@@ -644,6 +645,17 @@ bool CChargeDataLoader::LoadZones()
 			mapNewSpeedLinkToRoadId[it->second.vtLinkIds[i]].push_back(it->second.szRoadID);
 	}
 
+	// 폐쇄식(ROAD_KIND=2) link_id → road_id 역인덱스 재구성 — 입구게이트를 통과하지 않은 채 그
+	//   구역 링크를 지나는 구간에 구역명을 붙이기 위한 조회용. 폐쇄식은 여기가 유일한 역인덱스다.
+	//   개방식(1)·구간단속(3)을 뺀 이유는 헤더 멤버 주석 참고 (2026-09-23 최정우 추가, 사용자 확정)
+	unordered_map<uint64, vector<string> > mapNewClosedZoneLinkToRoadId;
+	for (mapZoneInfo::iterator it = mapNewZoneInfo.begin(); it != mapNewZoneInfo.end(); ++it)
+	{
+		if (strcmp(it->second.szRoadKind, "2") != 0) continue;
+		for (size_t i = 0; i < it->second.vtLinkIds.size(); ++i)
+			mapNewClosedZoneLinkToRoadId[it->second.vtLinkIds[i]].push_back(it->second.szRoadID);
+	}
+
 	// 전체 등록 링크 합집합(ROAD_KIND 0/1/2/3/5) — NODE_STEP 케이스2("어떤 과금유형에도 등록 안 된
 	//   도로") 판정용. PARKING(4)은 폴리곤 기반이라 링크ID 매핑 개념이 없어 제외 (2026-09-01 최정우 추가)
 	unordered_set<uint64> setNewAllRegisteredLinkIds;
@@ -659,10 +671,11 @@ bool CChargeDataLoader::LoadZones()
 
 	{
 		// 재조회 시점 교체 — m_cZoneCacheMutex 로 조회 스레드(GetZoneByRoadId/GetParkingZoneContaining 등)와
-		// 동기화(doc/README.txt §F 패턴, 2026-08-14 최정우 수정 — 락 없이 swap만 하던 걸 수정). 세 맵을
-		// 같은 락 안에서 함께 교체해 서로 항상 일관된 스냅샷 유지.
+		// 동기화(doc/README.txt §F 패턴, 2026-08-14 최정우 수정 — 락 없이 swap만 하던 걸 수정).
+		// 구역 맵과 역인덱스 전부를 **같은 락 안에서 함께** 교체해 서로 항상 일관된 스냅샷 유지
+		// (역인덱스를 새로 추가할 때는 이 블록·Uninitialize()·m_cZoneCacheMutex 주석 세 곳을 같이 고칠 것).
 		// m_mapZoneInfo 만 이전 세대를 즉시 파괴하지 않고 retired 목록에 보관 — GetZoneByRoadId 등이
-		// 반환하는 PZONE_INFO 는 그 주소를 외부에 노출하지만, 두 역인덱스 맵(link_id→road_id 문자열)은
+		// 반환하는 PZONE_INFO 는 그 주소를 외부에 노출하지만, 역인덱스 맵(link_id→road_id 문자열)들은
 		// 내부에서 조회 즉시 GetZoneByRoadId 로 넘길 뿐 자기 주소를 외부에 노출한 적이 없어 단순 swap으로
 		// 충분함(ChargeDataLoader.h m_dqRetiredZoneInfo 주석 참고, 2026-08-14 최정우 추가)
 		lock_guard<CMutex> cLock(m_cZoneCacheMutex);
@@ -674,6 +687,7 @@ bool CChargeDataLoader::LoadZones()
 		m_mapExemptLinkToRoadId.swap(mapNewExemptLinkToRoadId);
 		m_mapOpenLinkToRoadId.swap(mapNewOpenLinkToRoadId);
 		m_mapSpeedLinkToRoadId.swap(mapNewSpeedLinkToRoadId);
+		m_mapClosedZoneLinkToRoadId.swap(mapNewClosedZoneLinkToRoadId);	// (2026-09-23 최정우 추가)
 		m_setAllRegisteredLinkIds.swap(setNewAllRegisteredLinkIds);
 	}
 	m_bLoad = true;
@@ -904,8 +918,16 @@ bool CChargeDataLoader::IsLinkChargeRegistered(const uint64 qwLinkID)
  *   원칙("게이트 미충족 구간은 일반도로 Y/0")에 따라 일반도로(0)로 흡수해야 한다. 그 판단에
  *   필요한 "이 링크는 게이트형에만 묶여 있다"를 여기서 돌려주고, "지금 그 구역 run 이 열려
  *   있는가"는 세션 상태를 아는 CRawLogWorker::IsLinkNodeStepEligible() 이 판단한다.
- *   폐쇄식(2)은 link_id 역인덱스가 없어(게이트 기반) 개별 map 조회 대신 "등록됐는데 0·5 가
- *   아니다"라는 소거법으로 판정한다.
+ *   판정은 개별 map 조회가 아니라 "등록됐는데 0·5 가 아니다"라는 **소거법**이다 — 게이트형 3종
+ *   (1·2·3)을 하나씩 조회하지 않아도 같은 답이 나오고, 유형이 늘어도 이 함수는 그대로다.
+ *   [2026-09-23 최정우 정정] 종전 주석의 "폐쇄식(2)은 link_id 역인덱스가 없어" 는 더 이상 사실이
+ *   아니다 — 구역 중간 진입(입구게이트 미통과) 판정을 위해 m_mapClosedZoneLinkToRoadId 를 신설했다
+ *   (GetClosedZoneRoadIdByLinkId 참고). 다만 이 함수의 소거법 자체는 그 역인덱스와 무관하게
+ *   유효하므로 구현은 바뀌지 않았다.
+ * @remark [2026-09-23 최정우 추가] 이 함수가 true 를 돌려주는 링크라도 **폐쇄식은 그 구역 run 이
+ *   중간 진입으로 열릴 수 있다**(ProcessClosedRoadCharge 의 "구역 중간 진입" 블록). 그러면
+ *   IsLinkNodeStepEligible() 의 ③ 분기가 false 가 되어 일반도로로 흡수되지 않는다 — 즉 이
+ *   함수의 반환값만으로 "일반도로로 계상된다"고 단정하면 안 된다.
 */
 bool CChargeDataLoader::IsLinkGateZoneOnly(const uint64 qwLinkID)
 {
@@ -916,6 +938,62 @@ bool CChargeDataLoader::IsLinkGateZoneOnly(const uint64 qwLinkID)
 		return false;										// 일반도로(0) 정식구역 — 그 트랙이 처리
 	if (m_mapExemptLinkToRoadId.find(qwLinkID) != m_mapExemptLinkToRoadId.end())
 		return false;										// 면제(5) — 과금 대상이 아니므로 흡수 금지
+	return true;
+}
+
+/**
+ * @brief 링크가 속한 폐쇄식 구역(ROAD_KIND=2)의 road_id 조회
+ *   (2026-09-23 최정우 추가, 사용자 확정)
+ * @param[in] qwLinkID  매칭 링크 ID
+ * @param[out] pszOut   찾은 road_id — 못 찾으면 빈 문자열
+ * @param[in] nOutSize  pszOut 버퍼 크기
+ * @return true=폐쇄식 구역 소속(pszOut 채움)
+ * @remark IsLinkGateZoneOnly() 가 "게이트형에만 묶인 링크인가"를 돌려주는 것과 짝이다. 그쪽이
+ *   true 이고 그 유형 run 이 열려 있지 않으면 그 tick 은 일반도로로 계상되는데(사용자 원칙
+ *   "게이트 조건 미충족 구간은 일반도로 Y/0"), 그때 **어느 구역을 게이트 없이 지났는지**를
+ *   과금 이력에 남기기 위해 이 함수로 구역을 찾는다. 판정 자체는 바꾸지 않는다 — 기록만 붙인다.
+*/
+bool CChargeDataLoader::GetClosedZoneRoadIdByLinkId(const uint64 qwLinkID, char *pszOut,
+		const size_t nOutSize)
+{
+	if ((pszOut == nullptr) || (nOutSize == 0))
+		return false;
+	pszOut[0] = '\0';
+
+	lock_guard<CMutex> cLock(m_cZoneCacheMutex);
+	unordered_map<uint64, vector<string> >::iterator itLink = m_mapClosedZoneLinkToRoadId.find(qwLinkID);
+	if ((itLink == m_mapClosedZoneLinkToRoadId.end()) || itLink->second.empty())
+		return false;
+
+	snprintf(pszOut, nOutSize, "%s", itLink->second[0].c_str());
+	return true;
+}
+
+/**
+ * @brief 링크가 속한 구간단속 구역(ROAD_KIND=3)의 road_id 조회
+ *   (2026-09-23 최정우 추가, 사용자 지시)
+ * @param[in] qwLinkID  매칭 링크 ID
+ * @param[out] pszOut   찾은 road_id — 못 찾으면 빈 문자열
+ * @param[in] nOutSize  pszOut 버퍼 크기
+ * @return true=구간단속 구역 소속(pszOut 채움)
+ * @remark GetClosedZoneRoadIdByLinkId() 와 같은 목적·같은 관례다 — 입구게이트를 통과하지 않고
+ *   구역 중간으로 진입한 경우에도 그 유형 run 을 열어 N/3 + 사유코드로 남기기 위한 조회.
+ *   폐쇄식은 역인덱스를 새로 만들어야 했지만(게이트 기반이라 없었다) 구간단속은
+ *   m_mapSpeedLinkToRoadId 가 IsCase3EligibleRoadKind() 용으로 이미 있어 그대로 재사용한다.
+*/
+bool CChargeDataLoader::GetSpeedZoneRoadIdByLinkId(const uint64 qwLinkID, char *pszOut,
+		const size_t nOutSize)
+{
+	if ((pszOut == nullptr) || (nOutSize == 0))
+		return false;
+	pszOut[0] = '\0';
+
+	lock_guard<CMutex> cLock(m_cZoneCacheMutex);
+	unordered_map<uint64, vector<string> >::iterator itLink = m_mapSpeedLinkToRoadId.find(qwLinkID);
+	if ((itLink == m_mapSpeedLinkToRoadId.end()) || itLink->second.empty())
+		return false;
+
+	snprintf(pszOut, nOutSize, "%s", itLink->second[0].c_str());
 	return true;
 }
 

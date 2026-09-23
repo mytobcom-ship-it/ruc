@@ -5,6 +5,10 @@ WORK = _os.environ.get('ZONE_CHECK_WORK',
     _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'work')) + '/'
 _os.makedirs(WORK, exist_ok=True)
 
+# [2026-09-21 최정우 수정] network.moct_link/moct_node(구 roadnet DB, 2026-08-26 참조 제거됨) →
+#   ruc.mv_zone_link/mv_zone_node 로 전환. 현행 도로망은 ruc.road_link(coords jsonb, 3중중첩)라
+#   PostGIS geom 이 없어, 과금구역 주변(구역 bbox +0.05도) 링크만 SRID 5186 LineString 으로
+#   감싼 구체화뷰를 쓴다. 갱신: REFRESH MATERIALIZED VIEW ruc.mv_zone_link, ruc.mv_zone_node;
 import json, psycopg2
 cn=psycopg2.connect(host='127.0.0.1',user='mytobcom',password='my664761',dbname='ruc'); cn.set_session(readonly=True)
 cu=cn.cursor()
@@ -26,7 +30,7 @@ for rid,nm,kind,co in zs:
     # ── 링크: 노드 내부 여부 + 포함률 + 기하 ──
     cu.execute("""
       WITH p(g) AS (%s), p5 AS (SELECT ST_Transform(g,5186) AS g5 FROM p),
-      nd AS (SELECT n.node_id FROM network.moct_node n, p5 WHERE ST_Contains(p5.g5, n.geom))
+      nd AS (SELECT n.node_id FROM ruc.mv_zone_node n, p5 WHERE ST_Contains(p5.g5, n.geom))
       SELECT l.link_id, l.f_node, l.t_node, l.road_name, l.length,
              (l.f_node IN (SELECT node_id FROM nd)) AS fin,
              (l.t_node IN (SELECT node_id FROM nd)) AS tin,
@@ -34,7 +38,7 @@ for rid,nm,kind,co in zs:
              ST_AsGeoJSON(ST_Transform(l.geom,4326),7),
              ST_AsGeoJSON(ST_Intersection(ST_Transform(l.geom,4326), p.g),7),
              ST_AsGeoJSON(ST_Difference(ST_Transform(l.geom,4326), p.g),7)
-      FROM network.moct_link l, p, p5
+      FROM ruc.mv_zone_link l, p, p5
       WHERE l.f_node IN (SELECT node_id FROM nd) OR l.t_node IN (SELECT node_id FROM nd)
          OR ST_Intersects(l.geom, p5.g5)
       ORDER BY 8 DESC"""%POLY_SQL,(rid,))
@@ -61,11 +65,11 @@ for rid,nm,kind,co in zs:
       c AS (SELECT ord, ST_Transform(ST_SetSRID(ST_MakePoint((e->>0)::float8,(e->>1)::float8),4326),5186) AS pt
             FROM ruc.base_roadlink r, LATERAL jsonb_array_elements(r.coords) WITH ORDINALITY AS x(e,ord)
             WHERE r.road_id=%%s),
-      nl AS (SELECT l.link_id,l.geom FROM network.moct_link l, p5 WHERE ST_DWithin(l.geom,p5.g5,40)),
+      nl AS (SELECT l.link_id,l.geom FROM ruc.mv_zone_link l, p5 WHERE ST_DWithin(l.geom,p5.g5,40)),
       v  AS (SELECT nl.link_id,(dp).path[1] vi,(dp).geom vp FROM nl, LATERAL ST_DumpPoints(nl.geom) dp)
       SELECT c.ord,
-             (SELECT n.node_id FROM network.moct_node n ORDER BY n.geom <-> c.pt LIMIT 1),
-             (SELECT ST_Distance(n.geom,c.pt) FROM network.moct_node n ORDER BY n.geom <-> c.pt LIMIT 1),
+             (SELECT n.node_id FROM ruc.mv_zone_node n ORDER BY n.geom <-> c.pt LIMIT 1),
+             (SELECT ST_Distance(n.geom,c.pt) FROM ruc.mv_zone_node n ORDER BY n.geom <-> c.pt LIMIT 1),
              (SELECT nl.link_id FROM nl ORDER BY nl.geom <-> c.pt LIMIT 1),
              (SELECT ST_Distance(nl.geom,c.pt) FROM nl ORDER BY nl.geom <-> c.pt LIMIT 1),
              (SELECT ST_Distance(v.vp,c.pt) FROM v ORDER BY v.vp <-> c.pt LIMIT 1)
